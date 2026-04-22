@@ -67,7 +67,7 @@ async def start_scheduler():
         )
         
         scheduler.start()
-        logger.info("✅ Task scheduler started with 5 jobs")
+        logger.info("Task scheduler started with 5 jobs")
 
 
 async def stop_scheduler():
@@ -75,7 +75,7 @@ async def stop_scheduler():
     global scheduler
     if scheduler and scheduler.running:
         scheduler.shutdown()
-        logger.info("🛑 Task scheduler stopped")
+        logger.info("Task scheduler stopped")
 
 
 def get_scheduler() -> AsyncIOScheduler:
@@ -89,7 +89,7 @@ def add_job(func, trigger, **kwargs):
     global scheduler
     if scheduler:
         scheduler.add_job(func, trigger, **kwargs)
-        logger.info(f"📌 Job added: {kwargs.get('id', func.__name__)}")
+        logger.info(f"Job added: {kwargs.get('id', func.__name__)}")
 
 
 def remove_job(job_id: str):
@@ -97,7 +97,7 @@ def remove_job(job_id: str):
     global scheduler
     if scheduler:
         scheduler.remove_job(job_id)
-        logger.info(f"🗑️ Job removed: {job_id}")
+        logger.info(f"Job removed: {job_id}")
 
 
 def pause_scheduler():
@@ -105,7 +105,7 @@ def pause_scheduler():
     global scheduler
     if scheduler and scheduler.running:
         scheduler.pause()
-        logger.info("⏸️ Scheduler paused")
+        logger.info("Scheduler paused")
 
 
 def resume_scheduler():
@@ -113,4 +113,4 @@ def resume_scheduler():
     global scheduler
     if scheduler:
         scheduler.resume()
-        logger.info("▶️ Scheduler resumed")
+        logger.info("Scheduler resumed")

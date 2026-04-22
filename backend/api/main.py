@@ -4,12 +4,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
-import logging
 from datetime import datetime
+from sqlalchemy import text
 
 from backend.config import settings
-from backend.database.models import Base
-from backend.database.db import get_db, engine, init_db
+from backend.database.db import get_db, init_db
 from backend.utils.logger import setup_logging
 from backend.scheduler.task_scheduler import start_scheduler, stop_scheduler
 
@@ -21,30 +20,36 @@ logger = setup_logging(settings.LOG_LEVEL)
 async def lifespan(app: FastAPI):
     """Application lifespan events"""
     # Startup
-    logger.info(f"🚀 Starting {settings.APP_NAME} v{settings.APP_VERSION}")
+    logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
     
     # Initialize database
     try:
         init_db()
-        logger.info("✅ Database initialized")
+        logger.info("Database initialized")
     except Exception as e:
-        logger.error(f"❌ Database initialization failed: {e}")
+        logger.error(f"Database initialization failed: {e}")
     
     # Start scheduler
     if settings.SCHEDULER_ENABLED:
         try:
             await start_scheduler()
-            logger.info("✅ Task scheduler started")
+            logger.info("Task scheduler started")
         except Exception as e:
-            logger.error(f"❌ Scheduler startup failed: {e}")
+            logger.error(f"Scheduler startup failed: {e}")
     
+    logger.info(f"API running at {settings.API_BASE_URL}")
+    logger.info(f"Database: {settings.DATABASE_URL}")
+    logger.info(f"Debug mode: {settings.DEBUG}")
+    if settings.PROXY_ENABLED:
+        logger.info("Proxy rotation enabled")
+
     yield  # Application running
     
     # Shutdown
-    logger.info("🛑 Shutting down...")
+    logger.info("Shutting down...")
     if settings.SCHEDULER_ENABLED:
         await stop_scheduler()
-    logger.info("👋 Goodbye!")
+    logger.info("Goodbye")
 
 
 # Create FastAPI app
@@ -92,7 +97,7 @@ async def api_health_check(db = Depends(get_db)):
     """API health check with database verification"""
     try:
         # Test database connection
-        await db.execute("SELECT 1")
+        db.execute(text("SELECT 1"))
         db_status = "connected"
     except Exception as e:
         db_status = f"error: {str(e)}"
@@ -173,20 +178,6 @@ app.include_router(
     prefix="/api/admin",
     tags=["Admin"],
 )
-
-
-# ==================== STARTUP INFO ====================
-
-@app.on_event("startup")
-async def startup_info():
-    """Log startup information"""
-    logger.info(f"🌐 API running at {settings.API_BASE_URL}")
-    logger.info(f"📊 Database: {settings.DATABASE_URL}")
-    logger.info(f"🔐 Debug mode: {settings.DEBUG}")
-    if settings.SCHEDULER_ENABLED:
-        logger.info("⏰ Task scheduling enabled")
-    if settings.PROXY_ENABLED:
-        logger.info("🔀 Proxy rotation enabled")
 
 
 if __name__ == "__main__":

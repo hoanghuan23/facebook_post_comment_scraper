@@ -2,13 +2,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from typing import List
-from datetime import datetime, timedelta
+from datetime import datetime
 import asyncio
 
 from backend.database.db import get_db
-from backend.database.models import User, Source, Post, Comment, PostMetric
-from backend.database.crud import UserCRUD, LogCRUD, SourceCRUD, PostCRUD, get_user_stats
+from backend.database.models import User, Source, Post, Comment, PostMetric, ScraperLog
+from backend.database.crud import UserCRUD, LogCRUD, get_user_stats
 from backend.api.auth import get_current_admin_user
 
 router = APIRouter()
@@ -25,20 +24,27 @@ async def get_scraper_status(
     scheduler = get_scheduler()
     
     # Get recent task logs
-    recent_logs = LogCRUD.get_recent(db, "task", limit=10)
+    recent_logs = LogCRUD.get_task_logs(db, limit=10)
     
     # Count errors from today
     today = datetime.utcnow().date()
-    errors_today = db.query(func.count(LogCRUD)).filter(
-        LogCRUD.log_level == "ERROR",
-        func.date(LogCRUD.created_at) == today
+    errors_today = db.query(func.count(ScraperLog.id)).filter(
+        ScraperLog.log_level == "ERROR",
+        func.date(ScraperLog.created_at) == today
     ).scalar()
     
     return {
         "scheduler_running": scheduler.running if scheduler else False,
         "jobs_count": len(scheduler.get_jobs()) if scheduler else 0,
-        "active_tasks": len([j for j in scheduler.get_jobs() if scheduler else []]),
-        "recent_tasks": [{"task": l.log_message, "timestamp": l.created_at} for l in recent_logs],
+        "active_tasks": len(scheduler.get_jobs()) if scheduler else 0,
+        "recent_tasks": [
+            {
+                "task": l.task_name,
+                "status": l.status,
+                "timestamp": l.created_at,
+            }
+            for l in recent_logs
+        ],
         "errors_today": errors_today,
         "timestamp": datetime.utcnow().isoformat(),
     }
@@ -52,18 +58,16 @@ async def control_scraper(
 ):
     """Control scraper (start/stop/pause/resume)"""
     from backend.scheduler.task_scheduler import (
-        get_scheduler, start_scheduler, stop_scheduler,
+        start_scheduler, stop_scheduler,
         pause_scheduler, resume_scheduler
     )
     
-    scheduler = get_scheduler()
-    
     try:
         if action == "start":
-            start_scheduler()
+            await start_scheduler()
             return {"status": "started", "message": "Scheduler started"}
         elif action == "stop":
-            stop_scheduler()
+            await stop_scheduler()
             return {"status": "stopped", "message": "Scheduler stopped"}
         elif action == "pause":
             pause_scheduler()
@@ -88,8 +92,7 @@ async def get_logs(
     db: Session = Depends(get_db),
 ):
     """Get application logs"""
-    from backend.database.models import ScraperLog
-    
+
     query = db.query(ScraperLog).order_by(ScraperLog.created_at.desc())
     
     if log_level:
@@ -104,7 +107,7 @@ async def get_logs(
             {
                 "timestamp": l.created_at,
                 "level": l.log_level,
-                "message": l.log_message,
+                "message": l.message,
                 "source_id": l.source_id,
             }
             for l in logs
@@ -183,19 +186,19 @@ async def run_task_manually(
     
     try:
         if task_name == "scrape_posts":
-            asyncio.create_task(periodic_tasks.periodic_scrape_new_posts(db))
+            asyncio.create_task(periodic_tasks.periodic_scrape_new_posts())
             return {"status": "queued", "task": "scrape_posts"}
         
         elif task_name == "update_metrics":
-            asyncio.create_task(periodic_tasks.update_recent_post_metrics(db))
+            asyncio.create_task(periodic_tasks.update_recent_post_metrics())
             return {"status": "queued", "task": "update_metrics"}
         
         elif task_name == "cleanup":
-            asyncio.create_task(periodic_tasks.cleanup_old_data(db))
+            asyncio.create_task(periodic_tasks.cleanup_old_data())
             return {"status": "queued", "task": "cleanup"}
         
         elif task_name == "analytics":
-            asyncio.create_task(periodic_tasks.generate_analytics_cache(db))
+            asyncio.create_task(periodic_tasks.generate_analytics_cache())
             return {"status": "queued", "task": "analytics"}
         
         else:

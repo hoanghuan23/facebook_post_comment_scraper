@@ -7,9 +7,25 @@ import os
 from backend.config import settings
 from backend.database.models import Base
 
+
+def _ensure_sqlite_parent_dir(database_url: str) -> None:
+    """Create parent directory for file-based SQLite URLs."""
+    if not database_url.startswith("sqlite:///"):
+        return
+
+    raw_path = database_url.replace("sqlite:///", "", 1)
+    if raw_path == ":memory:" or raw_path.startswith("file:"):
+        return
+
+    abs_path = os.path.abspath(raw_path)
+    parent_dir = os.path.dirname(abs_path)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
+
 # Create database engine
 if "sqlite" in settings.DATABASE_URL:
     # SQLite (for development/testing)
+    _ensure_sqlite_parent_dir(settings.DATABASE_URL)
     engine = create_engine(
         settings.DATABASE_URL,
         connect_args={"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {},
@@ -36,7 +52,7 @@ def init_db():
     """Initialize database tables"""
     # Create all tables
     Base.metadata.create_all(bind=engine)
-    print(f"✅ Database tables created/verified")
+    print("Database tables created/verified")
 
 
 def get_db():
