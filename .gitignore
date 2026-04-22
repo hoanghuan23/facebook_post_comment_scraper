@@ -21,6 +21,10 @@ dist/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.pyre/
+.hypothesis/
+.tox/
+.nox/
 .coverage
 coverage.xml
 htmlcov/
@@ -35,12 +39,18 @@ htmlcov/
 .idea/
 *.code-workspace
 
+# Notebooks
+.ipynb_checkpoints/
+
 # OS files
 .DS_Store
 Thumbs.db
 
 # Selenium / browser profile data
 chromedata1/
+chromedata*/
+chrome-user-data/
+user-data-dir/
 chromedriver.log
 selenium-debug.log
 
@@ -48,8 +58,21 @@ selenium-debug.log
 group_post/
 page_post/
 simple_post/
+exports/
+output/
 
 # Logs and temp files
 *.log
+logs/
 tmp/
 temp/
+
+# Local databases and runtime state
+*.sqlite
+*.sqlite3
+*.db
+*.pid
+
+# Python tooling
+.python-version
+pip-wheel-metadata/

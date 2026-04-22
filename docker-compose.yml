@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: facebook-scraper-db
+    environment:
+      POSTGRES_USER: scraper
+      POSTGRES_PASSWORD: scraper_password
+      POSTGRES_DB: facebook_scraper
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scraper"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - facebook-scraper-network
+
+  # Redis (optional, for caching/message queue)
+  redis:
+    image: redis:7-alpine
+    container_name: facebook-scraper-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - facebook-scraper-network
+
+  # FastAPI Backend
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: facebook-scraper-api
+    environment:
+      ENV: production
+      DATABASE_URL: postgresql://scraper:scraper_password@postgres:5432/facebook_scraper
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      DEBUG: "False"
+      SCHEDULER_ENABLED: "True"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    command: uvicorn backend.api.main:app --host 0.0.0.0 --port 8000
+    networks:
+      - facebook-scraper-network
+    restart: unless-stopped
+
+  # Nginx Reverse Proxy (optional)
+  nginx:
+    image: nginx:alpine
+    container_name: facebook-scraper-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - api
+    networks:
+      - facebook-scraper-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  facebook-scraper-network:
+    driver: bridge
