@@ -50,6 +50,15 @@ class SourceType(str, enum.Enum):
     USER = "user"
 
 
+class PermissionStatus(str, enum.Enum):
+    """Permission status for source access"""
+    GRANTED = "granted"
+    DENIED = "denied"
+    RESTRICTED = "restricted"
+    NOT_CHECKED = "not_checked"
+    ERROR = "error"
+
+
 class Source(Base):
     """Facebook source (group, page, or user) to track"""
     __tablename__ = "sources"
@@ -75,6 +84,13 @@ class Source(Base):
     include_replies = Column(Boolean, default=True)
     max_days_old = Column(Integer, default=30)  # Chỉ track bài <= N ngày
     
+    # Permission & Access Control
+    permission_status = Column(Enum(PermissionStatus), default=PermissionStatus.NOT_CHECKED)
+    permission_message = Column(Text, nullable=True)  # Chi tiết về quyền
+    access_restrictions = Column(Text, nullable=True)  # JSON list of restrictions
+    permission_checked_at = Column(DateTime, nullable=True)
+    is_accessible = Column(Boolean, default=False)  # Có thể truy cập được không
+    
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     last_scraped = Column(DateTime, nullable=True)
@@ -88,6 +104,8 @@ class Source(Base):
         UniqueConstraint('user_id', 'facebook_id', name='uq_user_source'),
         Index('idx_source_user_active', 'user_id', 'is_active'),
         Index('idx_source_next_scrape', 'next_scrape'),
+        Index('idx_source_permission', 'permission_status'),
+        Index('idx_source_accessible', 'is_accessible'),
     )
 
 

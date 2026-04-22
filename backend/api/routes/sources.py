@@ -1,6 +1,8 @@
 # Source management routes
 from datetime import datetime
 from typing import List
+import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -10,16 +12,11 @@ from backend.database.crud import SourceCRUD, PostCRUD, duplicate_check_source, 
 from backend.database.db import get_db
 from backend.database.models import User
 from backend.database.schemas import SourceCreate, SourceDetail, SourceResponse, SourceUpdate, PostResponse
+from backend.utils.facebook_url_parser import FacebookURLParser, FacebookSourceType
+from backend.utils.permission_checker import FacebookPermissionChecker, SourceAccessValidator
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-def _extract_facebook_id(url: str) -> str:
-    """Best-effort extraction for Facebook ID/slug from URL."""
-    cleaned = url.strip().rstrip("/")
-    if not cleaned:
-        return ""
-    return cleaned.split("/")[-1]
 
 
 @router.post("/", response_model=SourceResponse)
@@ -29,19 +26,72 @@ async def create_source(
     db: Session = Depends(get_db),
 ):
     """Create a new source (group/page/user) to track."""
-    facebook_id = _extract_facebook_id(source_data.facebook_url)
-    if not facebook_id:
+    
+    # Parse Facebook URL
+    parsed_url = FacebookURLParser.parse(source_data.facebook_url)
+    
+    if not parsed_url['is_valid']:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid Facebook URL",
+            detail=f"Invalid Facebook URL: {parsed_url['error']}",
         )
-
+    
+    facebook_id = parsed_url['facebook_id']
+    detected_source_type = parsed_url['source_type'].value
+    
+    # Use provided source_type if valid, otherwise use detected
+    if source_data.source_type not in ['group', 'page', 'user']:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid source type",
+        )
+    
+    # Check for duplicates
     if duplicate_check_source(db, current_user.id, facebook_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="This source is already being tracked",
         )
-
+    
+    # Check access permissions if requested
+    permission_status = None
+    permission_message = None
+    access_restrictions = None
+    is_accessible = False
+    
+    if source_data.check_access:
+        # Validate access before saving
+        is_valid, validation_error = SourceAccessValidator.validate_before_save(
+            facebook_id=facebook_id,
+            source_type=source_data.source_type,
+            user_id=current_user.id,
+            user_cookies=None,  # Can be passed if available
+            strict_mode=False
+        )
+        
+        # Check detailed permissions
+        permission_result = FacebookPermissionChecker.check_access(
+            facebook_id=facebook_id,
+            user_id=current_user.id,
+            source_type=source_data.source_type,
+            user_cookies=None
+        )
+        
+        permission_status = permission_result['status'].value
+        permission_message = permission_result['message']
+        is_accessible = permission_result['accessible']
+        
+        if permission_result.get('restrictions'):
+            access_restrictions = json.dumps(permission_result['restrictions'])
+        
+        # If access is denied, raise error
+        if not is_valid and permission_result['status'].value == 'denied':
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied: {validation_error}",
+            )
+    
+    # Create source with permission information
     source = SourceCRUD.create(
         db=db,
         user_id=current_user.id,
@@ -51,7 +101,14 @@ async def create_source(
         include_comments=source_data.include_comments,
         include_replies=source_data.include_replies,
         max_days_old=source_data.max_days_old,
+        permission_status=permission_status,
+        permission_message=permission_message,
+        access_restrictions=access_restrictions,
+        is_accessible=is_accessible,
+        permission_checked_at=datetime.utcnow() if source_data.check_access else None,
     )
+    
+    logger.info(f"Source created: {facebook_id} by user {current_user.id}")
     return source
 
 
@@ -83,6 +140,14 @@ async def get_source(
     stats = get_source_stats(db, source_id)
     detail = SourceDetail.model_validate(source)
     detail.post_count = stats["posts_count"]
+    
+    # Parse restrictions if available
+    if source.access_restrictions:
+        try:
+            detail.access_restrictions = json.loads(source.access_restrictions)
+        except:
+            pass
+    
     return detail
 
 
@@ -136,6 +201,53 @@ async def refresh_source(
 
     SourceCRUD.update_scrape_info(db, source_id, next_scrape=datetime.utcnow())
     return {"message": f"Source {source_id} queued for refresh", "source_id": source_id}
+
+
+@router.post("/{source_id}/check-access")
+async def check_source_access(
+    source_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Check/recheck access permissions for a source."""
+    source = SourceCRUD.get_by_id(db, source_id)
+    if not source or source.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Source not found")
+    
+    # Check permissions
+    permission_result = FacebookPermissionChecker.check_access(
+        facebook_id=source.facebook_id,
+        user_id=current_user.id,
+        source_type=source.source_type.value,
+        user_cookies=None
+    )
+    
+    # Update source with new permission info
+    update_data = {
+        'permission_status': permission_result['status'].value,
+        'permission_message': permission_result['message'],
+        'is_accessible': permission_result['accessible'],
+        'permission_checked_at': datetime.utcnow(),
+    }
+    
+    if permission_result.get('restrictions'):
+        update_data['access_restrictions'] = json.dumps(permission_result['restrictions'])
+    
+    # Use raw SQL update for permission fields
+    for key, value in update_data.items():
+        if hasattr(source, key):
+            setattr(source, key, value)
+    
+    db.commit()
+    db.refresh(source)
+    
+    return {
+        "source_id": source_id,
+        "permission_status": permission_result['status'].value,
+        "is_accessible": permission_result['accessible'],
+        "message": permission_result['message'],
+        "restrictions": permission_result.get('restrictions', []),
+    }
 
 
 @router.get("/{source_id}/posts", response_model=List[PostResponse])

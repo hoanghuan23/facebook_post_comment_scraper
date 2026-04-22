@@ -123,6 +123,12 @@ class SourceCRUD:
             include_comments=kwargs.get('include_comments', True),
             include_replies=kwargs.get('include_replies', True),
             max_days_old=kwargs.get('max_days_old', 30),
+            # Permission fields
+            permission_status=kwargs.get('permission_status'),
+            permission_message=kwargs.get('permission_message'),
+            access_restrictions=kwargs.get('access_restrictions'),
+            is_accessible=kwargs.get('is_accessible', False),
+            permission_checked_at=kwargs.get('permission_checked_at'),
         )
         db.add(db_source)
         db.commit()
@@ -183,7 +189,9 @@ class SourceCRUD:
         
         allowed_fields = {
             'source_name', 'description', 'include_comments', 'include_replies',
-            'max_days_old', 'is_active', 'cover_image_url', 'member_count', 'follower_count'
+            'max_days_old', 'is_active', 'cover_image_url', 'member_count', 'follower_count',
+            'permission_status', 'permission_message', 'access_restrictions', 
+            'is_accessible', 'permission_checked_at'
         }
         
         for key, value in kwargs.items():

@@ -62,6 +62,7 @@ class SourceCreate(BaseModel):
     include_comments: bool = True
     include_replies: bool = True
     max_days_old: int = 30
+    check_access: bool = True  # Có kiểm tra quyền trước khi lưu không
 
 
 class SourceUpdate(BaseModel):
@@ -88,6 +89,11 @@ class SourceResponse(BaseModel):
     member_count: Optional[int]
     follower_count: Optional[int]
     
+    # Permission fields
+    permission_status: Optional[str] = None
+    permission_message: Optional[str] = None
+    is_accessible: bool = False
+    
     class Config:
         from_attributes = True
 
@@ -96,6 +102,8 @@ class SourceDetail(SourceResponse):
     """Detailed source response"""
     post_count: Optional[int] = None
     latest_post_date: Optional[datetime] = None
+    access_restrictions: Optional[List[str]] = None
+    permission_checked_at: Optional[datetime] = None
 
 
 # ==================== POST SCHEMAS ====================
