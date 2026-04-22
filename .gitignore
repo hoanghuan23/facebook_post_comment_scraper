@@ -76,3 +76,6 @@ temp/
 # Python tooling
 .python-version
 pip-wheel-metadata/
+
+# Information about the project
+Information

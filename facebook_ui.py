@@ -441,11 +441,27 @@ class ScraperThread(QThread):
             try:
                 self.log(f"  Fetching comments...")
                 comments, post_info = fetch_comments_for_post(post_id, cookies=self.cookies)
+
+                comment_count = len(comments)
+                if post_info and post_info.get("comment_count") is not None:
+                    try:
+                        comment_count = int(post_info.get("comment_count"))
+                    except Exception:
+                        comment_count = post_info.get("comment_count")
+
+                reaction_count = 0
+                if post_info and post_info.get("reaction_count") is not None:
+                    try:
+                        reaction_count = int(post_info.get("reaction_count"))
+                    except Exception:
+                        reaction_count = post_info.get("reaction_count")
                 
                 # Save data
                 post_data = {
                     "post_id": post_id,
                     "type": "simple_post",
+                    "comment_count": comment_count,
+                    "reaction_count": reaction_count,
                     "post_info": post_info
                 }
                 

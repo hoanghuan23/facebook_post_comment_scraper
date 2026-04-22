@@ -151,6 +151,72 @@ def fetch_comments(feedback_id, cookies=None):
     results = []
     cursor = None
     response_count = 0
+
+    def extract_post_reaction_count(feedback):
+        """Extract post reaction count from feedback object across schemas."""
+        if not isinstance(feedback, dict):
+            return "0"
+
+        candidates = [
+            feedback,
+            feedback.get("comet_ufi_summary_and_actions_renderer", {}).get("feedback", {}),
+            feedback.get("if_viewer_cannot_see_seen_by_member_list", {}),
+        ]
+
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+
+            reaction_count = candidate.get("reaction_count", {})
+            if isinstance(reaction_count, dict):
+                value = reaction_count.get("count")
+                while isinstance(value, dict):
+                    value = value.get("count")
+                if value is not None:
+                    return str(value)
+
+            reactors = candidate.get("reactors", {})
+            if isinstance(reactors, dict):
+                value = reactors.get("count_reduced")
+                if value is not None:
+                    return str(value)
+
+        return "0"
+
+    def extract_post_comment_count(feedback):
+        """Extract post comment count from feedback object across schemas."""
+        if not isinstance(feedback, dict):
+            return 0
+
+        candidates = [
+            feedback,
+            feedback.get("comet_ufi_summary_and_actions_renderer", {}).get("feedback", {}),
+            feedback.get("comments_count_summary_renderer", {}).get("feedback", {}),
+        ]
+
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+
+            count = (
+                candidate.get("comment_rendering_instance", {})
+                .get("comments", {})
+                .get("total_count")
+            )
+            if count is not None:
+                return count
+
+            count = (
+                candidate.get("comments_count_summary_renderer", {})
+                .get("feedback", {})
+                .get("comment_rendering_instance", {})
+                .get("comments", {})
+                .get("total_count")
+            )
+            if count is not None:
+                return count
+
+        return 0
     post_info = None  # Store parent post info from first response
 
     while True:
@@ -190,10 +256,16 @@ def fetch_comments(feedback_id, cookies=None):
                 parent_post_story = n.get("parent_post_story", {})
                 
                 if parent_post_story:
+                    # Extract post reaction count
+                    post_feedback = parent_post_story.get("feedback", {})
+                    post_reaction_count = extract_post_reaction_count(post_feedback)
+                    post_comment_count = extract_post_comment_count(post_feedback)
+                    
                     post_info = {
                         "post_story_id": parent_post_story.get("id"),
                         "media_id": None,
-                        "reaction_count": None
+                        "comment_count": post_comment_count,
+                        "reaction_count": post_reaction_count
                     }
                     
                     # Extract first media ID
@@ -206,12 +278,9 @@ def fetch_comments(feedback_id, cookies=None):
                     
                     print(f"📎 Extracted post info: {post_info}")
 
-            # Extract reaction count
-            post_feedback = parent_post_story.get("feedback", {})
+            # Extract reaction count for comment
             reactors = fb.get("reactors", {})
-            # reactors = post_feedback.get("reactors", {})
             total_reactions = reactors.get("count_reduced", "0")
-            # post_info["reaction_count"] = reactors.get("count_reduced", "0")
             
             results.append({
                 # "comment_id": n["legacy_fbid"],

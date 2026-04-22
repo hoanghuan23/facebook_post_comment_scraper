@@ -370,6 +370,108 @@ def extract_comment_count(node):
         return 0
 
 
+def extract_reaction_count(node):
+    """Extract reaction count from post node"""
+    try:
+        # Direct path seen in live debug output
+        comet_sections = node.get("comet_sections", {})
+        feedback_section = comet_sections.get("feedback", {})
+        story = feedback_section.get("story", {})
+        story_ufi_container = story.get("story_ufi_container", {})
+        ufi_story = story_ufi_container.get("story", {})
+        feedback_context = ufi_story.get("feedback_context", {})
+        feedback_target = feedback_context.get("feedback_target_with_context", {})
+        comet_ufi = feedback_target.get("comet_ufi_summary_and_actions_renderer", {})
+        if comet_ufi:
+            ufi_feedback = comet_ufi.get("feedback", {})
+            reaction_count = ufi_feedback.get("reaction_count", {})
+            if isinstance(reaction_count, dict):
+                count = reaction_count.get("count", {})
+                if isinstance(count, dict) and count.get("count") is not None:
+                    return count.get("count")
+
+        # Path 1: comet_sections.feedback.story.story_ufi_container.story.feedback_context.feedback_target_with_context.comet_ufi_summary_and_actions_renderer.feedback.reactors.count_reduced
+        # Try comet_ufi_summary_and_actions_renderer first (main path)
+        if comet_ufi:
+            ufi_feedback = comet_ufi.get("feedback", {})
+            reactors = ufi_feedback.get("reactors", {})
+            if reactors:
+                count = reactors.get("count_reduced")
+                if count is not None:
+                    return count
+        
+        # Path 2: feedback_target_with_context.reactors.count_reduced (direct)
+        reactors = feedback_target.get("reactors", {})
+        if reactors:
+            count = reactors.get("count_reduced")
+            if count is not None:
+                return count
+        
+        # Path 3: comet_sections.feedback.story.feedback_context.feedback_target_with_context.reactors.count_reduced (old structure)
+        comet_sections = node.get("comet_sections", {})
+        feedback_section = comet_sections.get("feedback", {})
+        story = feedback_section.get("story", {})
+        feedback_context = story.get("feedback_context", {})
+        feedback_target = feedback_context.get("feedback_target_with_context", {})
+        reactors = feedback_target.get("reactors", {})
+        if reactors:
+            count = reactors.get("count_reduced")
+            if count is not None:
+                return count
+        
+        # Path 4: comet_sections.feedback.story.comet_ufi_summary_and_actions_renderer.feedback.reactors.count_reduced
+        comet_sections = node.get("comet_sections", {})
+        feedback_section = comet_sections.get("feedback", {})
+        story = feedback_section.get("story", {})
+        comet_ufi = story.get("comet_ufi_summary_and_actions_renderer", {})
+        if comet_ufi:
+            ufi_feedback = comet_ufi.get("feedback", {})
+            reactors = ufi_feedback.get("reactors", {})
+            if reactors:
+                count = reactors.get("count_reduced")
+                if count is not None:
+                    return count
+        
+        # Path 5: feedback.reactors.count_reduced (fallback)
+        reactors = node.get("feedback", {}).get("reactors", {})
+        if reactors:
+            count = reactors.get("count_reduced")
+            if count is not None:
+                return count
+        
+        # Path 6: Search for any reactors in feedback tree
+        feedback = node.get("feedback", {})
+        if isinstance(feedback, dict):
+            reactors = feedback.get("reactors", {})
+            if isinstance(reactors, dict) and "count_reduced" in reactors:
+                return reactors.get("count_reduced", 0)
+        
+        # 🔍 DEBUG: If not found, let's search more broadly
+        # This will help us find where reaction_count actually is
+        try:
+            from debug_node_structure import find_reactors
+            all_reactors = find_reactors(node)
+            if all_reactors:
+                # Found reactors! Log all paths for debugging
+                post_id = node.get("post_id", "unknown")
+                print(f"\n⚠️  DEBUG post {post_id}:")
+                print(f"   Found {len(all_reactors)} reactors:")
+                for r in all_reactors[:3]:  # Show first 3
+                    print(f"   📍 {r['path']}.{r['key']} = {r['value']}")
+                
+                # Return the first valid count found
+                valid_counts = [r for r in all_reactors if r['value'] not in (None, "")]
+                if valid_counts:
+                    return valid_counts[0]["value"]
+        except Exception as debug_error:
+            pass  # Silently ignore debug errors
+                
+        return 0
+    except Exception as e:
+        print(f"⚠️ Error in extract_reaction_count: {e}")
+        return 0
+
+
 def is_reel_or_video_post(node):
     """Check if the post is a reel or video post"""
     if not node or node.get('__typename') != 'Story':
@@ -514,6 +616,9 @@ def extract_post_data(node, group_name=None):
     # Extract comment count
     comment_count = extract_comment_count(node)
     
+    # Extract reaction count
+    reaction_count = extract_reaction_count(node)
+    
     # Extract group name if not provided
     if not group_name:
         group_name = extract_group_name(node)
@@ -534,6 +639,7 @@ def extract_post_data(node, group_name=None):
         'post_id': post_id,
         'message': message,
         'comment_count': comment_count,
+        'reaction_count': reaction_count,
         'group_name': group_name,
         'permalink': node.get('permalink_url', ''),
         'photos': extract_media(node, post_id, media_save_dir)['photos'],
