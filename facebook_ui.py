@@ -456,6 +456,11 @@ class ScraperThread(QThread):
                     except Exception:
                         reaction_count = post_info.get("reaction_count")
                 
+                # Remove duplicate fields from post_info
+                if post_info:
+                    post_info.pop("comment_count", None)
+                    post_info.pop("reaction_count", None)
+                
                 # Save data
                 post_data = {
                     "post_id": post_id,
