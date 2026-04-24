@@ -11,7 +11,7 @@ load_dotenv()
 GRAPHQL_URL = "https://www.facebook.com/api/graphql/"
 
 # ========= CONFIG (FILL THESE) =========
-USER_ID = "100019577483175"   # profile / page id
+# USER_ID = "100019577483175"   # profile / page id
 # USER_ID = "100015055006523" # id profile công anh
 PAGE_NAME = None  # Will be extracted automatically
 DOC_ID = "25430544756617998" # ProfileCometTimelineFeedRefetchQuery
@@ -261,10 +261,29 @@ def clean_data_blocks(blocks):
 # -----------------------------
 def parse_fb_response(text):
     text = text.replace("for (;;);", "").strip()
-    extracted = extract_data_blocks(text)
-    cleaned = clean_data_blocks(extracted)
-    
-    # Return the cleaned array as-is
+
+    # Prefer parsing line-by-line JSON blocks (Facebook often streams JSON lines,
+    # and some useful blocks don't include a top-level "data" key).
+    parsed_blocks = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        try:
+            obj = json.loads(s)
+        except Exception:
+            continue
+
+        if isinstance(obj, dict) and isinstance(obj.get("data"), dict):
+            parsed_blocks.append(obj["data"])
+        elif isinstance(obj, dict):
+            parsed_blocks.append(obj)
+
+    if not parsed_blocks:
+        # Fallback to legacy extraction for single-line / embedded JSON
+        parsed_blocks = extract_data_blocks(text)
+
+    cleaned = clean_data_blocks(parsed_blocks)
     return cleaned
 
 
@@ -517,6 +536,95 @@ def extract_reaction_count(node):
     except Exception as e:
         return 0
 
+def extract_share_count(node):
+    """Extract share count from post node"""
+    try:
+        def get_share_count_from_feedback(feedback):
+            if not isinstance(feedback, dict):
+                return None
+
+            # Newer structures can return nested objects: share_count.count.count...
+            share_count = feedback.get("share_count")
+            if isinstance(share_count, dict):
+                value = share_count.get("count")
+                while isinstance(value, dict):
+                    value = value.get("count")
+                if value is not None:
+                    return value
+            elif share_count is not None:
+                return share_count
+
+            # Sometimes share count lives under share_count_reduced
+            share_count_reduced = feedback.get("share_count_reduced")
+            if isinstance(share_count_reduced, dict):
+                value = share_count_reduced.get("count")
+                while isinstance(value, dict):
+                    value = value.get("count")
+                if value is not None:
+                    return value
+            elif share_count_reduced is not None:
+                return share_count_reduced
+
+            return None
+
+        # Path 1: feedback.share_count (including nested count variants)
+        value = get_share_count_from_feedback(node.get("feedback", {}))
+        if value is not None:
+            return value
+
+        # Path 2: comet_sections.feedback.story.story_ufi_container.story.feedback_context.feedback_target_with_context.share_count
+        comet_sections = node.get("comet_sections", {})
+        feedback_section = comet_sections.get("feedback", {})
+        story = feedback_section.get("story", {})
+        story_ufi_container = story.get("story_ufi_container", {})
+        ufi_story = story_ufi_container.get("story", {})
+        feedback_context = ufi_story.get("feedback_context", {})
+        feedback_target = feedback_context.get("feedback_target_with_context", {})
+        value = get_share_count_from_feedback(feedback_target)
+        if value is not None:
+            return value
+
+        # Path 2b: feedback_target_with_context.comet_ufi_summary_and_actions_renderer.feedback.share_count
+        comet_ufi_feedback = (
+            feedback_target.get("comet_ufi_summary_and_actions_renderer", {})
+            .get("feedback", {})
+        )
+        value = get_share_count_from_feedback(comet_ufi_feedback)
+        if value is not None:
+            return value
+
+        # Path 3: comet_sections.feedback.story.feedback_context.feedback_target_with_context.share_count (old structure)
+        comet_sections = node.get("comet_sections", {})
+        feedback_section = comet_sections.get("feedback", {})
+        story = feedback_section.get("story", {})
+        feedback_context = story.get("feedback_context", {})
+        feedback_target = feedback_context.get("feedback_target_with_context", {})
+        value = get_share_count_from_feedback(feedback_target)
+        if value is not None:
+            return value
+
+        # Path 4: comet_sections.feedback.story.comet_ufi_summary_and_actions_renderer.feedback.share_count
+        comet_sections = node.get("comet_sections", {})
+        feedback_section = comet_sections.get("feedback", {})
+        story = feedback_section.get("story", {})
+        comet_ufi = story.get("comet_ufi_summary_and_actions_renderer", {})
+        if comet_ufi:
+            ufi_feedback = comet_ufi.get("feedback", {})
+            value = get_share_count_from_feedback(ufi_feedback)
+            if value is not None:
+                return value
+
+        # Path 5: Tìm share_count trong mọi nhánh feedback
+        feedback = node.get("feedback", {})
+        if isinstance(feedback, dict):
+            value = get_share_count_from_feedback(feedback)
+            if value is not None:
+                return value
+
+        return 0
+    except Exception:
+        return 0
+
 
 def extract_permalink(node):
     """Extract permalink URL from a page post node"""
@@ -723,6 +831,34 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
         
         story_nodes = []
         timeline_block = None
+
+        # Some GraphQL responses return share_count (and other UFI counts) in
+        # separate blocks keyed by feedback id, not inside the Story node.
+        # Build a lookup so we can fill missing values reliably.
+        feedback_share_count_by_id = {}
+        def _unwrap_count(value):
+            while isinstance(value, dict):
+                value = value.get("count")
+            return value
+        for block in cleaned_data:
+            if not isinstance(block, dict):
+                continue
+            node2 = block.get("node", block)
+            if not isinstance(node2, dict):
+                continue
+            fb_id = node2.get("id")
+            if not (isinstance(fb_id, str) and fb_id.startswith("ZmVlZGJhY2s6")):
+                continue
+            sc = node2.get("share_count")
+            if sc is None:
+                continue
+            sc_val = _unwrap_count(sc) if isinstance(sc, dict) else sc
+            if sc_val is None:
+                continue
+            try:
+                feedback_share_count_by_id[fb_id] = int(sc_val)
+            except Exception:
+                pass
         
         for block in cleaned_data:
             if not isinstance(block, dict):
@@ -767,6 +903,13 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
                 print(f"  ⏭️  Skipping post with only {comment_count} comments (need {min_comments}+)")
                 continue
             
+            # Extract share count
+            share_count = extract_share_count(node)
+            if share_count == 0:
+                fb_id = node.get("feedback", {}).get("id")
+                if fb_id and fb_id in feedback_share_count_by_id:
+                    share_count = feedback_share_count_by_id[fb_id]
+
             # Extract reaction count
             reaction_count = extract_reaction_count(node)
             
@@ -806,6 +949,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
                 "permalink": permalink,
                 "comment_count": comment_count,
                 "reaction_count": reaction_count,
+                "share_count": share_count,
                 "page_name": PAGE_NAME,
             }
             
