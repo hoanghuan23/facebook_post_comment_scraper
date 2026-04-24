@@ -512,26 +512,6 @@ def extract_reaction_count(node):
             if isinstance(reactors, dict) and "count_reduced" in reactors:
                 return reactors.get("count_reduced", 0)
         
-        # 🔍 DEBUG: If not found, let's search more broadly
-        # This will help us find where reaction_count actually is
-        try:
-            from debug_node_structure import find_reactors
-            all_reactors = find_reactors(node)
-            if all_reactors:
-                # Found reactors! Log all paths for debugging
-                post_id = node.get("post_id", "unknown")
-                print(f"\n⚠️  DEBUG post {post_id}:")
-                print(f"   Found {len(all_reactors)} reactors:")
-                for r in all_reactors[:3]:  # Show first 3
-                    print(f"   📍 {r['path']}.{r['key']} = {r['value']}")
-                
-                # Return the first valid count found
-                valid_counts = [r for r in all_reactors if r['value'] not in (None, "")]
-                if valid_counts:
-                    return valid_counts[0]["value"]
-        except Exception as debug_error:
-            pass  # Silently ignore debug errors
-                
         return 0
     except Exception as e:
         return 0

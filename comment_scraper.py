@@ -168,6 +168,8 @@ def fetch_comments(feedback_id, cookies=None):
                 continue
 
             reaction_count = candidate.get("reaction_count", {})
+            if isinstance(reaction_count, int):
+                return str(reaction_count)
             if isinstance(reaction_count, dict):
                 value = reaction_count.get("count")
                 while isinstance(value, dict):
@@ -198,6 +200,27 @@ def fetch_comments(feedback_id, cookies=None):
             if not isinstance(candidate, dict):
                 continue
 
+            # Some schemas expose counts directly
+            direct = candidate.get("total_comment_count")
+            if direct is not None:
+                return direct
+
+            direct = candidate.get("comments_count")
+            if direct is not None:
+                return direct
+
+            direct = candidate.get("comment_count")
+            if isinstance(direct, int):
+                return direct
+            if isinstance(direct, dict):
+                if direct.get("total_count") is not None:
+                    return direct.get("total_count")
+                value = direct.get("count")
+                while isinstance(value, dict):
+                    value = value.get("count")
+                if value is not None:
+                    return value
+
             count = (
                 candidate.get("comment_rendering_instance", {})
                 .get("comments", {})
@@ -217,6 +240,61 @@ def fetch_comments(feedback_id, cookies=None):
                 return count
 
         return 0
+
+    def extract_post_info_from_response(j):
+        """Best-effort extract post_info from the top-level GraphQL response."""
+        if not isinstance(j, dict):
+            return None
+
+        node = (j.get("data") or {}).get("node") or {}
+        if not isinstance(node, dict):
+            return None
+
+        feedback_candidates = [
+            node.get("feedback"),
+            node,
+            (node.get("associated_story") or {}).get("feedback"),
+        ]
+
+        post_feedback = None
+        for cand in feedback_candidates:
+            if isinstance(cand, dict) and cand:
+                post_feedback = cand
+                break
+
+        if not isinstance(post_feedback, dict):
+            return None
+
+        post_info = {
+            "post_story_id": (node.get("associated_story") or {}).get("id") or node.get("id"),
+            "media_id": None,
+            "comment_count": extract_post_comment_count(post_feedback),
+            "reaction_count": extract_post_reaction_count(post_feedback),
+        }
+
+        # Try to extract a media id (first attachment media.id) from likely story containers
+        story_candidates = [
+            node.get("associated_story") or {},
+            node.get("story") or {},
+            node.get("parent_post_story") or {},
+        ]
+        for story in story_candidates:
+            if not isinstance(story, dict):
+                continue
+            attachments = story.get("attachments") or []
+            if not isinstance(attachments, list):
+                continue
+            for attachment in attachments:
+                if not isinstance(attachment, dict):
+                    continue
+                media = attachment.get("media") or {}
+                if isinstance(media, dict) and media.get("id"):
+                    post_info["media_id"] = media.get("id")
+                    break
+            if post_info.get("media_id"):
+                break
+
+        return post_info
     post_info = None  # Store parent post info from first response
 
     while True:
@@ -229,6 +307,12 @@ def fetch_comments(feedback_id, cookies=None):
             cookies=cookies
         )
         j = fb_json(r.text)
+
+        # Extract post-level info as early as possible (works even when there are 0 comments)
+        if response_count == 0 and post_info is None:
+            post_info = extract_post_info_from_response(j)
+            if post_info:
+                print(f"📎 Extracted post info (top-level): {post_info}")
         
         # Save each JSON response for inspection
         response_count += 1

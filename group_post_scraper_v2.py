@@ -373,7 +373,7 @@ def extract_comment_count(node):
 def extract_reaction_count(node):
     """Extract reaction count from post node"""
     try:
-        # Direct path seen in live debug output
+        # Keep logic consistent with page_post (post_scraper.py)
         comet_sections = node.get("comet_sections", {})
         feedback_section = comet_sections.get("feedback", {})
         story = feedback_section.get("story", {})
@@ -382,90 +382,53 @@ def extract_reaction_count(node):
         feedback_context = ufi_story.get("feedback_context", {})
         feedback_target = feedback_context.get("feedback_target_with_context", {})
         comet_ufi = feedback_target.get("comet_ufi_summary_and_actions_renderer", {})
-        if comet_ufi:
-            ufi_feedback = comet_ufi.get("feedback", {})
-            reaction_count = ufi_feedback.get("reaction_count", {})
-            if isinstance(reaction_count, dict):
-                count = reaction_count.get("count", {})
-                if isinstance(count, dict) and count.get("count") is not None:
-                    return count.get("count")
 
-        # Path 1: comet_sections.feedback.story.story_ufi_container.story.feedback_context.feedback_target_with_context.comet_ufi_summary_and_actions_renderer.feedback.reactors.count_reduced
-        # Try comet_ufi_summary_and_actions_renderer first (main path)
-        if comet_ufi:
-            ufi_feedback = comet_ufi.get("feedback", {})
-            reactors = ufi_feedback.get("reactors", {})
-            if reactors:
-                count = reactors.get("count_reduced")
-                if count is not None:
-                    return count
-        
-        # Path 2: feedback_target_with_context.reactors.count_reduced (direct)
-        reactors = feedback_target.get("reactors", {})
-        if reactors:
-            count = reactors.get("count_reduced")
-            if count is not None:
-                return count
-        
-        # Path 3: comet_sections.feedback.story.feedback_context.feedback_target_with_context.reactors.count_reduced (old structure)
-        comet_sections = node.get("comet_sections", {})
-        feedback_section = comet_sections.get("feedback", {})
-        story = feedback_section.get("story", {})
-        feedback_context = story.get("feedback_context", {})
-        feedback_target = feedback_context.get("feedback_target_with_context", {})
-        reactors = feedback_target.get("reactors", {})
-        if reactors:
-            count = reactors.get("count_reduced")
-            if count is not None:
-                return count
-        
-        # Path 4: comet_sections.feedback.story.comet_ufi_summary_and_actions_renderer.feedback.reactors.count_reduced
-        comet_sections = node.get("comet_sections", {})
-        feedback_section = comet_sections.get("feedback", {})
-        story = feedback_section.get("story", {})
-        comet_ufi = story.get("comet_ufi_summary_and_actions_renderer", {})
-        if comet_ufi:
-            ufi_feedback = comet_ufi.get("feedback", {})
-            reactors = ufi_feedback.get("reactors", {})
-            if reactors:
-                count = reactors.get("count_reduced")
-                if count is not None:
-                    return count
-        
-        # Path 5: feedback.reactors.count_reduced (fallback)
-        reactors = node.get("feedback", {}).get("reactors", {})
-        if reactors:
-            count = reactors.get("count_reduced")
-            if count is not None:
-                return count
-        
-        # Path 6: Search for any reactors in feedback tree
-        feedback = node.get("feedback", {})
-        if isinstance(feedback, dict):
+        def get_reaction_count_from_feedback(feedback):
+            if not isinstance(feedback, dict):
+                return None
+
+            # New structure variants: reaction_count.count (possibly nested dicts)
+            reaction_count = feedback.get("reaction_count", {})
+            if isinstance(reaction_count, dict):
+                value = reaction_count.get("count")
+                while isinstance(value, dict):
+                    value = value.get("count")
+                if value is not None:
+                    return value
+
+            # Fallback old structure: reactors.count_reduced
             reactors = feedback.get("reactors", {})
-            if isinstance(reactors, dict) and "count_reduced" in reactors:
-                return reactors.get("count_reduced", 0)
-        
-        # 🔍 DEBUG: If not found, let's search more broadly
-        # This will help us find where reaction_count actually is
-        try:
-            from debug_node_structure import find_reactors
-            all_reactors = find_reactors(node)
-            if all_reactors:
-                # Found reactors! Log all paths for debugging
-                post_id = node.get("post_id", "unknown")
-                print(f"\n⚠️  DEBUG post {post_id}:")
-                print(f"   Found {len(all_reactors)} reactors:")
-                for r in all_reactors[:3]:  # Show first 3
-                    print(f"   📍 {r['path']}.{r['key']} = {r['value']}")
-                
-                # Return the first valid count found
-                valid_counts = [r for r in all_reactors if r['value'] not in (None, "")]
-                if valid_counts:
-                    return valid_counts[0]["value"]
-        except Exception as debug_error:
-            pass  # Silently ignore debug errors
-                
+            if isinstance(reactors, dict):
+                value = reactors.get("count_reduced")
+                if value is not None:
+                    return value
+
+            return None
+
+        # Main path: feedback_target_with_context.comet_ufi_summary_and_actions_renderer.feedback
+        if comet_ufi:
+            ufi_feedback = comet_ufi.get("feedback", {})
+            value = get_reaction_count_from_feedback(ufi_feedback)
+            if value is not None:
+                return value
+
+        # Alternate structure on some responses: story.comet_ufi_summary_and_actions_renderer.feedback
+        alt_comet_ufi = story.get("comet_ufi_summary_and_actions_renderer", {})
+        if alt_comet_ufi:
+            ufi_feedback = alt_comet_ufi.get("feedback", {})
+            value = get_reaction_count_from_feedback(ufi_feedback)
+            if value is not None:
+                return value
+
+        # Target-level and node-level fallback
+        value = get_reaction_count_from_feedback(feedback_target)
+        if value is not None:
+            return value
+
+        value = get_reaction_count_from_feedback(node.get("feedback", {}))
+        if value is not None:
+            return value
+
         return 0
     except Exception as e:
         print(f"⚠️ Error in extract_reaction_count: {e}")
