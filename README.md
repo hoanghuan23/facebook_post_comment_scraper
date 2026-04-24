@@ -29,7 +29,7 @@ Các script/UI hiện tại lưu theo cấu trúc thư mục:
 - `group_post/<Tên Group>/<post_id>/<post_id>.json`
 - `simple_post/<post_id>/<post_id>.json` (+ ảnh nếu lấy được)
 
-Trong file JSON, thường có:
+ file JSON, thường có:
 - **Thông tin post**: `post_id`, `feedback_id`, `permalink`, `text`, `reaction_count`, `comment_count`, `media`…
 - **Danh sách comments**: nằm trong key `comments` (mỗi comment có thể có `replies`).
 
@@ -84,7 +84,7 @@ python main.py
 ```
 
 Chọn:
-- `Simple Post`: lấy comment theo 1 post
+- `User Post`: lấy N Post từ trang cá nhân user và comment
 - `Page Posts`: lấy N post từ page/user và comment
 - `Group Posts`: lấy N post từ group và comment
 
@@ -168,14 +168,4 @@ isort .
 
 ---
 
-## Ghi chú vận hành
-
-- **Facebook có cơ chế chặn**: nên dùng cookie session + proxy hợp lệ để ổn định.
-- **Dữ liệu output**: các thư mục `page_post/`, `user_post/`, … là dữ liệu scrape thực tế (nên đưa vào `.gitignore` nếu không muốn commit).
-
----
-
-## License
-
-Chưa khai báo (bạn có thể thêm MIT/Apache-2.0 tùy nhu cầu).
 

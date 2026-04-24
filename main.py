@@ -59,7 +59,7 @@ def extract_user_id_from_url(url, cookies=None):
                 print(f"  ✅ Found User ID: {user_id}")
                 return user_id
         
-        print("  ❌ User ID not found (profile may be private or login wall)")
+        print("  ❌ User ID not found (trang cá nhân có thể bị khóa hoặc cần đăng nhập)")
         return None
     
     except Exception as e:
