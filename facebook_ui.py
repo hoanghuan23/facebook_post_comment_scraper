@@ -398,8 +398,8 @@ class ScraperThread(QThread):
         """Run the scraping task"""
         try:
             self._apply_proxy()
-            if self.scraper_type == "simple_post":
-                self.scrape_simple_post()
+            if self.scraper_type == "user_posts":
+                self.scrape_user_posts()
             elif self.scraper_type == "page_posts":
                 self.scrape_page_posts()
             elif self.scraper_type == "group_posts":
@@ -409,136 +409,82 @@ class ScraperThread(QThread):
         except Exception as e:
             self.finished_signal.emit(False, f"Error: {str(e)}")
     
-    def scrape_simple_post(self):
-        """Scrape one or more posts"""
-        urls = self.params['urls']  # List of URLs
-        
-        # Set FB_DTSG for comment and image scrapers
-        if self.fb_dtsg:
-            comment_scraper.FB_DTSG = self.fb_dtsg
-            single_post_image.FB_DTSG = self.fb_dtsg
-        else:
-            comment_scraper.FB_DTSG = ""
-            single_post_image.FB_DTSG = ""
-        
-        total = len(urls)
-        self.progress_signal.emit(0, total)
-        
-        for i, url in enumerate(urls, 1):
-            self.log(f"\n[{i}/{total}] Processing URL: {url}")
-            
-            # Extract post ID from URL
-            self.log(f"  Extracting post ID...")
-            post_id = extract_post_id_from_url(url, cookies=self.cookies)
-            
-            if not post_id:
-                self.log(f"  ❌ Could not extract post ID from URL")
-                self.progress_signal.emit(i, total)
+    def scrape_user_posts(self):
+        """Scrape posts from one or more user profile URLs (timeline)"""
+        urls = self.params["urls"]  # List of URLs
+        count = self.params["count"]
+
+        total_users = len(urls)
+        all_posts_count = 0
+
+        for user_num, url in enumerate(urls, 1):
+            self.log(f"\n[User {user_num}/{total_users}] Processing URL: {url}")
+
+            # Extract user ID from URL
+            self.log("  Extracting user ID...")
+            user_id = extract_user_id_from_url(url, cookies=self.cookies)
+
+            if not user_id:
+                self.log("  ❌ Could not extract user ID from URL")
                 continue
-            
-            self.log(f"  ✅ Extracted Post ID: {post_id}")
-            
+
+            self.log(f"  ✅ Extracted User ID: {user_id}")
+
             try:
-                self.log(f"  Fetching comments...")
-                comments, post_info = fetch_comments_for_post(post_id, cookies=self.cookies)
+                # Update the USER_ID in post_scraper
+                post_scraper.USER_ID = user_id
+                post_scraper.PAGE_NAME = None
+                post_scraper.BASE_HEADERS["referer"] = f"https://www.facebook.com/profile.php?id={user_id}"
 
-                comment_count = len(comments)
-                if post_info and post_info.get("comment_count") is not None:
-                    try:
-                        comment_count = int(post_info.get("comment_count"))
-                    except Exception:
-                        comment_count = post_info.get("comment_count")
+                # Update cookies and fb_dtsg in post_scraper if provided
+                post_scraper.COOKIES = self.cookies or {}
 
-                reaction_count = 0
-                if post_info and post_info.get("reaction_count") is not None:
-                    try:
-                        reaction_count = int(post_info.get("reaction_count"))
-                    except Exception:
-                        reaction_count = post_info.get("reaction_count")
-                
-                # Remove duplicate fields from post_info
-                if post_info:
-                    post_info.pop("comment_count", None)
-                    post_info.pop("reaction_count", None)
-                
-                # Save data
-                post_data = {
-                    "post_id": post_id,
-                    "type": "simple_post",
-                    "comment_count": comment_count,
-                    "reaction_count": reaction_count,
-                    "post_info": post_info
-                }
-                
-                save_post_data("simple_post", post_id, post_data, comments)
-                self.log(f"  💾 Saved to simple_post/{post_id}/{post_id}.json")
+                if self.fb_dtsg:
+                    post_scraper.FB_DTSG = self.fb_dtsg
+                    comment_scraper.FB_DTSG = self.fb_dtsg
+                else:
+                    post_scraper.FB_DTSG = ""
+                    comment_scraper.FB_DTSG = ""
+
+                min_comments = self.params.get("min_comments", 0)
+                batch_size = 2
+
+                def process_batch(batch_posts, total_so_far, total_limit):
+                    self.log(f"  Processing batch of {len(batch_posts)} posts ({total_so_far}/{total_limit})...")
+                    for i, post in enumerate(batch_posts, 1):
+                        post_id = post.get("post_id")
+                        if not post_id:
+                            self.log(f"    [{i}/{len(batch_posts)}] ⚠️ Skipping post with no ID")
+                            continue
+
+                        self.log(f"    [{i}/{len(batch_posts)}] Processing post {post_id}...")
+
+                        try:
+                            comments, _ = fetch_comments_for_post(post_id, cookies=self.cookies)
+                            save_post_data("user_post", post_id, post, comments)
+                            self.log(f"      ✓ Saved to user_post/{post_id}/{post_id}.json")
+                            time.sleep(1)
+                        except Exception as e:
+                            self.log(f"      ❌ Error fetching comments: {e}")
+                            save_post_data("user_post", post_id, post, [])
+
+                self.log(f"  Fetching {count} posts from user {user_id} (batch size: {batch_size})...")
+                posts = fetch_page_posts(
+                    count,
+                    min_comments,
+                    batch_size=batch_size,
+                    on_batch_complete=process_batch,
+                    base_folder="user_post",
+                )
+
+                self.log(f"  ✓ Completed: {len(posts)} posts processed")
+                all_posts_count += len(posts)
+
             except Exception as e:
-                self.log(f"  ❌ Error processing post {post_id}: {e}")
-                self.progress_signal.emit(i, total)
+                self.log(f"  ❌ Error processing user profile: {e}")
                 continue
-            
-            # Fetch images if media_id is available
-            if post_info and post_info.get("media_id"):
-                media_id = post_info["media_id"]
-                self.log(f"📸 Fetching images for media_id: {media_id}")
-                
-                image_folder = os.path.join("simple_post", post_id)
-                
-                try:
-                    current_node = media_id
-                    visited = set()
-                    image_count = 0
-                    
-                    while current_node and current_node not in visited:
-                        visited.add(current_node)
-                        
-                        payload = single_post_image.build_payload(current_node, post_id, self.cookies)
-                        r = requests.post(single_post_image.GRAPHQL_URL, 
-                                        headers=single_post_image.HEADERS, 
-                                        data=payload, 
-                                        cookies=self.cookies,
-                                        proxies=single_post_image.PROXIES)
-                        
-                        cleaned_blocks = single_post_image.process_raw_graphql(r.text)
-                        if not cleaned_blocks:
-                            break
-                        
-                        # Extract image
-                        image_url = None
-                        for block in cleaned_blocks:
-                            if "currMedia" in block:
-                                image_url = block["currMedia"].get("image", {}).get("uri")
-                                break
-                        
-                        if image_url:
-                            image_count += 1
-                            filename = single_post_image.download_image(image_url, image_folder, post_id, image_count)
-                            if filename:
-                                self.log(f"    ✓ Downloaded {filename}")
-                        
-                        # Get next node
-                        next_node = None
-                        for block in cleaned_blocks:
-                            if "nextMediaAfterNodeId" in block and block["nextMediaAfterNodeId"]:
-                                node_id_next = block["nextMediaAfterNodeId"].get("id")
-                                if node_id_next:
-                                    next_node = node_id_next
-                                    break
-                        
-                        if next_node:
-                            current_node = next_node
-                        else:
-                            if image_count > 0:
-                                self.log(f"  ✅ Downloaded {image_count} images")
-                            break
-                            
-                except Exception as e:
-                    self.log(f"  ⚠️ Error fetching images: {e}")
-            
-            self.progress_signal.emit(i, total)
-            time.sleep(1)  # Be nice to the server
-        
-        self.finished_signal.emit(True, f"Successfully scraped {total} post(s)")
+
+        self.finished_signal.emit(True, f"Successfully scraped {all_posts_count} posts from {total_users} user profile(s)")
     
     def scrape_page_posts(self):
         """Scrape posts from one or more pages"""
@@ -604,7 +550,13 @@ class ScraperThread(QThread):
                             save_post_data("page_post", post_id, post, [])
                 
                 self.log(f"  Fetching {count} posts from page {page_id} (batch size: {batch_size})...")
-                posts = fetch_page_posts(count, min_comments, batch_size=batch_size, on_batch_complete=process_batch)
+                posts = fetch_page_posts(
+                    count,
+                    min_comments,
+                    batch_size=batch_size,
+                    on_batch_complete=process_batch,
+                    base_folder="page_post",
+                )
                 
                 self.log(f"  ✓ Completed: {len(posts)} posts processed")
                 
@@ -728,11 +680,11 @@ class FacebookScraperUI(QMainWindow):
         main_layout.addWidget(self.tabs)
         
         # Create tabs
-        self.simple_post_tab = self.create_simple_post_tab()
+        self.user_posts_tab = self.create_user_posts_tab()
         self.page_posts_tab = self.create_page_posts_tab()
         self.group_posts_tab = self.create_group_posts_tab()
         
-        self.tabs.addTab(self.simple_post_tab, "Simple Post")
+        self.tabs.addTab(self.user_posts_tab, "User Posts")
         self.tabs.addTab(self.page_posts_tab, "Page Posts")
         self.tabs.addTab(self.group_posts_tab, "Group Posts")
         
@@ -757,8 +709,8 @@ class FacebookScraperUI(QMainWindow):
         
         main_layout.addWidget(log_group)
     
-    def create_simple_post_tab(self):
-        """Create the Simple Post tab"""
+    def create_user_posts_tab(self):
+        """Create the User Posts tab"""
         tab = QWidget()
         layout = QVBoxLayout()
         tab.setLayout(layout)
@@ -770,23 +722,47 @@ class FacebookScraperUI(QMainWindow):
         layout.addWidget(cookie_btn)
         
         # Input group
-        input_group = QGroupBox("Post Input (Multiple URLs Supported)")
+        input_group = QGroupBox("User Profile Input (Multiple URLs Supported)")
         input_layout = QVBoxLayout()
         input_group.setLayout(input_layout)
         
         # URL input (textarea for multiple URLs)
-        input_layout.addWidget(QLabel("Post URLs (one per line):"))
-        self.simple_post_urls = QTextEdit()
-        self.simple_post_urls.setPlaceholderText("https://www.facebook.com/share/p/...\nhttps://www.facebook.com/...\n(one URL per line)")
-        self.simple_post_urls.setMaximumHeight(100)
-        input_layout.addWidget(self.simple_post_urls)
+        input_layout.addWidget(QLabel("Profile URLs (one per line):"))
+        self.user_profile_urls = QTextEdit()
+        self.user_profile_urls.setPlaceholderText("https://www.facebook.com/profile.php?id=...\nhttps://www.facebook.com/username\n(one URL per line)")
+        self.user_profile_urls.setMaximumHeight(100)
+        input_layout.addWidget(self.user_profile_urls)
+
+        # Post count
+        count_layout = QHBoxLayout()
+        count_layout.addWidget(QLabel("Number of posts:"))
+        self.user_post_count = QSpinBox()
+        self.user_post_count.setMinimum(1)
+        self.user_post_count.setMaximum(100000)
+        self.user_post_count.setValue(5)
+        self.user_post_count.setMinimumWidth(150)
+        count_layout.addWidget(self.user_post_count)
+        count_layout.addStretch()
+        input_layout.addLayout(count_layout)
+
+        # Comment threshold
+        comment_layout = QHBoxLayout()
+        comment_layout.addWidget(QLabel("Min comments (0 = all posts):"))
+        self.user_min_comments = QSpinBox()
+        self.user_min_comments.setMinimum(0)
+        self.user_min_comments.setMaximum(10000)
+        self.user_min_comments.setValue(0)
+        self.user_min_comments.setToolTip("Only scrape posts with at least this many comments. Set to 0 to include all posts.")
+        comment_layout.addWidget(self.user_min_comments)
+        comment_layout.addStretch()
+        input_layout.addLayout(comment_layout)
         
         layout.addWidget(input_group)
         
         # Scrape button
-        scrape_btn = QPushButton("🚀 Scrape Comments")
+        scrape_btn = QPushButton("🚀 Scrape User Posts")
         scrape_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-size: 14px; padding: 10px; }")
-        scrape_btn.clicked.connect(self.scrape_simple_post)
+        scrape_btn.clicked.connect(self.scrape_user_posts)
         layout.addWidget(scrape_btn)
         
         layout.addStretch()
@@ -910,12 +886,14 @@ class FacebookScraperUI(QMainWindow):
         layout.addStretch()
         return tab
     
-    def scrape_simple_post(self):
-        """Start scraping simple posts from URLs"""
-        urls_text = self.simple_post_urls.toPlainText().strip()
+    def scrape_user_posts(self):
+        """Start scraping posts from user profile URLs"""
+        urls_text = self.user_profile_urls.toPlainText().strip()
+        count = self.user_post_count.value()
+        min_comments = self.user_min_comments.value()
         
         if not urls_text:
-            self.show_error("Please enter post URLs")
+            self.show_error("Please enter profile URLs")
             return
         
         # Parse URLs
@@ -926,9 +904,10 @@ class FacebookScraperUI(QMainWindow):
             return
         
         # Start scraping in background thread
-        self.log(f"Starting simple post scraper for {len(urls)} URL(s)...")
-        params = {'urls': urls}
-        self.start_scraping("simple_post", params)
+        comment_filter_msg = f" with min {min_comments} comments" if min_comments > 0 else ""
+        self.log(f"Starting user posts scraper for {len(urls)} profile(s) (fetching {count} posts each{comment_filter_msg})...")
+        params = {"urls": urls, "count": count, "min_comments": min_comments}
+        self.start_scraping("user_posts", params)
     
     def scrape_page_posts(self):
         """Start scraping posts from page URLs"""

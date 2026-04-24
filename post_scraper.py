@@ -12,6 +12,7 @@ GRAPHQL_URL = "https://www.facebook.com/api/graphql/"
 
 # ========= CONFIG (FILL THESE) =========
 USER_ID = "100019577483175"   # profile / page id
+# USER_ID = "100015055006523" # id profile công anh
 PAGE_NAME = None  # Will be extracted automatically
 DOC_ID = "25430544756617998" # ProfileCometTimelineFeedRefetchQuery
 
@@ -640,14 +641,15 @@ def post_already_exists(post_id, base_folder, name_folder):
     return os.path.exists(post_file)
 
 
-def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None):
-    """Fetch posts from Facebook page
+def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None, base_folder="page_post"):
+    """Fetch posts from a Facebook timeline (page or user profile).
     
     Args:
         limit: Maximum number of posts to fetch
         min_comments: Minimum number of comments required for a post to be included (0 = no filter)
         batch_size: Number of posts to fetch before calling on_batch_complete callback
         on_batch_complete: Optional callback function(batch_posts, total_so_far, limit) called after each batch
+        base_folder: Base output folder for saving posts/media (e.g. "page_post", "user_post")
     """
     global PAGE_NAME
     all_posts = []
@@ -782,7 +784,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None)
             temp_page_name = PAGE_NAME or extract_page_name(node)
             if temp_page_name:
                 temp_name_folder = "".join(c for c in temp_page_name if c.isalnum() or c in (' ', '-', '_')).strip() or "Unknown"
-                if post_already_exists(post_id, "page_post", temp_name_folder):
+                if post_already_exists(post_id, base_folder, temp_name_folder):
                     print(f"  ⏭️  Skipping already scraped post: {post_id}")
                     continue
                 
@@ -816,13 +818,13 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None)
                 name_folder = "Unknown"
             
             # Prepare save directory for media
-            media_save_dir = os.path.join("page_post", name_folder)
+            media_save_dir = os.path.join(base_folder, name_folder)
             
             # Extract media with correct save directory
             post["media"] = extract_media(node, post_id, media_save_dir)
             
-            # Save individual post to folder structure: page_post/{page_name}/{post_id}/{post_id}.json
-            post_dir = os.path.join("page_post", name_folder, str(post_id))
+            # Save individual post to folder structure: {base_folder}/{page_name}/{post_id}/{post_id}.json
+            post_dir = os.path.join(base_folder, name_folder, str(post_id))
             os.makedirs(post_dir, exist_ok=True)
             
             post_file = os.path.join(post_dir, f"{post_id}.json")

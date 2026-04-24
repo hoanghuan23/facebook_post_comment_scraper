@@ -57,7 +57,7 @@ selenium-debug.log
 # Generated scraper outputs
 group_post/
 page_post/
-simple_post/
+user_post/
 exports/
 output/
 
