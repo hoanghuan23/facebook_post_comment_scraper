@@ -79,3 +79,5 @@ pip-wheel-metadata/
 
 # Information about the project
 Information
+
+data/facebook_scraper.db*
