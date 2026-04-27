@@ -4,6 +4,205 @@ Common Facebook data extraction functions shared across scrapers.
 Used by post_scraper.py (page/user) and group_post_scraper_v2.py (group).
 """
 
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
+
+
+def _to_iso_utc_from_unix(ts: Any) -> Optional[str]:
+    """Convert unix seconds to ISO-8601 UTC string."""
+    try:
+        if ts is None:
+            return None
+        ts_int = int(ts)
+        return datetime.fromtimestamp(ts_int, tz=timezone.utc).isoformat()
+    except Exception:
+        return None
+
+
+def _looks_like_unix_seconds(value: Any) -> bool:
+    try:
+        if value is None:
+            return False
+        iv = int(value)
+        # Rough sanity range: 2004-01-01 .. 2100-01-01 (unix seconds)
+        return 1072915200 <= iv <= 4102444800
+    except Exception:
+        return False
+
+
+def _find_first_unix_ts(obj: Any, keys: set[str], depth: int = 0, max_depth: int = 6) -> Optional[int]:
+    """
+    Best-effort recursive scan to find a unix-seconds timestamp.
+    We only match on specific keys to avoid accidentally grabbing unrelated integers.
+    """
+    if depth > max_depth:
+        return None
+
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in keys and _looks_like_unix_seconds(v):
+                return int(v)
+        for v in obj.values():
+            found = _find_first_unix_ts(v, keys=keys, depth=depth + 1, max_depth=max_depth)
+            if found is not None:
+                return found
+
+    if isinstance(obj, list):
+        for item in obj:
+            found = _find_first_unix_ts(item, keys=keys, depth=depth + 1, max_depth=max_depth)
+            if found is not None:
+                return found
+
+    return None
+
+
+def extract_posted_at(node: Dict[str, Any]) -> Optional[str]:
+    """
+    Best-effort extract post publish time.
+
+    Returns ISO-8601 string in UTC (e.g. "2026-04-27T10:20:30+00:00") or None.
+    """
+    if not isinstance(node, dict):
+        return None
+
+    # Common direct fields
+    for key in ("creation_time", "created_time", "publish_time", "timestamp"):
+        iso = _to_iso_utc_from_unix(node.get(key))
+        if iso:
+            return iso
+
+    # Nested story containers sometimes carry creation_time
+    try:
+        story = (node.get("comet_sections", {}) or {}).get("content", {}).get("story", {}) or {}
+        iso = _to_iso_utc_from_unix(story.get("creation_time") or story.get("created_time"))
+        if iso:
+            return iso
+    except Exception:
+        pass
+
+    # Some responses keep metadata under context_layout
+    try:
+        story = (node.get("comet_sections", {}) or {}).get("context_layout", {}).get("story", {}) or {}
+        comet_sections = story.get("comet_sections") or {}
+        metadata = comet_sections.get("metadata")
+
+        # metadata can be a dict or a list of dicts depending on query/schema
+        if isinstance(metadata, dict):
+            meta_story = (metadata.get("story") or {})
+            iso = _to_iso_utc_from_unix(meta_story.get("creation_time") or meta_story.get("created_time"))
+            if iso:
+                return iso
+        elif isinstance(metadata, list):
+            for item in metadata:
+                if not isinstance(item, dict):
+                    continue
+                meta_story = (item.get("story") or {})
+                iso = _to_iso_utc_from_unix(meta_story.get("creation_time") or meta_story.get("created_time"))
+                if iso:
+                    return iso
+    except Exception:
+        pass
+
+    # Last resort: recursive scan for a timestamp-like field
+    ts = _find_first_unix_ts(node, keys={"creation_time", "created_time", "publish_time", "timestamp"})
+    return _to_iso_utc_from_unix(ts)
+
+    # return None  (handled above)
+
+
+def extract_author(node: Dict[str, Any]) -> Dict[str, Optional[str]]:
+    """
+    Best-effort extract author info from Story node.
+
+    Returns: {author_name, author_url, source_type}
+    - source_type is one of: "user" | "page" | "group" | None
+    """
+    author_name: Optional[str] = None
+    author_url: Optional[str] = None
+    source_type: Optional[str] = None
+
+    if not isinstance(node, dict):
+        return {"author_name": None, "author_url": None, "source_type": None}
+
+    actor = None
+    try:
+        story = (node.get("comet_sections", {}) or {}).get("content", {}).get("story", {}) or {}
+        actors = story.get("actors") or []
+        if isinstance(actors, list) and actors:
+            actor = actors[0]
+    except Exception:
+        actor = None
+
+    if isinstance(actor, dict):
+        author_name = actor.get("name") or actor.get("short_name")
+        author_url = actor.get("url") or actor.get("profile_url") or actor.get("wwwURL")
+
+        # Heuristic: if actor carries page fields, it's a Page even if typename is misleading.
+        # Suggested rule: category/page_type => Page
+        if any(k in actor and actor.get(k) for k in ("category", "page_type", "category_type")):
+            source_type = "page"
+
+        typename = actor.get("__typename")
+        if isinstance(typename, str):
+            t = typename.lower()
+            if "page" in t:
+                source_type = "page"
+            elif "group" in t:
+                source_type = "group"
+            elif "user" in t or "profile" in t:
+                source_type = "user"
+
+        # Anonymous / alias posting: don't fabricate a profile URL; return sentinel.
+        if isinstance(author_name, str):
+            n = author_name.strip().lower()
+            if n in {"anonymous", "ẩn danh", "facebook user"} or "ẩn danh" in n:
+                return {"author_name": "Anonymous", "author_url": "Anonymous", "source_type": source_type or "user"}
+
+        # Fallback: construct profile URL by id when possible
+        if not author_url:
+            actor_id = actor.get("id")
+            if isinstance(actor_id, str) and actor_id.isdigit():
+                author_url = f"https://www.facebook.com/profile.php?id={actor_id}"
+
+    # Additional fallback from feedback owning_profile (often a Page)
+    try:
+        owning_profile = (node.get("feedback", {}) or {}).get("owning_profile", {}) or {}
+        if not author_name:
+            author_name = owning_profile.get("name") or owning_profile.get("short_name")
+        if not author_url:
+            author_url = owning_profile.get("url") or owning_profile.get("profile_url") or owning_profile.get("wwwURL")
+
+        if not source_type and any(k in owning_profile and owning_profile.get(k) for k in ("category", "page_type", "category_type")):
+            source_type = "page"
+
+        if not source_type and owning_profile.get("__typename"):
+            t = str(owning_profile.get("__typename")).lower()
+            if "page" in t:
+                source_type = "page"
+            elif "group" in t:
+                source_type = "group"
+            elif "user" in t or "profile" in t:
+                source_type = "user"
+    except Exception:
+        pass
+
+    # Final anonymous normalization (covers cases where owning_profile filled the name)
+    if isinstance(author_name, str):
+        n = author_name.strip().lower()
+        if n in {"anonymous", "ẩn danh", "facebook user"} or "ẩn danh" in n:
+            author_name = "Anonymous"
+            author_url = "Anonymous"
+
+    return {"author_name": author_name, "author_url": author_url, "source_type": source_type}
+
+
+def make_scraped_at() -> str:
+    """Return current time as ISO-8601 UTC string."""
+    return datetime.now(timezone.utc).isoformat()
+
+
 def extract_comment_count(node):
     """Extract comment count from post node"""
     try:

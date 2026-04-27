@@ -4,6 +4,7 @@ import time
 import os
 import uuid
 from dotenv import load_dotenv
+from datetime import datetime, timezone
 
 # Load environment variables from .env file
 load_dotenv()
@@ -13,7 +14,10 @@ from utils.facebook_extractor import (
     extract_comment_count,
     extract_reaction_count,
     extract_share_count,
-    is_reel_or_video_post
+    is_reel_or_video_post,
+    extract_posted_at,
+    extract_author,
+    make_scraped_at,
 )
 
 GRAPHQL_URL = "https://www.facebook.com/api/graphql/"
@@ -412,6 +416,9 @@ def extract_post_data(node, group_name=None):
     if not post_id:
         return None
     
+    author = extract_author(node)
+    posted_at = extract_posted_at(node)
+    
     # Extract comment count
     comment_count = extract_comment_count(node)
     
@@ -445,6 +452,14 @@ def extract_post_data(node, group_name=None):
         'share_count': share_count,
         'group_name': group_name,
         'permalink': node.get('permalink_url', ''),
+        # Added metadata fields (best-effort)
+        'posted_at': posted_at,
+        'scraped_at': make_scraped_at(),
+        'author_name': author.get("author_name"),
+        'author_url': author.get("author_url"),
+        # Group scraper is always group source
+        'source_type': "group",
+        'is_active': True,
         'photos': extract_media(node, post_id, media_save_dir)['photos'],
         'videos': extract_media(node, post_id, media_save_dir)['videos']
     }

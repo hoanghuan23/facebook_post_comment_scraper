@@ -247,8 +247,9 @@ def fetch_comments(feedback_id, cookies=None):
             return None
 
         node = (j.get("data") or {}).get("node") or {}
-        if not isinstance(node, dict):
-            return None
+        if not isinstance(node, dict) or not node:
+            # Node missing/empty => post is likely deleted/unavailable to viewer
+            return {"is_active": False}
 
         feedback_candidates = [
             node.get("feedback"),
@@ -270,6 +271,7 @@ def fetch_comments(feedback_id, cookies=None):
             "media_id": None,
             "comment_count": extract_post_comment_count(post_feedback),
             "reaction_count": extract_post_reaction_count(post_feedback),
+            "is_active": True,
         }
 
         # Try to extract a media id (first attachment media.id) from likely story containers

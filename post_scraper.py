@@ -4,6 +4,7 @@ import time
 import os
 import uuid
 from dotenv import load_dotenv
+from datetime import datetime, timezone
 
 # Load environment variables from .env file
 load_dotenv()
@@ -13,7 +14,10 @@ from utils.facebook_extractor import (
     extract_comment_count,
     extract_reaction_count,
     extract_share_count,
-    is_reel_or_video_post
+    is_reel_or_video_post,
+    extract_posted_at,
+    extract_author,
+    make_scraped_at,
 )
 
 GRAPHQL_URL = "https://www.facebook.com/api/graphql/"
@@ -650,6 +654,8 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
             ).get("text")
 
             permalink = extract_permalink(node)
+            author = extract_author(node)
+            posted_at = extract_posted_at(node)
 
             post = {
                 "post_id": post_id,
@@ -660,6 +666,15 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
                 "reaction_count": reaction_count,
                 "share_count": share_count,
                 "page_name": PAGE_NAME,
+                # Added metadata fields (best-effort)
+                "posted_at": posted_at,
+                "scraped_at": make_scraped_at(),
+                "author_name": author.get("author_name"),
+                "author_url": author.get("author_url"),
+                # actor-based guess; if missing, default to "user" for timeline scrape
+                "source_type": author.get("source_type") or "user",
+                # We found it in feed => should be active at scrape time
+                "is_active": True,
             }
             
             # Sanitize page name folder

@@ -6,6 +6,7 @@ import requests
 import re
 from html import unescape
 from dotenv import load_dotenv
+from datetime import datetime, timezone
 
 # Load environment variables
 load_dotenv()
@@ -251,6 +252,10 @@ def save_post_data(post_type, post_id, post_data, comments_data):
     os.makedirs(folder_path, exist_ok=True)
     
     # Combine post and comments in single file
+    # Ensure scraped_at is always set (time we saved/scraped this record)
+    if isinstance(post_data, dict) and not post_data.get("scraped_at"):
+        post_data = {**post_data, "scraped_at": datetime.now(timezone.utc).isoformat()}
+
     combined_data = {
         **post_data,
         "comments": comments_data
