@@ -8,6 +8,14 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
+# Import common extractor functions
+from utils.facebook_extractor import (
+    extract_comment_count,
+    extract_reaction_count,
+    extract_share_count,
+    is_reel_or_video_post
+)
+
 GRAPHQL_URL = "https://www.facebook.com/api/graphql/"
 
 # ========= CONFIG (FILL THESE) =========
@@ -309,178 +317,6 @@ def parse_fb_response(text):
     return cleaned
 
 
-def extract_comment_count(node):
-    """Extract comment count from post node"""
-    try:
-        # Path 1: feedback.comment_rendering_instance.comments.total_count
-        comment_count = node.get("feedback", {}).get("comment_rendering_instance", {}).get("comments", {}).get("total_count")
-        if comment_count is not None:
-            return comment_count
-        
-        # Path 2: comet_sections.feedback.story.story_ufi_container.story.feedback_context.feedback_target_with_context.comment_rendering_instance.comments.total_count
-        comet_sections = node.get("comet_sections", {})
-        feedback_section = comet_sections.get("feedback", {})
-        story = feedback_section.get("story", {})
-        story_ufi_container = story.get("story_ufi_container", {})
-        ufi_story = story_ufi_container.get("story", {})
-        feedback_context = ufi_story.get("feedback_context", {})
-        feedback_target = feedback_context.get("feedback_target_with_context", {})
-        comment_count = feedback_target.get("comment_rendering_instance", {}).get("comments", {}).get("total_count")
-        if comment_count is not None:
-            return comment_count
-        
-        # Path 3: comet_sections.feedback.story.story_ufi_container.story.feedback_context.feedback_target_with_context.comet_ufi_summary_and_actions_renderer.feedback.comment_rendering_instance.comments.total_count
-        comet_ufi = feedback_target.get("comet_ufi_summary_and_actions_renderer", {}).get("feedback", {})
-        comment_count = comet_ufi.get("comment_rendering_instance", {}).get("comments", {}).get("total_count")
-        if comment_count is not None:
-            return comment_count
-        
-        # Path 4: comet_sections.feedback.story.feedback_context.feedback_target_with_context.comment_rendering_instance.comments.total_count (old structure)
-        comet_sections = node.get("comet_sections", {})
-        feedback_section = comet_sections.get("feedback", {})
-        story = feedback_section.get("story", {})
-        feedback_context = story.get("feedback_context", {})
-        feedback_target = feedback_context.get("feedback_target_with_context", {})
-        comment_count = feedback_target.get("comment_rendering_instance", {}).get("comments", {}).get("total_count")
-        if comment_count is not None:
-            return comment_count
-        
-        # Path 5: feedback.comments_count_summary_renderer.feedback.comment_rendering_instance.comments.total_count
-        comments_renderer = node.get("feedback", {}).get("comments_count_summary_renderer", {}).get("feedback", {})
-        comment_count = comments_renderer.get("comment_rendering_instance", {}).get("comments", {}).get("total_count")
-        if comment_count is not None:
-            return comment_count
-        
-        # Path 6: comet_sections.feedback.story.story_ufi_container.story.feedback_context.feedback_target_with_context.comet_ufi_summary_and_actions_renderer.feedback.comments_count_summary_renderer.feedback.comment_rendering_instance.comments.total_count
-        comet_sections = node.get("comet_sections", {})
-        feedback_section = comet_sections.get("feedback", {})
-        story = feedback_section.get("story", {})
-        story_ufi_container = story.get("story_ufi_container", {})
-        ufi_story = story_ufi_container.get("story", {})
-        feedback_context = ufi_story.get("feedback_context", {})
-        feedback_target = feedback_context.get("feedback_target_with_context", {})
-        comet_ufi = feedback_target.get("comet_ufi_summary_and_actions_renderer", {}).get("feedback", {})
-        comments_count_renderer = comet_ufi.get("comments_count_summary_renderer", {}).get("feedback", {})
-        comment_count = comments_count_renderer.get("comment_rendering_instance", {}).get("comments", {}).get("total_count")
-        if comment_count is not None:
-            return comment_count
-            
-        return 0
-    except Exception:
-        return 0
-
-
-def extract_reaction_count(node):
-    """Extract reaction count from post node"""
-    try:
-        # Keep logic consistent with page_post (post_scraper.py)
-        comet_sections = node.get("comet_sections", {})
-        feedback_section = comet_sections.get("feedback", {})
-        story = feedback_section.get("story", {})
-        story_ufi_container = story.get("story_ufi_container", {})
-        ufi_story = story_ufi_container.get("story", {})
-        feedback_context = ufi_story.get("feedback_context", {})
-        feedback_target = feedback_context.get("feedback_target_with_context", {})
-        comet_ufi = feedback_target.get("comet_ufi_summary_and_actions_renderer", {})
-
-        def get_reaction_count_from_feedback(feedback):
-            if not isinstance(feedback, dict):
-                return None
-
-            # New structure variants: reaction_count.count (possibly nested dicts)
-            reaction_count = feedback.get("reaction_count", {})
-            if isinstance(reaction_count, dict):
-                value = reaction_count.get("count")
-                while isinstance(value, dict):
-                    value = value.get("count")
-                if value is not None:
-                    return value
-
-            # Fallback old structure: reactors.count_reduced
-            reactors = feedback.get("reactors", {})
-            if isinstance(reactors, dict):
-                value = reactors.get("count_reduced")
-                if value is not None:
-                    return value
-
-            return None
-
-        # Main path: feedback_target_with_context.comet_ufi_summary_and_actions_renderer.feedback
-        if comet_ufi:
-            ufi_feedback = comet_ufi.get("feedback", {})
-            value = get_reaction_count_from_feedback(ufi_feedback)
-            if value is not None:
-                return value
-
-        # Alternate structure on some responses: story.comet_ufi_summary_and_actions_renderer.feedback
-        alt_comet_ufi = story.get("comet_ufi_summary_and_actions_renderer", {})
-        if alt_comet_ufi:
-            ufi_feedback = alt_comet_ufi.get("feedback", {})
-            value = get_reaction_count_from_feedback(ufi_feedback)
-            if value is not None:
-                return value
-
-        # Target-level and node-level fallback
-        value = get_reaction_count_from_feedback(feedback_target)
-        if value is not None:
-            return value
-
-        value = get_reaction_count_from_feedback(node.get("feedback", {}))
-        if value is not None:
-            return value
-
-        return 0
-    except Exception as e:
-        print(f"⚠️ Error in extract_reaction_count: {e}")
-        return 0
-
-
-def is_reel_or_video_post(node):
-    """Check if the post is a reel or video post"""
-    if not node or node.get('__typename') != 'Story':
-        return False
-    
-    # Check for reel in story type or anywhere in node
-    node_typename = node.get('__typename', '')
-    if 'reel' in node_typename.lower():
-        return True
-    
-    # Check comet_sections for reel content
-    comet_sections = node.get('comet_sections', {})
-    content = comet_sections.get('content', {})
-    
-    content_typename = content.get('__typename', '')
-    if 'reel' in content_typename.lower():
-        return True
-    
-    # Check attachments for video/reel content
-    attachments = node.get('attachments', [])
-    for attachment in attachments:
-        # Check for video media type
-        if 'media' in attachment and attachment['media'].get('__typename') == 'Video':
-            return True
-        
-        # Check for reel substring in media object
-        if 'media' in attachment and 'reel' in str(attachment['media']).lower():
-            return True
-        
-        # Check in styles > attachment > media for video or reel
-        styles_media = attachment.get('styles', {}).get('attachment', {}).get('media', {})
-        if styles_media.get('__typename') == 'Video':
-            return True
-        if 'reel' in str(styles_media).lower():
-            return True
-        
-        # Check all_subattachments for videos or reels
-        for subattachment in attachment.get('all_subattachments', {}).get('nodes', []):
-            if 'media' in subattachment and subattachment['media'].get('__typename') == 'Video':
-                return True
-            if 'media' in subattachment and 'reel' in str(subattachment['media']).lower():
-                return True
-    
-    return False
-
-
 def extract_media(node, post_id, save_dir="group_post"):
     """Extract photo and video URLs from a post"""
     media = {
@@ -582,6 +418,9 @@ def extract_post_data(node, group_name=None):
     # Extract reaction count
     reaction_count = extract_reaction_count(node)
     
+    # Extract share count
+    share_count = extract_share_count(node)
+    
     # Extract group name if not provided
     if not group_name:
         group_name = extract_group_name(node)
@@ -603,6 +442,7 @@ def extract_post_data(node, group_name=None):
         'message': message,
         'comment_count': comment_count,
         'reaction_count': reaction_count,
+        'share_count': share_count,
         'group_name': group_name,
         'permalink': node.get('permalink_url', ''),
         'photos': extract_media(node, post_id, media_save_dir)['photos'],
