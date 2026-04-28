@@ -1,6 +1,0 @@
-- xem chat lượng (group) - quyết định quét định kì// tính năng mở rộng
-- nâng cấp database cho nhiều nền tang // chú ý
-- bổ sung doc công nghệ crawl , tại sao chọn graph api facebook , ưu điểm , hạn chế
-- đảm bảo tần suất quét , theo dõi tăng giảm metric, bị mất bài viết mới , thêm link ảnh cho bên mình, đường dẫn ảnh
-- số lượng quét (page, group) , quét bao nhiêu lần bị chặn , số lần quét , 1000 group cần tách ra bao nhiêu luồng để ổn định.
-- điều chỉnh mở rộng sử dung cho nhiều nền tảng, định nghĩa lại bảng Posts

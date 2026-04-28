@@ -6,6 +6,7 @@ Used by post_scraper.py (page/user) and group_post_scraper_v2.py (group).
 
 from __future__ import annotations
 from datetime import datetime, timezone
+import re
 from typing import Any, Dict, Optional
 
 
@@ -229,6 +230,11 @@ def extract_author (node: Dict[str, Any]) -> Dict[str, Optional[str]]:
         if actor_id and str(actor_id).isdigit():
             return f"https://www.facebook.com/profile.php?id={actor_id}"
         return None
+
+    def _looks_like_profile_id_url(url: Optional[str]) -> bool:
+        if not isinstance(url, str):
+            return False
+        return bool(re.match(r"^https?://(?:www\.)?facebook\.com/profile\.php\?id=\d+(?:$|&)", url))
     
     def _is_anonymous(name: Optional[str]) -> bool:
         if not isinstance(name, str):
@@ -246,6 +252,12 @@ def extract_author (node: Dict[str, Any]) -> Dict[str, Optional[str]]:
         pass
 
     def _is_alias(node: dict, actor: Optional[dict]) -> bool:
+        def _is_group_anon_author_profile(obj: Optional[dict]) -> bool:
+            if not isinstance(obj, dict):
+                return False
+            typename = obj.get("__typename") or ""
+            return isinstance(typename, str) and typename.lower() == "groupanonauthorprofile"
+
         if node.get("is_alias_post") or node.get("using_alias"):
             return True
 
@@ -253,20 +265,42 @@ def extract_author (node: Dict[str, Any]) -> Dict[str, Optional[str]]:
         if feedback.get("is_alias_post") or feedback.get("using_alias"):
             return True
 
+        owning = feedback.get("owning_profile") or {}
+        if isinstance(owning, dict):
+            if _is_group_anon_author_profile(owning):
+                return True
+            if owning.get("is_alias") or owning.get("alias_name"):
+                return True
+            typename = owning.get("__typename") or ""
+            if isinstance(typename, str) and "alias" in typename.lower():
+                return True
+
         if isinstance(actor, dict):
+            if _is_group_anon_author_profile(actor):
+                return True
             typename = actor.get("__typename") or ""
             if "alias" in typename.lower():
                 return True
             if actor.get("is_alias") or actor.get("alias_name"):
                 return True
 
+            # Internal API sometimes exposes a synthetic numeric profile URL for alias posters.
+            # If the visible name is custom and the URL is only a profile.php?id=..., treat it as alias.
+            actor_name = actor.get("name") or actor.get("short_name")
+            actor_url = actor.get("url") or actor.get("profile_url") or actor.get("wwwURL")
+            if isinstance(actor_name, str) and actor_name.strip() and _looks_like_profile_id_url(actor_url):
+                if actor_name.strip().lower() not in {"anonymous", "ẩn danh", "facebook user"}:
+                    return True
+
         return False
+
+    is_alias = _is_alias(node, actor)
 
     if isinstance(actor, dict):
         author_name = actor.get("name") or actor.get("short_name")
         source_type = _resolve_type(actor, source_type)
 
-        if not _is_anonymous(author_name) and not _is_alias(node, actor):
+        if not _is_anonymous(author_name) and not is_alias:
             author_url = _resolve_url(actor)
 
 
@@ -276,7 +310,7 @@ def extract_author (node: Dict[str, Any]) -> Dict[str, Optional[str]]:
             if not author_name:
                 author_name = owning.get("name") or owning.get("short_name")
 
-            if not author_url and not _is_anonymous(author_name):
+            if not author_url and not _is_anonymous(author_name) and not is_alias:
                 author_url = _resolve_url(owning)
 
             source_type = _resolve_type(owning, source_type)
@@ -286,6 +320,13 @@ def extract_author (node: Dict[str, Any]) -> Dict[str, Optional[str]]:
     if _is_anonymous(author_name):
         return {
             "author_name": "Anonymous",
+            "author_url": None,
+            "source_type": source_type or "user"
+        }
+
+    if is_alias:
+        return {
+            "author_name": author_name,
             "author_url": None,
             "source_type": source_type or "user"
         }

@@ -87,9 +87,9 @@ def retry_request(url, headers, data, proxies, max_retries=5):
         try:
             r = requests.post(url, headers=headers, data=data, proxies=proxies, cookies=COOKIES, timeout=30)
             # dữ liệu group trả về
-            with open(f"group_response_attempt_{attempt}.json", "w", encoding="utf-8") as f:
-                f.write(r.text)
-                print(f"lưu thành công dữ liệu group")
+            # with open(f"group_response_attempt_{attempt}.json", "w", encoding="utf-8") as f:
+            #     f.write(r.text)
+            #     print(f"lưu thành công dữ liệu group")
             if r.status_code == 200:
                 return r
             if is_proxy_infra_error(status_code=r.status_code):
