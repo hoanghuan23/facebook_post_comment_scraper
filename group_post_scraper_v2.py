@@ -23,7 +23,7 @@ from utils.facebook_extractor import (
 GRAPHQL_URL = "https://www.facebook.com/api/graphql/"
 
 # ========= CONFIG (FILL THESE) =========
-GROUP_ID = "363757814515154"  # group id
+GROUP_ID = "361726451351144"  # group id
 GROUP_NAME = None  # Will be extracted automatically
 DOC_ID = "25716860671307636"  # GroupsCometFeedRegularStoriesPaginationQuery
 
@@ -86,6 +86,10 @@ def retry_request(url, headers, data, proxies, max_retries=5):
     for attempt in range(1, max_retries + 1):
         try:
             r = requests.post(url, headers=headers, data=data, proxies=proxies, cookies=COOKIES, timeout=30)
+            # dữ liệu group trả về
+            with open(f"group_response_attempt_{attempt}.json", "w", encoding="utf-8") as f:
+                f.write(r.text)
+                print(f"lưu thành công dữ liệu group")
             if r.status_code == 200:
                 return r
             if is_proxy_infra_error(status_code=r.status_code):
@@ -660,8 +664,21 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None)
     
     return all_posts
 
+# # log raw node của 1 post dùng biệt hiệu đăng bài
+# def log_raw_node_for_post(post_id_to_find):
+#     posts = fetch_posts(limit=100)
+#     for post in posts:
+#         if post['post_id'] == post_id_to_find:
+#             with open(f"raw_node_{post_id_to_find}.json", "w", encoding="utf-8") as f:
+#                 json.dump(post, f, ensure_ascii=False, indent=2)
+#             print(f"Raw node for post {post_id_to_find} saved to raw_node_{post_id_to_find}.json")
+#             break
+#     else:
+#         print(f"Post with ID {post_id_to_find} not found.")
 
 if __name__ == "__main__":
+    # post_id = "2244771673046603"
+    # log_raw_node_for_post(post_id)
     count = int(input("How many posts to fetch? "))
     
     print(f"\nFetching {count} posts from group {GROUP_ID}...")

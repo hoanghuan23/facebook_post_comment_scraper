@@ -70,7 +70,7 @@ temp/
 # Local databases and runtime state
 *.sqlite
 *.sqlite3
-*.db
+# *.db
 *.pid
 
 # Python tooling
@@ -79,5 +79,3 @@ pip-wheel-metadata/
 
 # Information about the project
 Information
-
-data/facebook_scraper.db*

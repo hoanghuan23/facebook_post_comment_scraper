@@ -5,7 +5,6 @@ Used by post_scraper.py (page/user) and group_post_scraper_v2.py (group).
 """
 
 from __future__ import annotations
-
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -112,7 +111,7 @@ def extract_posted_at(node: Dict[str, Any]) -> Optional[str]:
     # return None  (handled above)
 
 
-def extract_author(node: Dict[str, Any]) -> Dict[str, Optional[str]]:
+# def extract_author(node: Dict[str, Any]) -> Dict[str, Optional[str]]:
     """
     Best-effort extract author info from Story node.
 
@@ -197,6 +196,101 @@ def extract_author(node: Dict[str, Any]) -> Dict[str, Optional[str]]:
 
     return {"author_name": author_name, "author_url": author_url, "source_type": source_type}
 
+def extract_author (node: Dict[str, Any]) -> Dict[str, Optional[str]]:
+    author_name: Optional[str] = None
+    author_url: Optional[str] = None
+    source_type: Optional[str] = None
+
+    if not isinstance(node, dict):
+        return {"author_name": None, "author_url": None, "source_type": None}
+    
+    def _resolve_type(obj: dict, current: Optional[str]) -> Optional[str]:
+        if any(obj.get(k) for k in ("category", "page_type", "category_type")):
+            return "page"
+        if current:
+            return current
+        
+        typename = obj.get("__typename")
+        if isinstance(typename, str):
+            t = typename.lower()
+            if "page" in t:
+                return "page"
+            elif "group" in t:
+                return "group"
+            elif "user" in t or "profile" in t:
+                return "user"
+        return current
+
+    def _resolve_url(obj: dict) -> Optional[str]:
+        url = obj.get("url") or obj.get("profile_url") or obj.get("wwwURL")
+        if url:
+            return url
+        actor_id = obj.get("id")
+        if actor_id and str(actor_id).isdigit():
+            return f"https://www.facebook.com/profile.php?id={actor_id}"
+        return None
+    
+    def _is_anonymous(name: Optional[str]) -> bool:
+        if not isinstance(name, str):
+            return False
+        n = name.strip().lower()
+        return n in {"anonymous", "ẩn danh", "facebook user"} or "ẩn danh" in n
+    
+    actor: Optional[dict] = None
+    try:
+        story = (node.get("comet_sections", {}) or {}).get("content", {}).get("story", {}) or {}
+        actors = story.get("actors") or []
+        if isinstance(actors, list) and actors:
+            actor = actors[0]
+    except Exception:
+        pass
+
+    def _is_alias(node: dict, actor: Optional[dict]) -> bool:
+        if node.get("is_alias_post") or node.get("using_alias"):
+            return True
+
+        feedback = node.get("feedback") or {}
+        if feedback.get("is_alias_post") or feedback.get("using_alias"):
+            return True
+
+        if isinstance(actor, dict):
+            typename = actor.get("__typename") or ""
+            if "alias" in typename.lower():
+                return True
+            if actor.get("is_alias") or actor.get("alias_name"):
+                return True
+
+        return False
+
+    if isinstance(actor, dict):
+        author_name = actor.get("name") or actor.get("short_name")
+        source_type = _resolve_type(actor, source_type)
+
+        if not _is_anonymous(author_name) and not _is_alias(node, actor):
+            author_url = _resolve_url(actor)
+
+
+    try:
+        owning = (node.get("feedback", {}).get("owning_profile", {}) or {})
+        if isinstance(owning, dict):
+            if not author_name:
+                author_name = owning.get("name") or owning.get("short_name")
+
+            if not author_url and not _is_anonymous(author_name):
+                author_url = _resolve_url(owning)
+
+            source_type = _resolve_type(owning, source_type)
+    except Exception:
+        pass
+
+    if _is_anonymous(author_name):
+        return {
+            "author_name": "Anonymous",
+            "author_url": None,
+            "source_type": source_type or "user"
+        }
+    
+    return {"author_name": author_name, "author_url": author_url, "source_type": source_type}
 
 def make_scraped_at() -> str:
     """Return current time as ISO-8601 UTC string."""
