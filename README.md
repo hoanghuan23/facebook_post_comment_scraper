@@ -1,5 +1,9 @@
 # Facebook Post & Comment Scraper (v2.0)
 
+1 accout chạy 100 groups , 1 proxy , database sqlite3
+viết luồng chạy demo trả về dữ liệu (gồm 3 sources 100 link , posts bài viết nội dung, metrics_history, monitor_configs , comment (nếu được)
+scrape_jobs bỏ lịch sử cho vào logs
+
 Tool thu thập **bài viết / bình luận / chỉ số tương tác** từ Facebook (Page / Group / User), tập trung vào backend và desktop UI để scrape, lưu file, kiểm tra và fix dữ liệu thuận tiện hơn.
 
 ---
