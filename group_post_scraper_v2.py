@@ -168,10 +168,13 @@ def download_image(url, post_id, image_index=1, save_dir="group_post"):
         return None
 
 
-def fetch_remaining_images(last_media_id, post_id, current_image_count, save_dir="group_post"):
+def fetch_remaining_images(last_media_id, post_id, current_image_count, save_dir="group_post", seen_media_ids=None, seen_urls=None):
     """Fetch remaining images using media ID iteration (for posts with 5+ images)"""
     if not last_media_id or not post_id:
         return []
+
+    seen_media_ids = set(seen_media_ids or [])
+    seen_urls = set(seen_urls or [])
     
     print(f"  🔄 Fetching remaining images after image #{current_image_count}...")
     
@@ -226,16 +229,23 @@ def fetch_remaining_images(last_media_id, post_id, current_image_count, save_dir
             
             # Extract current image URL
             image_url = None
+            current_media_id = None
             for block in cleaned_blocks:
                 if "currMedia" in block:
-                    image_url = block["currMedia"].get("image", {}).get("uri")
+                    curr_media = block["currMedia"] or {}
+                    current_media_id = curr_media.get("id")
+                    image_url = curr_media.get("image", {}).get("uri")
                     break
             
-            if image_url:
+            media_is_new = (not current_media_id) or (current_media_id not in seen_media_ids)
+            if image_url and media_is_new and image_url not in seen_urls:
                 saved_filename = download_image(image_url, post_id, image_index, save_dir)
                 if saved_filename:
+                    if current_media_id:
+                        seen_media_ids.add(current_media_id)
+                    seen_urls.add(image_url)
                     remaining_photos.append({
-                        'id': current_node,
+                        'id': current_media_id or current_node,
                         'url': image_url,
                         'saved_as': saved_filename
                     })
@@ -326,12 +336,24 @@ def parse_fb_response(text):
     return cleaned
 
 
+def sanitize_group_folder_name(group_name):
+    """Convert group name to a safe folder name."""
+    if group_name:
+        name_folder = "".join(c for c in group_name if c.isalnum() or c in (' ', '-', '_')).strip()
+        if name_folder:
+            return name_folder
+    return "Unknown"
+
+
 def extract_media(node, post_id, save_dir="group_post"):
     """Extract photo and video URLs from a post"""
     media = {
         'photos': [],
         'videos': []
     }
+
+    seen_photo_ids = set()
+    seen_photo_urls = set()
     
     # Track image index for this post
     image_index = 0
@@ -340,44 +362,75 @@ def extract_media(node, post_id, save_dir="group_post"):
     attachments = node.get('attachments', [])
     
     for attachment in attachments:
-        # Handle photo attachments
-        if 'media' in attachment and attachment['media'].get('__typename') == 'Photo':
-            # Try to get photo from styles > attachment > media structure
-            photo_data = attachment.get('styles', {}).get('attachment', {}).get('media', {})
-            if 'photo_image' in photo_data:
+        styles = attachment.get('styles', {}) or {}
+        styled_attachment = styles.get('attachment', {}) or {}
+
+        # Some group posts expose the image under styles.attachment.media,
+        # others only under attachment.media. Try both.
+        single_media = styled_attachment.get('media') or attachment.get('media') or {}
+        if isinstance(single_media, dict):
+            media_id = single_media.get('id') or attachment.get('media', {}).get('id')
+
+            photo_image = single_media.get('photo_image') or single_media.get('image')
+            image_url = photo_image.get('uri') if photo_image else None
+            media_is_new = (not media_id) or (media_id not in seen_photo_ids)
+            if image_url and media_is_new and image_url not in seen_photo_urls:
                 image_index += 1
-                media_id = attachment['media'].get('id')
-                last_media_id = media_id  # Track the last media ID
-                image_url = photo_data['photo_image'].get('uri')
+                last_media_id = media_id
                 saved_filename = download_image(image_url, post_id, image_index, save_dir)
+                if media_id:
+                    seen_photo_ids.add(media_id)
+                seen_photo_urls.add(image_url)
                 media['photos'].append({
                     'id': media_id,
                     'url': image_url,
-                    'width': photo_data['photo_image'].get('width'),
-                    'height': photo_data['photo_image'].get('height'),
+                    'width': photo_image.get('width'),
+                    'height': photo_image.get('height'),
                     'saved_as': saved_filename
                 })
-        
+
+            if single_media.get('__typename') == 'Video':
+                media['videos'].append({
+                    'id': single_media.get('id'),
+                    'url': single_media.get('playable_url'),
+                    'thumbnail': single_media.get('preferred_thumbnail', {}).get('image', {}).get('uri')
+                })
+
         # Handle albums (multiple photos)
-        if 'all_subattachments' in attachment:
-            for subattachment in attachment.get('all_subattachments', {}).get('nodes', []):
-                if 'media' in subattachment and subattachment['media'].get('__typename') == 'Photo':
-                    image_index += 1
-                    photo_data = subattachment.get('media', {})
-                    media_id = photo_data.get('id')
-                    last_media_id = media_id  # Track the last media ID
-                    if 'image' in photo_data:
-                        image_url = photo_data['image'].get('uri')
-                        saved_filename = download_image(image_url, post_id, image_index, save_dir)
-                        media['photos'].append({
-                            'id': media_id,
-                            'url': image_url,
-                            'width': photo_data['image'].get('width'),
-                            'height': photo_data['image'].get('height'),
-                            'saved_as': saved_filename
-                        })
-        
-        # Handle video attachments
+        subattachments = (
+            attachment.get('all_subattachments', {}).get('nodes', [])
+            or styled_attachment.get('all_subattachments', {}).get('nodes', [])
+        )
+        for subattachment in subattachments:
+            photo_data = subattachment.get('media', {}) or {}
+            media_id = photo_data.get('id')
+            photo_image = photo_data.get('photo_image') or photo_data.get('image')
+
+            image_url = photo_image.get('uri') if photo_image else None
+            media_is_new = (not media_id) or (media_id not in seen_photo_ids)
+            if image_url and media_is_new and image_url not in seen_photo_urls:
+                image_index += 1
+                last_media_id = media_id
+                saved_filename = download_image(image_url, post_id, image_index, save_dir)
+                if media_id:
+                    seen_photo_ids.add(media_id)
+                seen_photo_urls.add(image_url)
+                media['photos'].append({
+                    'id': media_id,
+                    'url': image_url,
+                    'width': photo_image.get('width'),
+                    'height': photo_image.get('height'),
+                    'saved_as': saved_filename
+                })
+
+            if photo_data.get('__typename') == 'Video':
+                media['videos'].append({
+                    'id': photo_data.get('id'),
+                    'url': photo_data.get('playable_url'),
+                    'thumbnail': photo_data.get('preferred_thumbnail', {}).get('image', {}).get('uri')
+                })
+
+        # Handle video attachments from the direct attachment media shape
         if 'media' in attachment and attachment['media'].get('__typename') == 'Video':
             video_data = attachment.get('media', {})
             media['videos'].append({
@@ -388,7 +441,14 @@ def extract_media(node, post_id, save_dir="group_post"):
     
     # Fetch remaining images if we have exactly 5 photos (indicating there may be more)
     if image_index == 5 and last_media_id:
-        remaining_photos = fetch_remaining_images(last_media_id, post_id, image_index, save_dir)
+        remaining_photos = fetch_remaining_images(
+            last_media_id,
+            post_id,
+            image_index,
+            save_dir,
+            seen_media_ids=seen_photo_ids,
+            seen_urls=seen_photo_urls,
+        )
         media['photos'].extend(remaining_photos)
     
     return media
@@ -437,17 +497,13 @@ def extract_post_data(node, group_name=None):
     if not group_name:
         group_name = extract_group_name(node)
     
-    # Sanitize group name folder
-    if group_name:
-        name_folder = "".join(c for c in group_name if c.isalnum() or c in (' ', '-', '_')).strip()
-        if not name_folder:
-            name_folder = "Unknown"
-    else:
-        name_folder = "Unknown"
+    name_folder = sanitize_group_folder_name(group_name)
     
     # Prepare save directory for media
     media_save_dir = os.path.join("group_post", name_folder)
     
+    extracted_media = extract_media(node, post_id, media_save_dir)
+
     post_data = {
         'id': node.get('id'),
         'post_id': post_id,
@@ -465,8 +521,8 @@ def extract_post_data(node, group_name=None):
         # Group scraper is always group source
         'source_type': "group",
         'is_active': True,
-        'photos': extract_media(node, post_id, media_save_dir)['photos'],
-        'videos': extract_media(node, post_id, media_save_dir)['videos']
+        'photos': extracted_media['photos'],
+        'videos': extracted_media['videos']
     }
     
     if WRITE_DEBUG_FILES:
@@ -616,7 +672,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None)
                 temp_post_id = story_node.get('post_id')
                 temp_group_name = GROUP_NAME or extract_group_name(story_node)
                 if temp_group_name:
-                    temp_name_folder = "".join(c for c in temp_group_name if c.isalnum() or c in (' ', '-', '_')).strip() or "Unknown"
+                    temp_name_folder = sanitize_group_folder_name(temp_group_name)
                     if post_already_exists(temp_post_id, "group_post", temp_name_folder):
                         print(f"  ⏭️  Skipping already scraped post: {temp_post_id}")
                         continue

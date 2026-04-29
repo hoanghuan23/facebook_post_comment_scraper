@@ -510,6 +510,7 @@ class ScraperThread(QThread):
             try:
                 # Update the USER_ID in post_scraper
                 post_scraper.USER_ID = page_id
+                post_scraper.PAGE_NAME = None
                 post_scraper.BASE_HEADERS["referer"] = f"https://www.facebook.com/profile.php?id={page_id}"
                 
                 # Update cookies and fb_dtsg in post_scraper if provided
@@ -592,6 +593,7 @@ class ScraperThread(QThread):
             try:
                 # Update the GROUP_ID in group_post_scraper_v2
                 group_post_scraper_v2.GROUP_ID = group_id
+                group_post_scraper_v2.GROUP_NAME = None
                 group_post_scraper_v2.HEADERS["referer"] = f"https://www.facebook.com/groups/{group_id}/"
                 
                 # Update cookies and fb_dtsg in group_post_scraper_v2 if provided

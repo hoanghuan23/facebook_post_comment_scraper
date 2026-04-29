@@ -7,6 +7,7 @@ import re
 from html import unescape
 from dotenv import load_dotenv
 from datetime import datetime, timezone
+from backend.utils.facebook_url_parser import FacebookURLParser, FacebookSourceType
 
 # Load environment variables
 load_dotenv()
@@ -461,12 +462,19 @@ def scrape_page_posts():
     input_choice = input("Your choice (1 or 2): ").strip()
     
     page_id = None
+    timeline_output_folder = None
     
     if input_choice == "1":
         page_url = input("Enter Page URL: ").strip()
         if not page_url:
             print("❌ Invalid URL")
             return
+
+        detected_source_type = FacebookURLParser.detect_source_type(page_url)
+        if detected_source_type == FacebookSourceType.PAGE:
+            timeline_output_folder = "page_post"
+        elif detected_source_type == FacebookSourceType.USER:
+            timeline_output_folder = "user_post"
         
         # Extract user ID from URL
         page_id = extract_user_id_from_url(page_url)
@@ -478,6 +486,15 @@ def scrape_page_posts():
         page_id = input("Enter Page/User ID: ").strip()
         if not page_id:
             print("❌ Invalid page ID")
+            return
+
+        source_choice = input("Is this a Page or User? (p/u): ").strip().lower()
+        if source_choice == "p":
+            timeline_output_folder = "page_post"
+        elif source_choice == "u":
+            timeline_output_folder = "user_post"
+        else:
+            print("❌ Invalid choice. Enter 'p' for Page or 'u' for User.")
             return
     
     else:
@@ -493,12 +510,15 @@ def scrape_page_posts():
     # Update the USER_ID in post_scraper
     import post_scraper
     post_scraper.USER_ID = page_id
+    post_scraper.PAGE_NAME = None
     post_scraper.BASE_HEADERS["referer"] = f"https://www.facebook.com/profile.php?id={page_id}"
+
+    if not timeline_output_folder:
+        timeline_output_folder = "user_post"
     
     print(f"\nFetching {count} posts from timeline {page_id}...")
-    posts = fetch_page_posts(count)
+    posts = fetch_page_posts(count, base_folder=timeline_output_folder)
 
-    timeline_output_folder = "user_post"
     if posts:
         timeline_output_folder = resolve_timeline_output_folder(posts[0])
     
@@ -569,6 +589,7 @@ def scrape_group_posts():
     # Update the GROUP_ID in group_post_scraper_v2
     import group_post_scraper_v2
     group_post_scraper_v2.GROUP_ID = group_id
+    group_post_scraper_v2.GROUP_NAME = None
     group_post_scraper_v2.HEADERS["referer"] = f"https://www.facebook.com/groups/{group_id}/"
     
     print(f"\nFetching {count} posts from group {group_id}...")

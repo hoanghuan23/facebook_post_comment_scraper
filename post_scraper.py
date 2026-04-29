@@ -29,6 +29,15 @@ USER_ID = "100019577483175"   # profile / page id
 PAGE_NAME = None  # Will be extracted automatically
 DOC_ID = "25430544756617998" # ProfileCometTimelineFeedRefetchQuery
 
+
+def sanitize_page_folder_name(page_name):
+    """Convert page/user name to a safe folder name."""
+    if page_name:
+        name_folder = "".join(c for c in page_name if c.isalnum() or c in (' ', '-', '_')).strip()
+        if name_folder:
+            return name_folder
+    return "Unknown"
+
 # ========= RETRY HELPER =========
 def retry_request(url, headers, data, proxies, max_retries=5):
     """Make a POST request with retry logic"""
@@ -115,10 +124,13 @@ def download_image(url, post_id, image_index=1, save_dir="page_post"):
         return None
 
 
-def fetch_remaining_images(last_media_id, post_id, current_image_count, save_dir="page_post"):
+def fetch_remaining_images(last_media_id, post_id, current_image_count, save_dir="page_post", seen_media_ids=None, seen_urls=None):
     """Fetch remaining images using media ID iteration (for posts with 5+ images)"""
     if not last_media_id or not post_id:
         return []
+
+    seen_media_ids = set(seen_media_ids or [])
+    seen_urls = set(seen_urls or [])
     
     print(f"  🔄 Fetching remaining images after image #{current_image_count}...")
     
@@ -173,15 +185,23 @@ def fetch_remaining_images(last_media_id, post_id, current_image_count, save_dir
             
             # Extract current image URL
             image_url = None
+            current_media_id = None
             for block in cleaned_blocks:
                 if "currMedia" in block:
-                    image_url = block["currMedia"].get("image", {}).get("uri")
+                    curr_media = block["currMedia"] or {}
+                    current_media_id = curr_media.get("id")
+                    image_url = curr_media.get("image", {}).get("uri")
                     break
             
-            if image_url:
+            media_is_new = (not current_media_id) or (current_media_id not in seen_media_ids)
+            if image_url and media_is_new and image_url not in seen_urls:
                 saved_filename = download_image(image_url, post_id, image_index, save_dir)
                 if saved_filename:
+                    if current_media_id:
+                        seen_media_ids.add(current_media_id)
+                    seen_urls.add(image_url)
                     remaining_photos.append({
+                        'id': current_media_id or current_node,
                         'type': 'photo',
                         'url': image_url,
                         'saved_as': saved_filename
@@ -386,6 +406,8 @@ def extract_media(node, post_id, save_dir="page_post"):
     
     media = []
     last_media_id = None
+    seen_photo_ids = set()
+    seen_photo_urls = set()
 
     attachments = node.get("attachments") or []
     for att in attachments:
@@ -393,29 +415,26 @@ def extract_media(node, post_id, save_dir="page_post"):
         attachment = styles.get("attachment") or {}
 
         # Check for single photo (direct media attachment)
-        single_media = attachment.get("media")
-        if single_media:
-            # Single photo case
-            if "photo_image" in single_media:
+        single_media = attachment.get("media") or att.get("media") or {}
+        if isinstance(single_media, dict):
+            photo_image = single_media.get("photo_image") or single_media.get("image")
+            media_id = single_media.get("id")
+            image_url = photo_image.get("uri") if photo_image else None
+            media_is_new = (not media_id) or (media_id not in seen_photo_ids)
+            if image_url and media_is_new and image_url not in seen_photo_urls:
                 _image_counters[post_id] += 1
-                last_media_id = single_media.get("id")  # Track the last media ID
-                image_url = single_media["photo_image"]["uri"]
+                last_media_id = media_id  # Track the last media ID
                 saved_filename = download_image(image_url, post_id, _image_counters[post_id], save_dir)
+                if media_id:
+                    seen_photo_ids.add(media_id)
+                seen_photo_urls.add(image_url)
                 media.append({
+                    "id": media_id,
                     "type": "photo",
                     "url": image_url,
                     "saved_as": saved_filename
                 })
-            elif "image" in single_media:
-                _image_counters[post_id] += 1
-                last_media_id = single_media.get("id")  # Track the last media ID
-                image_url = single_media["image"]["uri"]
-                saved_filename = download_image(image_url, post_id, _image_counters[post_id], save_dir)
-                media.append({
-                    "type": "photo",
-                    "url": image_url,
-                    "saved_as": saved_filename
-                })
+
             # Single video case
             if single_media.get("__typename") == "Video":
                 media.append({
@@ -424,16 +443,26 @@ def extract_media(node, post_id, save_dir="page_post"):
                 })
 
         # Check for album (multiple photos/videos)
-        all_media = attachment.get("all_subattachments", {}).get("nodes", [])
+        all_media = (
+            attachment.get("all_subattachments", {}).get("nodes", [])
+            or att.get("all_subattachments", {}).get("nodes", [])
+        )
         for m in all_media:
             media_node = m.get("media") or {}
 
-            if "image" in media_node:
+            photo_image = media_node.get("photo_image") or media_node.get("image")
+            media_id = media_node.get("id")
+            image_url = photo_image.get("uri") if photo_image else None
+            media_is_new = (not media_id) or (media_id not in seen_photo_ids)
+            if image_url and media_is_new and image_url not in seen_photo_urls:
                 _image_counters[post_id] += 1
-                last_media_id = media_node.get("id")  # Track the last media ID
-                image_url = media_node["image"]["uri"]
+                last_media_id = media_id  # Track the last media ID
                 saved_filename = download_image(image_url, post_id, _image_counters[post_id], save_dir)
+                if media_id:
+                    seen_photo_ids.add(media_id)
+                seen_photo_urls.add(image_url)
                 media.append({
+                    "id": media_id,
                     "type": "photo",
                     "url": image_url,
                     "saved_as": saved_filename
@@ -448,7 +477,14 @@ def extract_media(node, post_id, save_dir="page_post"):
     # Fetch remaining images if we have exactly 5 photos (indicating there may be more)
     photo_count = sum(1 for m in media if m.get("type") == "photo")
     if photo_count == 5 and last_media_id:
-        remaining_photos = fetch_remaining_images(last_media_id, post_id, _image_counters[post_id], save_dir)
+        remaining_photos = fetch_remaining_images(
+            last_media_id,
+            post_id,
+            _image_counters[post_id],
+            save_dir,
+            seen_media_ids=seen_photo_ids,
+            seen_urls=seen_photo_urls,
+        )
         media.extend(remaining_photos)
 
     return media
@@ -640,7 +676,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
             # Check if post already exists
             temp_page_name = PAGE_NAME or extract_page_name(node)
             if temp_page_name:
-                temp_name_folder = "".join(c for c in temp_page_name if c.isalnum() or c in (' ', '-', '_')).strip() or "Unknown"
+                temp_name_folder = sanitize_page_folder_name(temp_page_name)
                 if post_already_exists(post_id, base_folder, temp_name_folder):
                     print(f"  ⏭️  Skipping already scraped post: {post_id}")
                     continue
@@ -679,12 +715,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
             }
             
             # Sanitize page name folder
-            if PAGE_NAME:
-                name_folder = "".join(c for c in PAGE_NAME if c.isalnum() or c in (' ', '-', '_')).strip()
-                if not name_folder:
-                    name_folder = "Unknown"
-            else:
-                name_folder = "Unknown"
+            name_folder = sanitize_page_folder_name(PAGE_NAME)
             
             # Prepare save directory for media
             media_save_dir = os.path.join(base_folder, name_folder)
