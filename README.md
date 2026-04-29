@@ -1,9 +1,6 @@
 # Facebook Post & Comment Scraper (v2.0)
 
-Tool thu thập **bài viết / bình luận / chỉ số tương tác** từ Facebook (Page / Group / User), hỗ trợ 2 cách sử dụng:
-
-- **Chạy Desktop UI (PyQt6)**: phù hợp dùng cá nhân, xuất dữ liệu ra thư mục `page_post/`, `user_post/`, `group_post/`, `simple_post/` dưới dạng **JSON + ảnh**.
-- **Chạy Backend API (FastAPI)**: phù hợp triển khai dịch vụ, dữ liệu được quản lý trong **DB (SQLite/PostgreSQL)** + scheduler chạy nền, có API để truy vấn/analytics.
+Tool thu thập **bài viết / bình luận / chỉ số tương tác** từ Facebook (Page / Group / User), tập trung vào backend và desktop UI để scrape, lưu file, kiểm tra và fix dữ liệu thuận tiện hơn.
 
 ---
 
@@ -28,6 +25,11 @@ Các script/UI hiện tại lưu theo cấu trúc thư mục:
 - `user_post/<Tên User>/<post_id>/<post_id>.json` (+ ảnh)
 - `group_post/<Tên Group>/<post_id>/<post_id>.json`
 - `simple_post/<post_id>/<post_id>.json` (+ ảnh nếu lấy được)
+
+Đối với timeline scrape, dữ liệu được tách rõ để tiện scale và debug:
+- post từ page lưu vào `page_post/`
+- post từ user/profile lưu vào `user_post/`
+- post từ group lưu vào `group_post/`
 
  file JSON, thường có:
 - **Thông tin post**: `post_id`, `feedback_id`, `permalink`, `text`, `reaction_count`, `comment_count`, `media`…
@@ -88,7 +90,7 @@ Chọn:
 - `Page Posts`: lấy N post từ page/user và comment
 - `Group Posts`: lấy N post từ group và comment
 
-### C) Chạy Backend API + DB (FastAPI)
+### C) Chạy Backend API + DB (FastAPI, không bao gồm web dashboard)
 
 #### Tạo `.env` (tối thiểu)
 

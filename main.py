@@ -268,6 +268,12 @@ def save_post_data(post_type, post_id, post_data, comments_data):
     print(f"  💾 Saved to {output_file}")
 
 
+def resolve_timeline_output_folder(post_data):
+    """Route timeline output to page_post or user_post for easier checking."""
+    source_type = (post_data or {}).get("source_type")
+    return "page_post" if source_type == "page" else "user_post"
+
+
 def display_menu():
     """Display the main menu"""
     print("\n" + "="*60)
@@ -424,8 +430,8 @@ def scrape_simple_post():
 
 
 def scrape_page_posts():
-    """Scrape posts and comments from a page"""
-    print("\n--- PAGE POST SCRAPER ---")
+    """Scrape posts and comments from a page or user timeline."""
+    print("\n--- PAGE / USER POST SCRAPER ---")
     print("\nChoose input method:")
     print("  1. Enter Page URL (auto-extract ID)")
     print("  2. Enter Page/User ID directly")
@@ -467,8 +473,12 @@ def scrape_page_posts():
     post_scraper.USER_ID = page_id
     post_scraper.BASE_HEADERS["referer"] = f"https://www.facebook.com/profile.php?id={page_id}"
     
-    print(f"\nFetching {count} posts from page {page_id}...")
+    print(f"\nFetching {count} posts from timeline {page_id}...")
     posts = fetch_page_posts(count)
+
+    timeline_output_folder = "user_post"
+    if posts:
+        timeline_output_folder = resolve_timeline_output_folder(posts[0])
     
     print(f"\n✓ Found {len(posts)} posts. Now fetching comments...")
     
@@ -483,14 +493,16 @@ def scrape_page_posts():
         
         try:
             comments, _ = fetch_comments_for_post(post_id)
-            save_post_data("page_post", post_id, post, comments)
+            output_folder = resolve_timeline_output_folder(post)
+            save_post_data(output_folder, post_id, post, comments)
             time.sleep(1)  # Be nice to the server
         except Exception as e:
             print(f"  ❌ Error fetching comments: {e}")
             # Save post data even if comments fail
-            save_post_data("page_post", post_id, post, [])
+            output_folder = resolve_timeline_output_folder(post)
+            save_post_data(output_folder, post_id, post, [])
     
-    print(f"\n✅ Done! Saved {len(posts)} posts to page_post/")
+    print(f"\n✅ Done! Saved {len(posts)} posts to {timeline_output_folder}/")
 
 
 def scrape_group_posts():
