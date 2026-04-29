@@ -215,13 +215,35 @@ def fetch_comments_for_post(post_id, cookies=None):
     
     for c in comments:
         print(f"    🗨️ {c.get('text', '')[:50]}...")
-        c["replies"] = fetch_replies(c, cookies=cookies)
+        try:
+            c["replies"] = fetch_replies(c, cookies=cookies)
+        except Exception as e:
+            print(f"    ⚠️ Error fetching replies for comment {c.get('comment_id')}: {e}")
+            c["replies"] = []
         
         for r in c["replies"]:
             print(f"       ↳ {r.get('text', '')[:50]}...")
         
         # Remove internal fields before appending
         c_clean = {k: v for k, v in c.items() if not k.startswith('_')}
+        c_clean.pop("comment_id", None)
+        c_clean.pop("author_name", None)
+        c_clean.pop("author_url", None)
+        c_clean.pop("author_id", None)
+        c_clean.pop("reply_count", None)
+
+        cleaned_replies = []
+        for reply in c_clean.get("replies", []):
+            if not isinstance(reply, dict):
+                continue
+            cleaned_replies.append({
+                "text": reply.get("text", ""),
+                "reaction_count": str(reply.get("reaction_count", "0"))
+            })
+
+        c_clean["text"] = c_clean.get("text", "")
+        c_clean["reaction_count"] = str(c_clean.get("reaction_count", "0"))
+        c_clean["replies"] = cleaned_replies
         all_data.append(c_clean)
     
     print(f"  ✓ Found {len(all_data)} comments")

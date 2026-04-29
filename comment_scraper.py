@@ -322,11 +322,10 @@ def fetch_comments(feedback_id, cookies=None):
         #     json.dump(j, f, ensure_ascii=False, indent=2)
         # print(f"💾 Saved response_{response_count}.json")
         
+        node = (j.get("data") or {}).get("node") or {}
         comments_block = (
-            j.get("data", {})
-             .get("node", {})
-             .get("comment_rendering_instance_for_feed_location", {})
-             .get("comments", {})
+            (node.get("comment_rendering_instance_for_feed_location") or {})
+            .get("comments") or {}
         )
 
         edges = comments_block.get("edges", [])
@@ -334,16 +333,21 @@ def fetch_comments(feedback_id, cookies=None):
             break
 
         for e in edges:
-            n = e["node"]
-            fb = n["feedback"]
+            n = e.get("node") or {}
+            if not isinstance(n, dict) or not n:
+                continue
+
+            fb = n.get("feedback") or {}
+            if not isinstance(fb, dict):
+                fb = {}
 
             # Extract parent_post_story info from first response
             if response_count == 1 and post_info is None:
-                parent_post_story = n.get("parent_post_story", {})
+                parent_post_story = n.get("parent_post_story") or {}
                 
                 if parent_post_story:
                     # Extract post reaction count
-                    post_feedback = parent_post_story.get("feedback", {})
+                    post_feedback = parent_post_story.get("feedback") or {}
                     post_reaction_count = extract_post_reaction_count(post_feedback)
                     post_comment_count = extract_post_comment_count(post_feedback)
                     
@@ -355,9 +359,11 @@ def fetch_comments(feedback_id, cookies=None):
                     }
                     
                     # Extract first media ID
-                    attachments = parent_post_story.get("attachments", [])
+                    attachments = parent_post_story.get("attachments") or []
                     for attachment in attachments:
-                        media = attachment.get("media", {})
+                        if not isinstance(attachment, dict):
+                            continue
+                        media = attachment.get("media") or {}
                         if media and media.get("id"):
                             post_info["media_id"] = media.get("id")
                             break  # Only get first one
@@ -365,15 +371,15 @@ def fetch_comments(feedback_id, cookies=None):
                     print(f"📎 Extracted post info: {post_info}")
 
             # Extract reaction count for comment
-            reactors = fb.get("reactors", {})
+            reactors = fb.get("reactors") or {}
             total_reactions = reactors.get("count_reduced", "0")
             author = n.get("author") or {}
             comment_id = n.get("legacy_fbid") or n.get("id") or fb.get("id")
             reply_count = (
-                fb.get("comment_rendering_instance", {})
-                .get("comments", {})
-                .get("total_count", 0)
-            )
+                (fb.get("comment_rendering_instance") or {})
+                .get("comments") or {}
+            ).get("total_count", 0)
+            expansion_info = fb.get("expansion_info") or {}
             
             results.append({
                 "comment_id": str(comment_id) if comment_id else None,
@@ -381,13 +387,13 @@ def fetch_comments(feedback_id, cookies=None):
                 "author_url": author.get("url"),
                 "author_id": author.get("id"),
                 "text": (n.get("body") or {}).get("text", ""),
-                "reaction_count": total_reactions,
+                "reaction_count": str(total_reactions) if total_reactions is not None else "0",
                 "reply_count": reply_count,
-                "_feedback_id": fb["id"],  # Internal use only (for fetching replies)
-                "_expansion_token": fb["expansion_info"]["expansion_token"]  # Internal use only
+                "_feedback_id": fb.get("id"),  # Internal use only (for fetching replies)
+                "_expansion_token": expansion_info.get("expansion_token")  # Internal use only
             })
 
-        cursor = comments_block.get("page_info", {}).get("end_cursor")
+        cursor = (comments_block.get("page_info") or {}).get("end_cursor")
         #break
         if not cursor:
             break
@@ -399,6 +405,9 @@ def fetch_comments(feedback_id, cookies=None):
 # ===== FETCH REPLIES =====
 
 def fetch_replies(comment, cookies=None):
+    if not comment.get("_feedback_id") or not comment.get("_expansion_token"):
+        return []
+
     headers = {**BASE_HEADERS, "x-fb-friendly-name": "Depth1CommentsListPaginationQuery"}
     r = retry_request(
         GRAPHQL,
@@ -412,18 +421,20 @@ def fetch_replies(comment, cookies=None):
     replies = []
 
     edges = (
-        j.get("data", {})
-         .get("node", {})
+        ((j.get("data") or {}).get("node") or {})
          .get("replies_connection", {})
          .get("edges", [])
     )
 
     for e in edges:
-        n = e["node"]
-        fb = n.get("feedback", {})
+        n = e.get("node") or {}
+        if not isinstance(n, dict) or not n:
+            continue
+
+        fb = n.get("feedback") or {}
         
         # Extract reaction count
-        reactors = fb.get("reactors", {})
+        reactors = fb.get("reactors") or {}
         total_reactions = reactors.get("count_reduced", "0")
         author = n.get("author") or {}
         reply_id = n.get("legacy_fbid") or n.get("id") or fb.get("id")
@@ -434,7 +445,7 @@ def fetch_replies(comment, cookies=None):
             "author_url": author.get("url"),
             "author_id": author.get("id"),
             "text": (n.get("body") or {}).get("text", ""),
-            "reaction_count": total_reactions
+            "reaction_count": str(total_reactions) if total_reactions is not None else "0"
         })
 
     return replies
