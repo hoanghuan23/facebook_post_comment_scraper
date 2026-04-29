@@ -2,7 +2,8 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from datetime import datetime
 from sqlalchemy import text
@@ -128,6 +129,11 @@ async def root():
     }
 
 
+@app.get("/dashboard", include_in_schema=False)
+async def dashboard_index():
+    return FileResponse("backend/web/index.html")
+
+
 # ==================== ERROR HANDLERS ====================
 
 @app.exception_handler(Exception)
@@ -178,6 +184,8 @@ app.include_router(
     prefix="/api/admin",
     tags=["Admin"],
 )
+
+app.mount("/dashboard", StaticFiles(directory="backend/web", html=True), name="dashboard")
 
 
 if __name__ == "__main__":

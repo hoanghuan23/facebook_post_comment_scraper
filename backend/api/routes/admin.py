@@ -7,7 +7,7 @@ import asyncio
 
 from backend.database.db import get_db
 from backend.database.models import User, Source, Post, Comment, PostMetric, ScraperLog
-from backend.database.crud import UserCRUD, LogCRUD, get_user_stats
+from backend.database.crud import UserCRUD, LogCRUD, SourceCRUD, get_user_stats
 from backend.api.auth import get_current_admin_user
 
 router = APIRouter()
@@ -80,6 +80,8 @@ async def control_scraper(
                 status_code=400,
                 detail="Invalid action. Use: start, stop, pause, resume"
             )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -112,6 +114,37 @@ async def get_logs(
             }
             for l in logs
         ]
+    }
+
+
+@router.get("/task-logs")
+async def get_task_logs(
+    limit: int = 100,
+    task_name: str = None,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    """Get scheduled task execution logs."""
+    logs = LogCRUD.get_task_logs(db, task_name=task_name, limit=limit)
+    return {
+        "count": len(logs),
+        "limit": limit,
+        "task_name": task_name,
+        "logs": [
+            {
+                "id": log.id,
+                "task_name": log.task_name,
+                "status": log.status,
+                "started_at": log.started_at,
+                "completed_at": log.completed_at,
+                "duration_seconds": log.duration_seconds,
+                "items_processed": log.items_processed,
+                "errors_count": log.errors_count,
+                "error_message": log.error_message,
+                "created_at": log.created_at,
+            }
+            for log in logs
+        ],
     }
 
 
@@ -183,8 +216,37 @@ async def run_task_manually(
 ):
     """Manually run a scheduled task"""
     from backend.scheduler import periodic_tasks
+    from backend.scraper.facebook_service import FacebookScraperService
     
     try:
+        if source_id is not None:
+            source = SourceCRUD.get_by_id(db, source_id)
+            if not source:
+                raise HTTPException(status_code=404, detail="Source not found")
+
+            if task_name == "scrape_posts":
+                result = FacebookScraperService.scrape_source(db, source_id, limit=20)
+                return {
+                    "status": "completed",
+                    "task": "scrape_posts",
+                    "source_id": source_id,
+                    "result": {
+                        "total_fetched": result.total_fetched,
+                        "created_posts": result.created_posts,
+                        "updated_posts": result.updated_posts,
+                        "skipped_posts": result.skipped_posts,
+                    },
+                }
+
+            if task_name == "update_metrics":
+                result = FacebookScraperService.refresh_recent_post_metrics(db, source, limit=20)
+                return {
+                    "status": "completed",
+                    "task": "update_metrics",
+                    "source_id": source_id,
+                    "result": result,
+                }
+
         if task_name == "scrape_posts":
             asyncio.create_task(periodic_tasks.periodic_scrape_new_posts())
             return {"status": "queued", "task": "scrape_posts"}
@@ -206,6 +268,8 @@ async def run_task_manually(
                 status_code=400,
                 detail="Invalid task. Use: scrape_posts, update_metrics, cleanup, analytics"
             )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

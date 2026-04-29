@@ -1,5 +1,5 @@
 # Pydantic schemas for API request/response validation
-from pydantic import BaseModel, EmailStr, HttpUrl, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from datetime import datetime
 from typing import Optional, List, Literal
 from enum import Enum
@@ -94,8 +94,7 @@ class SourceResponse(BaseModel):
     permission_message: Optional[str] = None
     is_accessible: bool = False
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True, use_enum_values=True)
 
 
 class SourceDetail(SourceResponse):

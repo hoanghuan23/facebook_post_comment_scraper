@@ -367,12 +367,22 @@ def fetch_comments(feedback_id, cookies=None):
             # Extract reaction count for comment
             reactors = fb.get("reactors", {})
             total_reactions = reactors.get("count_reduced", "0")
+            author = n.get("author") or {}
+            comment_id = n.get("legacy_fbid") or n.get("id") or fb.get("id")
+            reply_count = (
+                fb.get("comment_rendering_instance", {})
+                .get("comments", {})
+                .get("total_count", 0)
+            )
             
             results.append({
-                # "comment_id": n["legacy_fbid"],
-                # "author": n["author"]["name"],
+                "comment_id": str(comment_id) if comment_id else None,
+                "author_name": author.get("name"),
+                "author_url": author.get("url"),
+                "author_id": author.get("id"),
                 "text": (n.get("body") or {}).get("text", ""),
                 "reaction_count": total_reactions,
+                "reply_count": reply_count,
                 "_feedback_id": fb["id"],  # Internal use only (for fetching replies)
                 "_expansion_token": fb["expansion_info"]["expansion_token"]  # Internal use only
             })
@@ -415,10 +425,14 @@ def fetch_replies(comment, cookies=None):
         # Extract reaction count
         reactors = fb.get("reactors", {})
         total_reactions = reactors.get("count_reduced", "0")
+        author = n.get("author") or {}
+        reply_id = n.get("legacy_fbid") or n.get("id") or fb.get("id")
         
         replies.append({
-            # "reply_id": n["legacy_fbid"],
-            # "author": n["author"]["name"],
+            "comment_id": str(reply_id) if reply_id else None,
+            "author_name": author.get("name"),
+            "author_url": author.get("url"),
+            "author_id": author.get("id"),
             "text": (n.get("body") or {}).get("text", ""),
             "reaction_count": total_reactions
         })

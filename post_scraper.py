@@ -21,6 +21,7 @@ from utils.facebook_extractor import (
 )
 
 GRAPHQL_URL = "https://www.facebook.com/api/graphql/"
+WRITE_DEBUG_FILES = os.getenv("SCRAPER_WRITE_DEBUG_FILES", "true").lower() == "true"
 
 # ========= CONFIG (FILL THESE) =========
 USER_ID = "100019577483175"   # profile / page id
@@ -691,14 +692,14 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
             # Extract media with correct save directory
             post["media"] = extract_media(node, post_id, media_save_dir)
             
-            # Save individual post to folder structure: {base_folder}/{page_name}/{post_id}/{post_id}.json
-            post_dir = os.path.join(base_folder, name_folder, str(post_id))
-            os.makedirs(post_dir, exist_ok=True)
-            
-            post_file = os.path.join(post_dir, f"{post_id}.json")
-            with open(post_file, "w", encoding="utf-8") as f:
-                json.dump(post, f, ensure_ascii=False, indent=2)
-            print(f"✓ Saved to {post_file}")
+            if WRITE_DEBUG_FILES:
+                # Save individual post to folder structure: {base_folder}/{page_name}/{post_id}/{post_id}.json
+                post_dir = os.path.join(base_folder, name_folder, str(post_id))
+                os.makedirs(post_dir, exist_ok=True)
+                post_file = os.path.join(post_dir, f"{post_id}.json")
+                with open(post_file, "w", encoding="utf-8") as f:
+                    json.dump(post, f, ensure_ascii=False, indent=2)
+                print(f"✓ Saved to {post_file}")
 
             batch_posts.append(post)
             all_posts.append(post)

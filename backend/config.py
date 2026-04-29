@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     API_BASE_URL: str = "http://localhost:8000"
     
     # Database
-    DATABASE_URL: str = "sqlite:///./data/facebook_scraper.db"
+    DATABASE_URL: str = "sqlite:///./data/social_scraper.db"
     # For PostgreSQL:
     # DATABASE_URL: str = "postgresql://user:password@localhost:5432/facebook_scraper"
     
@@ -41,16 +41,17 @@ class Settings(BaseSettings):
     SCRAPER_MAX_WORKERS: int = 3
     SCRAPER_TIMEOUT: int = 30
     SCRAPER_RETRY_ATTEMPTS: int = 3
+    SCRAPER_WRITE_DEBUG_FILES: bool = False
     
     # Scheduler settings (APScheduler)
     SCHEDULER_ENABLED: bool = True
     
     # Task schedules (cron expressions or seconds)
-    TASK_SCRAPE_NEW_POSTS_INTERVAL: int = 1800  # 30 minutes
-    TASK_UPDATE_RECENT_METRICS_INTERVAL: int = 21600  # 6 hours
-    TASK_CLEANUP_OLD_DATA_INTERVAL: int = 86400  # 24 hours
-    TASK_GENERATE_ANALYTICS_INTERVAL: int = 3600  # 1 hour
-    TASK_HEALTH_CHECK_INTERVAL: int = 300  # 5 minutes
+    TASK_SCRAPE_NEW_POSTS_INTERVAL: int = 30
+    TASK_UPDATE_RECENT_METRICS_INTERVAL: int = 30
+    TASK_CLEANUP_OLD_DATA_INTERVAL: int = 30
+    TASK_GENERATE_ANALYTICS_INTERVAL: int = 30
+    TASK_HEALTH_CHECK_INTERVAL: int = 30
     
     # Data retention
     DATA_RETENTION_DAYS: int = 90  # Delete posts older than N days
@@ -105,7 +106,7 @@ class DevelopmentSettings(Settings):
     DEBUG: bool = True
     LOG_LEVEL: str = "DEBUG"
     # Use SQLite for development
-    DATABASE_URL: str = "sqlite:///./data/dev_facebook_scraper.db"
+    DATABASE_URL: str = "sqlite:///./data/social_scraper.db"
 
 
 class ProductionSettings(Settings):

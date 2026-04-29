@@ -1,15 +1,26 @@
 # Authentication routes
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from datetime import timedelta
 
 from backend.database.db import get_db
 from backend.database.models import User
-from backend.database.schemas import UserCreate, UserLogin, UserResponse, TokenResponse
+from backend.database.schemas import (
+    FacebookCredentials,
+    TokenResponse,
+    UserCreate,
+    UserLogin,
+    UserProfileUpdate,
+    UserResponse,
+)
 from backend.api.auth import (
-    hash_password, verify_password, create_access_token, create_refresh_token,
+    create_access_token,
+    hash_password,
+    verify_password,
     get_current_user
 )
+from backend.database.crud import UserCRUD
 
 router = APIRouter()
 
@@ -47,7 +58,7 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
     return TokenResponse(
         access_token=access_token,
         expires_in=60 * 24,  # 24 hours in minutes
-        user=UserResponse.from_orm(new_user),
+        user=UserResponse.model_validate(new_user),
     )
 
 
@@ -72,18 +83,98 @@ async def login(credentials: UserLogin, db: Session = Depends(get_db)):
     
     # Create token
     access_token = create_access_token(data={"sub": user.id})
-    
+    UserCRUD.update_last_login(db, user.id)
+    user = db.query(User).filter(User.id == user.id).first()
+
     return TokenResponse(
         access_token=access_token,
         expires_in=60 * 24,  # 24 hours
-        user=UserResponse.from_orm(user),
+        user=UserResponse.model_validate(user),
     )
 
 
 @router.get("/me", response_model=UserResponse)
 async def get_me(current_user: User = Depends(get_current_user)):
     """Get current user profile"""
-    return UserResponse.from_orm(current_user)
+    return UserResponse.model_validate(current_user)
+
+
+@router.put("/me", response_model=UserResponse)
+async def update_me(
+    profile_data: UserProfileUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Update current user profile."""
+    payload = profile_data.model_dump(exclude_unset=True)
+
+    if "username" in payload and payload["username"] != current_user.username:
+        existing_username = db.query(User).filter(User.username == payload["username"]).first()
+        if existing_username:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Username already registered",
+            )
+        current_user.username = payload["username"]
+
+    if "email" in payload and payload["email"] != current_user.email:
+        existing_email = db.query(User).filter(User.email == payload["email"]).first()
+        if existing_email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered",
+            )
+        current_user.email = payload["email"]
+
+    db.commit()
+    db.refresh(current_user)
+    return UserResponse.model_validate(current_user)
+
+
+@router.put("/me/facebook-credentials")
+async def update_facebook_credentials(
+    credentials: FacebookCredentials,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Store Facebook session data used by the scraper."""
+    payload = {}
+    if credentials.cookies is not None:
+        payload["fb_cookies"] = credentials.cookies
+    if credentials.fb_dtsg is not None:
+        payload["fb_dtsg"] = credentials.fb_dtsg
+    if credentials.user_agent is not None:
+        payload["fb_user_agent"] = credentials.user_agent
+
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No Facebook credentials provided",
+        )
+
+    updated_user = UserCRUD.update(db, current_user.id, **payload)
+    if not updated_user:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update credentials")
+
+    return {
+        "message": "Facebook credentials updated successfully",
+        "updated_at": datetime.utcnow().isoformat(),
+        "has_cookies": bool(updated_user.fb_cookies),
+        "has_fb_dtsg": bool(updated_user.fb_dtsg),
+        "has_user_agent": bool(updated_user.fb_user_agent),
+    }
+
+
+@router.get("/me/facebook-credentials")
+async def get_facebook_credentials_status(
+    current_user: User = Depends(get_current_user),
+):
+    """Return whether Facebook scraper credentials are configured."""
+    return {
+        "has_cookies": bool(current_user.fb_cookies),
+        "has_fb_dtsg": bool(current_user.fb_dtsg),
+        "has_user_agent": bool(current_user.fb_user_agent),
+    }
 
 
 @router.post("/logout")

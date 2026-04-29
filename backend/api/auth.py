@@ -11,7 +11,8 @@ from backend.database.db import get_db
 from backend.database.models import User
 
 # Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Use pbkdf2_sha256 to avoid bcrypt backend issues on newer Python builds.
+pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 # JWT settings
 ALGORITHM = settings.ALGORITHM

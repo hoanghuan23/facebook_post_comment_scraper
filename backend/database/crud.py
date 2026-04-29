@@ -275,6 +275,18 @@ class PostCRUD:
     def get_by_facebook_post_id(db: Session, facebook_post_id: str) -> Optional[models.Post]:
         """Get post by Facebook post ID"""
         return db.query(models.Post).filter(models.Post.facebook_post_id == facebook_post_id).first()
+
+    @staticmethod
+    def get_by_source_and_facebook_post_id(
+        db: Session, source_id: int, facebook_post_id: str
+    ) -> Optional[models.Post]:
+        """Get post by source and Facebook post ID."""
+        return db.query(models.Post).filter(
+            and_(
+                models.Post.source_id == source_id,
+                models.Post.facebook_post_id == facebook_post_id,
+            )
+        ).first()
     
     @staticmethod
     def get_by_source(db: Session, source_id: int, skip: int = 0, limit: int = 50,
@@ -348,7 +360,10 @@ class PostCRUD:
         if not post:
             return None
         
-        allowed_fields = {'content', 'is_tracked', 'is_deleted', 'media_count', 'has_images', 'has_videos'}
+        allowed_fields = {
+            'content', 'is_tracked', 'is_deleted', 'media_count', 'has_images', 'has_videos',
+            'facebook_url', 'posted_at'
+        }
         
         for key, value in kwargs.items():
             if key in allowed_fields and value is not None:
@@ -357,6 +372,42 @@ class PostCRUD:
         db.commit()
         db.refresh(post)
         return post
+
+    @staticmethod
+    def upsert_for_source(
+        db: Session,
+        source_id: int,
+        facebook_post_id: str,
+        facebook_url: str,
+        posted_at: datetime,
+        content: str = None,
+        **kwargs,
+    ) -> Tuple[models.Post, bool]:
+        """Create post if missing, otherwise refresh its latest core fields."""
+        existing_post = PostCRUD.get_by_source_and_facebook_post_id(db, source_id, facebook_post_id)
+        if existing_post:
+            existing_post.facebook_url = facebook_url
+            existing_post.posted_at = posted_at
+            existing_post.content = content
+            existing_post.media_count = kwargs.get('media_count', existing_post.media_count)
+            existing_post.has_images = kwargs.get('has_images', existing_post.has_images)
+            existing_post.has_videos = kwargs.get('has_videos', existing_post.has_videos)
+            existing_post.is_tracked = True
+            existing_post.is_deleted = False
+            db.commit()
+            db.refresh(existing_post)
+            return existing_post, False
+
+        created_post = PostCRUD.create(
+            db=db,
+            source_id=source_id,
+            facebook_post_id=facebook_post_id,
+            facebook_url=facebook_url,
+            posted_at=posted_at,
+            content=content,
+            **kwargs,
+        )
+        return created_post, True
     
     @staticmethod
     def delete(db: Session, post_id: int) -> bool:
@@ -503,6 +554,34 @@ class CommentCRUD:
         return db.query(models.Comment).filter(
             models.Comment.facebook_comment_id == facebook_comment_id
         ).first()
+
+    @staticmethod
+    def upsert(db: Session, post_id: int, facebook_comment_id: str, comment_text: str,
+               **kwargs) -> models.Comment:
+        """Create comment if missing, otherwise refresh mutable fields."""
+        existing_comment = CommentCRUD.get_by_facebook_id(db, facebook_comment_id)
+        if existing_comment:
+            existing_comment.post_id = post_id
+            existing_comment.comment_text = comment_text
+            existing_comment.commenter_id = kwargs.get('commenter_id')
+            existing_comment.commenter_name = kwargs.get('commenter_name')
+            existing_comment.commenter_url = kwargs.get('commenter_url')
+            existing_comment.likes_count = kwargs.get('likes_count', existing_comment.likes_count)
+            existing_comment.reply_count = kwargs.get('reply_count', existing_comment.reply_count)
+            existing_comment.parent_comment_id = kwargs.get('parent_comment_id')
+            existing_comment.depth_level = kwargs.get('depth_level', existing_comment.depth_level)
+            existing_comment.last_updated = datetime.utcnow()
+            db.commit()
+            db.refresh(existing_comment)
+            return existing_comment
+
+        return CommentCRUD.create(
+            db=db,
+            post_id=post_id,
+            facebook_comment_id=facebook_comment_id,
+            comment_text=comment_text,
+            **kwargs,
+        )
     
     @staticmethod
     def get_by_post(db: Session, post_id: int, skip: int = 0, limit: int = 100,
