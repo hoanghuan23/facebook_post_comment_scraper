@@ -5,7 +5,7 @@ import time
 import re
 import requests
 from urllib.parse import parse_qs
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+from PyQt6.QtWidgets import (QApplication, QCheckBox, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                              QTextEdit, QComboBox, QSpinBox, QTabWidget,
                              QProgressBar, QGroupBox, QMessageBox, QDialog,
@@ -412,7 +412,8 @@ class ScraperThread(QThread):
     def scrape_user_posts(self):
         """Scrape posts from one or more user profile URLs (timeline)"""
         urls = self.params["urls"]  # List of URLs
-        count = self.params["count"]
+        count = self.params.get("count")
+        last_24_hours_only = self.params.get("last_24_hours_only", False)
 
         total_users = len(urls)
         all_posts_count = 0
@@ -450,7 +451,8 @@ class ScraperThread(QThread):
                 batch_size = 2
 
                 def process_batch(batch_posts, total_so_far, total_limit):
-                    self.log(f"  Processing batch of {len(batch_posts)} posts ({total_so_far}/{total_limit})...")
+                    total_label = total_limit if total_limit is not None else "24h"
+                    self.log(f"  Processing batch of {len(batch_posts)} posts ({total_so_far}/{total_label})...")
                     for i, post in enumerate(batch_posts, 1):
                         post_id = post.get("post_id")
                         if not post_id:
@@ -468,13 +470,15 @@ class ScraperThread(QThread):
                             self.log(f"      ❌ Error fetching comments: {e}")
                             save_post_data("user_post", post_id, post, [])
 
-                self.log(f"  Fetching {count} posts from user {user_id} (batch size: {batch_size})...")
+                fetch_label = "posts from last 24 hours" if last_24_hours_only else f"{count} posts"
+                self.log(f"  Fetching {fetch_label} from user {user_id} (batch size: {batch_size})...")
                 posts = fetch_page_posts(
                     count,
                     min_comments,
                     batch_size=batch_size,
                     on_batch_complete=process_batch,
                     base_folder="user_post",
+                    last_24_hours_only=last_24_hours_only,
                 )
 
                 self.log(f"  ✓ Completed: {len(posts)} posts processed")
@@ -489,7 +493,8 @@ class ScraperThread(QThread):
     def scrape_page_posts(self):
         """Scrape posts from one or more pages"""
         urls = self.params['urls']  # List of URLs
-        count = self.params['count']
+        count = self.params.get('count')
+        last_24_hours_only = self.params.get("last_24_hours_only", False)
         
         total_pages = len(urls)
         all_posts_count = 0
@@ -531,7 +536,8 @@ class ScraperThread(QThread):
                 
                 # Define callback to process each batch
                 def process_batch(batch_posts, total_so_far, total_limit):
-                    self.log(f"  Processing batch of {len(batch_posts)} posts ({total_so_far}/{total_limit})...")
+                    total_label = total_limit if total_limit is not None else "24h"
+                    self.log(f"  Processing batch of {len(batch_posts)} posts ({total_so_far}/{total_label})...")
                     for i, post in enumerate(batch_posts, 1):
                         post_id = post.get("post_id")
                         if not post_id:
@@ -550,13 +556,15 @@ class ScraperThread(QThread):
                             # Save post data even if comments fail
                             save_post_data("page_post", post_id, post, [])
                 
-                self.log(f"  Fetching {count} posts from page {page_id} (batch size: {batch_size})...")
+                fetch_label = "posts from last 24 hours" if last_24_hours_only else f"{count} posts"
+                self.log(f"  Fetching {fetch_label} from page {page_id} (batch size: {batch_size})...")
                 posts = fetch_page_posts(
                     count,
                     min_comments,
                     batch_size=batch_size,
                     on_batch_complete=process_batch,
                     base_folder="page_post",
+                    last_24_hours_only=last_24_hours_only,
                 )
                 
                 self.log(f"  ✓ Completed: {len(posts)} posts processed")
@@ -572,7 +580,8 @@ class ScraperThread(QThread):
     def scrape_group_posts(self):
         """Scrape posts from one or more groups"""
         urls = self.params['urls']  # List of URLs
-        count = self.params['count']
+        count = self.params.get('count')
+        last_24_hours_only = self.params.get("last_24_hours_only", False)
         
         total_groups = len(urls)
         all_posts_count = 0
@@ -614,7 +623,8 @@ class ScraperThread(QThread):
                 
                 # Define callback to process each batch
                 def process_batch(batch_posts, total_so_far, total_limit):
-                    self.log(f"  Processing batch of {len(batch_posts)} posts ({total_so_far}/{total_limit})...")
+                    total_label = total_limit if total_limit is not None else "24h"
+                    self.log(f"  Processing batch of {len(batch_posts)} posts ({total_so_far}/{total_label})...")
                     for i, post in enumerate(batch_posts, 1):
                         post_id = post.get("post_id")
                         if not post_id:
@@ -633,8 +643,15 @@ class ScraperThread(QThread):
                             # Save post data even if comments fail
                             save_post_data("group_post", post_id, post, [])
                 
-                self.log(f"  Fetching {count} posts from group {group_id} (batch size: {batch_size})...")
-                posts = fetch_group_posts(count, min_comments, batch_size=batch_size, on_batch_complete=process_batch)
+                fetch_label = "posts from last 24 hours" if last_24_hours_only else f"{count} posts"
+                self.log(f"  Fetching {fetch_label} from group {group_id} (batch size: {batch_size})...")
+                posts = fetch_group_posts(
+                    count,
+                    min_comments,
+                    batch_size=batch_size,
+                    on_batch_complete=process_batch,
+                    last_24_hours_only=last_24_hours_only,
+                )
                 
                 self.log(f"  ✓ Completed: {len(posts)} posts processed")
                 
@@ -736,16 +753,23 @@ class FacebookScraperUI(QMainWindow):
         input_layout.addWidget(self.user_profile_urls)
 
         # Post count
-        count_layout = QHBoxLayout()
-        count_layout.addWidget(QLabel("Number of posts:"))
-        self.user_post_count = QSpinBox()
-        self.user_post_count.setMinimum(1)
-        self.user_post_count.setMaximum(100000)
-        self.user_post_count.setValue(5)
-        self.user_post_count.setMinimumWidth(150)
-        count_layout.addWidget(self.user_post_count)
-        count_layout.addStretch()
-        input_layout.addLayout(count_layout)
+        # count_layout = QHBoxLayout()
+        # count_layout.addWidget(QLabel("Number of posts:"))
+        # self.user_post_count = QSpinBox()
+        # self.user_post_count.setMinimum(1)
+        # self.user_post_count.setMaximum(100000)
+        # self.user_post_count.setValue(5)
+        # self.user_post_count.setMinimumWidth(150)
+        # count_layout.addWidget(self.user_post_count)
+        # count_layout.addStretch()
+        # input_layout.addLayout(count_layout)
+
+        time_layout = QHBoxLayout()
+        self.user_time_filter_check = QCheckBox("Last 24 hours only")
+        self.user_time_filter_check.setChecked(True)
+        time_layout.addWidget(self.user_time_filter_check)
+        time_layout.addStretch()
+        input_layout.addLayout(time_layout)
 
         # Comment threshold
         comment_layout = QHBoxLayout()
@@ -795,17 +819,25 @@ class FacebookScraperUI(QMainWindow):
         input_layout.addWidget(self.page_urls)
         
         # Post count
-        count_layout = QHBoxLayout()
-        count_layout.addWidget(QLabel("Number of posts:"))
-        self.page_post_count = QSpinBox()
-        self.page_post_count.setMinimum(1)
-        self.page_post_count.setMaximum(100000)
-        self.page_post_count.setValue(5)
-        self.page_post_count.setMinimumWidth(150)
-        count_layout.addWidget(self.page_post_count)
-        count_layout.addStretch()
-        input_layout.addLayout(count_layout)
-        
+        # count_layout = QHBoxLayout()
+        # count_layout.addWidget(QLabel("Number of posts:"))
+        # self.page_post_count = QSpinBox()
+        # self.page_post_count.setMinimum(1)
+        # self.page_post_count.setMaximum(100000)
+        # self.page_post_count.setValue(5)
+        # self.page_post_count.setMinimumWidth(150)
+        # count_layout.addWidget(self.page_post_count)
+        # count_layout.addStretch()
+        # input_layout.addLayout(count_layout)
+
+        # Time count
+        time_layout = QHBoxLayout()
+        self.page_time_filter_check = QCheckBox("Last 24 hours only")
+        self.page_time_filter_check.setChecked(True)
+        time_layout.addWidget(self.page_time_filter_check)
+        time_layout.addStretch()
+        input_layout.addLayout(time_layout)
+
         # Comment threshold
         comment_layout = QHBoxLayout()
         comment_layout.addWidget(QLabel("Min comments (0 = all posts):"))
@@ -854,16 +886,23 @@ class FacebookScraperUI(QMainWindow):
         input_layout.addWidget(self.group_urls)
         
         # Post count
-        count_layout = QHBoxLayout()
-        count_layout.addWidget(QLabel("Number of posts:"))
-        self.group_post_count = QSpinBox()
-        self.group_post_count.setMinimum(1)
-        self.group_post_count.setMaximum(10000)
-        self.group_post_count.setValue(5)
-        self.group_post_count.setMinimumWidth(150)
-        count_layout.addWidget(self.group_post_count)
-        count_layout.addStretch()
-        input_layout.addLayout(count_layout)
+        # count_layout = QHBoxLayout()
+        # count_layout.addWidget(QLabel("Number of posts:"))
+        # self.group_post_count = QSpinBox()
+        # self.group_post_count.setMinimum(1)
+        # self.group_post_count.setMaximum(10000)
+        # self.group_post_count.setValue(5)
+        # self.group_post_count.setMinimumWidth(150)
+        # count_layout.addWidget(self.group_post_count)
+        # count_layout.addStretch()
+        # input_layout.addLayout(count_layout)
+
+        time_layout = QHBoxLayout()
+        self.group_time_filter_check = QCheckBox("Last 24 hours only")
+        self.group_time_filter_check.setChecked(True)
+        time_layout.addWidget(self.group_time_filter_check)
+        time_layout.addStretch()
+        input_layout.addLayout(time_layout)
         
         # Comment threshold
         comment_layout = QHBoxLayout()
@@ -891,7 +930,8 @@ class FacebookScraperUI(QMainWindow):
     def scrape_user_posts(self):
         """Start scraping posts from user profile URLs"""
         urls_text = self.user_profile_urls.toPlainText().strip()
-        count = self.user_post_count.value()
+        last_24_hours_only = self.user_time_filter_check.isChecked()
+        count = None if last_24_hours_only else 10
         min_comments = self.user_min_comments.value()
         
         if not urls_text:
@@ -907,14 +947,16 @@ class FacebookScraperUI(QMainWindow):
         
         # Start scraping in background thread
         comment_filter_msg = f" with min {min_comments} comments" if min_comments > 0 else ""
-        self.log(f"Starting user posts scraper for {len(urls)} profile(s) (fetching {count} posts each{comment_filter_msg})...")
-        params = {"urls": urls, "count": count, "min_comments": min_comments}
+        fetch_label = "posts from last 24 hours" if last_24_hours_only else f"{count} posts"
+        self.log(f"Starting user posts scraper for {len(urls)} profile(s) (fetching {fetch_label} each{comment_filter_msg})...")
+        params = {"urls": urls, "count": count, "min_comments": min_comments, "last_24_hours_only": last_24_hours_only}
         self.start_scraping("user_posts", params)
     
     def scrape_page_posts(self):
         """Start scraping posts from page URLs"""
         urls_text = self.page_urls.toPlainText().strip()
-        count = self.page_post_count.value()
+        last_24_hours_only = self.page_time_filter_check.isChecked()
+        count = None if last_24_hours_only else 10
         min_comments = self.page_min_comments.value()
         
         if not urls_text:
@@ -930,14 +972,16 @@ class FacebookScraperUI(QMainWindow):
         
         # Start scraping in background thread
         comment_filter_msg = f" with min {min_comments} comments" if min_comments > 0 else ""
-        self.log(f"Starting page posts scraper for {len(urls)} page(s) (fetching {count} posts each{comment_filter_msg})...")
-        params = {'urls': urls, 'count': count, 'min_comments': min_comments}
+        fetch_label = "posts from last 24 hours" if last_24_hours_only else f"{count} posts"
+        self.log(f"Starting page posts scraper for {len(urls)} page(s) (fetching {fetch_label} each{comment_filter_msg})...")
+        params = {'urls': urls, 'count': count, 'min_comments': min_comments, "last_24_hours_only": last_24_hours_only}
         self.start_scraping("page_posts", params)
     
     def scrape_group_posts(self):
         """Start scraping posts from group URLs"""
         urls_text = self.group_urls.toPlainText().strip()
-        count = self.group_post_count.value()
+        last_24_hours_only = self.group_time_filter_check.isChecked()
+        count = None if last_24_hours_only else 10
         min_comments = self.group_min_comments.value()
         
         if not urls_text:
@@ -953,8 +997,9 @@ class FacebookScraperUI(QMainWindow):
         
         # Start scraping in background thread
         comment_filter_msg = f" with min {min_comments} comments" if min_comments > 0 else ""
-        self.log(f"Starting group posts scraper for {len(urls)} group(s) (fetching {count} posts each{comment_filter_msg})...")
-        params = {'urls': urls, 'count': count, 'min_comments': min_comments}
+        fetch_label = "posts from last 24 hours" if last_24_hours_only else f"{count} posts"
+        self.log(f"Starting group posts scraper for {len(urls)} group(s) (fetching {fetch_label} each{comment_filter_msg})...")
+        params = {'urls': urls, 'count': count, 'min_comments': min_comments, "last_24_hours_only": last_24_hours_only}
         self.start_scraping("group_posts", params)
     
     def start_scraping(self, scraper_type, params):

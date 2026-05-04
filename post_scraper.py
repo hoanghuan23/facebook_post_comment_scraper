@@ -4,7 +4,7 @@ import time
 import os
 import uuid
 from dotenv import load_dotenv
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 # Load environment variables from .env file
 load_dotenv()
@@ -499,29 +499,51 @@ def post_already_exists(post_id, base_folder, name_folder):
     return os.path.exists(post_file)
 
 
-def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None, base_folder="page_post"):
+def _parse_iso_datetime(value):
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None, base_folder="page_post", last_24_hours_only=False):
     """Fetch posts from a Facebook timeline (page or user profile).
     
     Args:
-        limit: Maximum number of posts to fetch
+        limit: Maximum number of posts to fetch. Use None with last_24_hours_only=True to fetch all recent posts.
         min_comments: Minimum number of comments required for a post to be included (0 = no filter)
         batch_size: Number of posts to fetch before calling on_batch_complete callback
         on_batch_complete: Optional callback function(batch_posts, total_so_far, limit) called after each batch
         base_folder: Base output folder for saving posts/media (e.g. "page_post", "user_post")
+        last_24_hours_only: Only include posts whose posted_at is within the last 24 hours.
     """
     global PAGE_NAME
     all_posts = []
     batch_posts = []
     cursor = None
     page_num = 1  # Track page number for saving cleaned data
+    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=24) if last_24_hours_only else None
+    stop_due_to_time = False
+    max_pages = int(os.getenv("SCRAPER_MAX_24H_PAGES", "100")) if last_24_hours_only else None
     
     if min_comments > 0:
         print(f"📊 Filtering posts with at least {min_comments} comments")
     
-    if batch_size > 0 and batch_size < limit:
+    if cutoff_time:
+        print(f"Filtering posts from last 24 hours only (since {cutoff_time.isoformat()})")
+
+    if limit is not None and batch_size > 0 and batch_size < limit:
         print(f"📦 Processing in batches of {batch_size} posts")
 
-    while len(all_posts) < limit:
+    while limit is None or len(all_posts) < limit:
+        if max_pages is not None and page_num > max_pages:
+            print(f"Reached safety max pages ({max_pages}) for 24h fetch. Stopping.")
+            break
         variables = {
             "count": 3,
             "cursor": cursor,
@@ -646,6 +668,22 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
             if is_reel_or_video_post(node):
                 print(f"  ⏭️  Skipping reel/video post")
                 continue
+
+            post_id = node.get("post_id")
+            if not post_id:
+                continue
+
+            posted_at = extract_posted_at(node)
+            posted_dt = _parse_iso_datetime(posted_at)
+
+            if cutoff_time:
+                if not posted_dt:
+                    print(f"  Skipping post {post_id} because posted_at is unknown")
+                    continue
+                if posted_dt < cutoff_time:
+                    print(f"  Reached post older than 24h: {post_id} ({posted_at})")
+                    stop_due_to_time = True
+                    continue
             
             # Check comment count threshold
             comment_count = extract_comment_count(node)
@@ -669,10 +707,6 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
                 if PAGE_NAME:
                     print(f"📂 Page name: {PAGE_NAME}")
             
-            post_id = node.get("post_id")
-            if not post_id:
-                continue
-            
             # Check if post already exists
             temp_page_name = PAGE_NAME or extract_page_name(node)
             if temp_page_name:
@@ -692,7 +726,6 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
 
             permalink = extract_permalink(node)
             author = extract_author(node)
-            posted_at = extract_posted_at(node)
 
             post = {
                 "post_id": post_id,
@@ -737,12 +770,17 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
             
             # Check if we should process this batch
             if batch_size > 0 and len(batch_posts) >= batch_size and on_batch_complete:
-                print(f"\n📦 Batch complete: {len(batch_posts)} posts. Total: {len(all_posts)}/{limit}")
+                total_label = limit if limit is not None else "24h"
+                print(f"\n📦 Batch complete: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
                 on_batch_complete(batch_posts, len(all_posts), limit)
                 batch_posts = []  # Reset batch
             
-            if len(all_posts) >= limit:
+            if limit is not None and len(all_posts) >= limit:
                 break
+
+        if stop_due_to_time:
+            print("Reached posts older than 24h. Stopping pagination.")
+            break
 
         # update cursor - get page_info from timeline_block or find it in cleaned_data
         page_info = timeline_block["node"]["timeline_list_feed_units"].get("page_info")
@@ -767,7 +805,8 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
     
     # Process any remaining posts in the final batch
     if batch_posts and on_batch_complete:
-        print(f"\n📦 Final batch: {len(batch_posts)} posts. Total: {len(all_posts)}/{limit}")
+        total_label = limit if limit is not None else "24h"
+        print(f"\n📦 Final batch: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
         on_batch_complete(batch_posts, len(all_posts), limit)
 
     return all_posts
