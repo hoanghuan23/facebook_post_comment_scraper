@@ -1,0 +1,447 @@
+import hashlib
+import json
+import os
+import sqlite3
+import threading
+from datetime import datetime, timezone
+from urllib.parse import urlparse
+
+
+DB_PATH = os.getenv("UI_DATABASE_PATH", os.path.join("data", "facebook_scraper.db"))
+_DB_LOCK = threading.Lock()
+
+
+def _utc_now():
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=" ")
+
+
+def _parse_datetime(value, fallback=None):
+    if not value:
+        return fallback or _utc_now()
+
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed.isoformat(sep=" ")
+    except Exception:
+        return fallback or _utc_now()
+
+
+def _to_int(value, default=0):
+    try:
+        return int(value or default)
+    except Exception:
+        return default
+
+
+def _connect():
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    return conn
+
+
+def _ensure_minimal_schema(conn):
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username VARCHAR(50) NOT NULL UNIQUE,
+            email VARCHAR(100) NOT NULL UNIQUE,
+            password_hash VARCHAR(255) NOT NULL,
+            fb_cookies TEXT,
+            fb_dtsg VARCHAR(255),
+            fb_user_agent VARCHAR(500),
+            is_active BOOLEAN DEFAULT 1,
+            is_admin BOOLEAN DEFAULT 0,
+            created_at DATETIME,
+            last_login DATETIME
+        );
+
+        CREATE TABLE IF NOT EXISTS sources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            source_type VARCHAR(5) NOT NULL,
+            facebook_id VARCHAR(50) NOT NULL,
+            facebook_url VARCHAR(255) NOT NULL,
+            source_name VARCHAR(255),
+            description TEXT,
+            cover_image_url VARCHAR(500),
+            member_count INTEGER,
+            follower_count INTEGER,
+            is_active BOOLEAN DEFAULT 1,
+            include_comments BOOLEAN DEFAULT 1,
+            include_replies BOOLEAN DEFAULT 1,
+            max_days_old INTEGER DEFAULT 30,
+            permission_status VARCHAR(11),
+            permission_message TEXT,
+            access_restrictions TEXT,
+            permission_checked_at DATETIME,
+            is_accessible BOOLEAN DEFAULT 1,
+            created_at DATETIME,
+            last_scraped DATETIME,
+            next_scrape DATETIME,
+            UNIQUE(user_id, facebook_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS posts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_id INTEGER NOT NULL REFERENCES sources(id),
+            facebook_post_id VARCHAR(100) NOT NULL UNIQUE,
+            facebook_url VARCHAR(500) NOT NULL,
+            content TEXT,
+            media_count INTEGER DEFAULT 0,
+            has_images BOOLEAN DEFAULT 0,
+            has_videos BOOLEAN DEFAULT 0,
+            posted_at DATETIME NOT NULL,
+            created_at DATETIME,
+            is_tracked BOOLEAN DEFAULT 1,
+            is_deleted BOOLEAN DEFAULT 0,
+            initial_likes INTEGER DEFAULT 0,
+            initial_shares INTEGER DEFAULT 0,
+            initial_comments INTEGER DEFAULT 0,
+            current_likes INTEGER DEFAULT 0,
+            current_shares INTEGER DEFAULT 0,
+            current_comments INTEGER DEFAULT 0,
+            current_views INTEGER,
+            last_metric_update DATETIME,
+            metrics_update_count INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS post_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id INTEGER NOT NULL REFERENCES posts(id),
+            likes_count INTEGER DEFAULT 0,
+            shares_count INTEGER DEFAULT 0,
+            comments_count INTEGER DEFAULT 0,
+            views_count INTEGER,
+            engagement_rate FLOAT,
+            comment_ratio FLOAT,
+            recorded_at DATETIME
+        );
+
+        CREATE TABLE IF NOT EXISTS comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id INTEGER NOT NULL REFERENCES posts(id),
+            facebook_comment_id VARCHAR(100) NOT NULL UNIQUE,
+            commenter_id VARCHAR(50),
+            commenter_name VARCHAR(255),
+            commenter_url VARCHAR(500),
+            comment_text TEXT,
+            likes_count INTEGER DEFAULT 0,
+            reply_count INTEGER DEFAULT 0,
+            created_at DATETIME,
+            last_updated DATETIME,
+            parent_comment_id VARCHAR(100),
+            depth_level INTEGER DEFAULT 0
+        );
+        """
+    )
+
+
+def _default_user_id(conn):
+    row = conn.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()
+    if row:
+        return row[0]
+
+    now = _utc_now()
+    cur = conn.execute(
+        """
+        INSERT INTO users (username, email, password_hash, is_active, is_admin, created_at)
+        VALUES (?, ?, ?, 1, 1, ?)
+        """,
+        ("desktop_ui", "desktop_ui@example.local", "desktop-ui-placeholder", now),
+    )
+    return cur.lastrowid
+
+
+def _source_identity(post_type, post_data):
+    source_type = "group" if post_type == "group_post" else "page" if post_type == "page_post" else "user"
+    name = post_data.get("group_name") or post_data.get("page_name") or post_data.get("author_name") or "Unknown"
+    url = post_data.get("source_url") or post_data.get("permalink") or ""
+    explicit_id = post_data.get("group_id") or post_data.get("source_id") or post_data.get("facebook_id")
+
+    if explicit_id:
+        facebook_id = str(explicit_id)
+    elif source_type == "group" and post_data.get("permalink"):
+        parsed = urlparse(post_data["permalink"])
+        parts = [part for part in parsed.path.split("/") if part]
+        facebook_id = parts[1] if len(parts) >= 2 and parts[0] == "groups" else name
+    else:
+        facebook_id = name
+
+    if not url and facebook_id:
+        if source_type == "group":
+            url = f"https://www.facebook.com/groups/{facebook_id}/"
+        else:
+            url = f"https://www.facebook.com/{facebook_id}"
+
+    return source_type, facebook_id[:50], url[:255], name
+
+
+def _upsert_source(conn, post_type, post_data):
+    user_id = _default_user_id(conn)
+    source_type, facebook_id, facebook_url, source_name = _source_identity(post_type, post_data)
+    now = _utc_now()
+
+    row = conn.execute(
+        "SELECT id FROM sources WHERE user_id = ? AND facebook_id = ?",
+        (user_id, facebook_id),
+    ).fetchone()
+
+    if row:
+        source_id = row[0]
+        conn.execute(
+            """
+            UPDATE sources
+            SET source_type = ?, facebook_url = ?, source_name = ?, is_active = 1,
+                is_accessible = 1, last_scraped = ?
+            WHERE id = ?
+            """,
+            (source_type, facebook_url, source_name, now, source_id),
+        )
+        return source_id
+
+    cur = conn.execute(
+        """
+        INSERT INTO sources (
+            user_id, source_type, facebook_id, facebook_url, source_name,
+            is_active, include_comments, include_replies, permission_status,
+            is_accessible, created_at, last_scraped
+        )
+        VALUES (?, ?, ?, ?, ?, 1, 1, 1, 'granted', 1, ?, ?)
+        """,
+        (user_id, source_type, facebook_id, facebook_url, source_name, now, now),
+    )
+    return cur.lastrowid
+
+
+def _upsert_post(conn, source_id, post_data):
+    post_id = str(post_data["post_id"])
+    permalink = post_data.get("permalink") or ""
+    content = post_data.get("message") or post_data.get("text") or ""
+    photos = post_data.get("photos") or []
+    videos = post_data.get("videos") or []
+    media_count = len(photos) + len(videos)
+    likes = _to_int(post_data.get("reaction_count"))
+    shares = _to_int(post_data.get("share_count"))
+    comments = _to_int(post_data.get("comment_count"))
+    posted_at = _parse_datetime(post_data.get("posted_at"))
+    now = _utc_now()
+
+    row = conn.execute(
+        "SELECT id, current_likes, current_shares, current_comments FROM posts WHERE facebook_post_id = ?",
+        (post_id,),
+    ).fetchone()
+
+    if row:
+        db_post_id = row[0]
+        metrics_changed = (row[1], row[2], row[3]) != (likes, shares, comments)
+        conn.execute(
+            """
+            UPDATE posts
+            SET source_id = ?, facebook_url = ?, content = ?, media_count = ?,
+                has_images = ?, has_videos = ?, posted_at = ?, is_tracked = 1,
+                is_deleted = 0, current_likes = ?, current_shares = ?,
+                current_comments = ?, last_metric_update = ?,
+                metrics_update_count = metrics_update_count + ?
+            WHERE id = ?
+            """,
+            (
+                source_id,
+                permalink,
+                content,
+                media_count,
+                bool(photos),
+                bool(videos),
+                posted_at,
+                likes,
+                shares,
+                comments,
+                now,
+                1 if metrics_changed else 0,
+                db_post_id,
+            ),
+        )
+        return db_post_id, metrics_changed
+
+    cur = conn.execute(
+        """
+        INSERT INTO posts (
+            source_id, facebook_post_id, facebook_url, content, media_count,
+            has_images, has_videos, posted_at, created_at, is_tracked, is_deleted,
+            initial_likes, initial_shares, initial_comments,
+            current_likes, current_shares, current_comments, last_metric_update,
+            metrics_update_count
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?, ?, ?, 1)
+        """,
+        (
+            source_id,
+            post_id,
+            permalink,
+            content,
+            media_count,
+            bool(photos),
+            bool(videos),
+            posted_at,
+            now,
+            likes,
+            shares,
+            comments,
+            likes,
+            shares,
+            comments,
+            now,
+        ),
+    )
+    return cur.lastrowid, True
+
+
+def _insert_metric_if_needed(conn, db_post_id, post_data, should_insert):
+    if not should_insert:
+        return
+
+    likes = _to_int(post_data.get("reaction_count"))
+    shares = _to_int(post_data.get("share_count"))
+    comments = _to_int(post_data.get("comment_count"))
+    total = likes + shares + comments
+    comment_ratio = (comments / total) if total else None
+    conn.execute(
+        """
+        INSERT INTO post_metrics (
+            post_id, likes_count, shares_count, comments_count,
+            engagement_rate, comment_ratio, recorded_at
+        )
+        VALUES (?, ?, ?, ?, NULL, ?, ?)
+        """,
+        (db_post_id, likes, shares, comments, comment_ratio, _utc_now()),
+    )
+
+
+def _comment_key(post_id, depth, index_path, text):
+    raw = f"{post_id}|{depth}|{index_path}|{text or ''}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def _upsert_comments(conn, db_post_id, facebook_post_id, comments_data):
+    saved = 0
+    now = _utc_now()
+
+    for idx, comment in enumerate(comments_data or [], 1):
+        if not isinstance(comment, dict):
+            continue
+
+        text = comment.get("text") or ""
+        comment_id = (
+            comment.get("comment_id")
+            or comment.get("facebook_comment_id")
+            or _comment_key(facebook_post_id, 0, str(idx), text)
+        )
+        replies = comment.get("replies") or []
+
+        conn.execute(
+            """
+            INSERT INTO comments (
+                post_id, facebook_comment_id, commenter_id, commenter_name,
+                commenter_url, comment_text, likes_count, reply_count,
+                created_at, last_updated, parent_comment_id, depth_level
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0)
+            ON CONFLICT(facebook_comment_id) DO UPDATE SET
+                post_id = excluded.post_id,
+                comment_text = excluded.comment_text,
+                likes_count = excluded.likes_count,
+                reply_count = excluded.reply_count,
+                last_updated = excluded.last_updated,
+                depth_level = 0
+            """,
+            (
+                db_post_id,
+                str(comment_id),
+                comment.get("author_id"),
+                comment.get("author_name"),
+                comment.get("author_url"),
+                text,
+                _to_int(comment.get("reaction_count")),
+                len(replies),
+                now,
+                now,
+            ),
+        )
+        saved += 1
+
+        for reply_idx, reply in enumerate(replies, 1):
+            if not isinstance(reply, dict):
+                continue
+
+            reply_text = reply.get("text") or ""
+            reply_id = (
+                reply.get("comment_id")
+                or reply.get("facebook_comment_id")
+                or _comment_key(facebook_post_id, 1, f"{idx}.{reply_idx}", reply_text)
+            )
+
+            conn.execute(
+                """
+                INSERT INTO comments (
+                    post_id, facebook_comment_id, commenter_id, commenter_name,
+                    commenter_url, comment_text, likes_count, reply_count,
+                    created_at, last_updated, parent_comment_id, depth_level
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 1)
+                ON CONFLICT(facebook_comment_id) DO UPDATE SET
+                    post_id = excluded.post_id,
+                    comment_text = excluded.comment_text,
+                    likes_count = excluded.likes_count,
+                    last_updated = excluded.last_updated,
+                    parent_comment_id = excluded.parent_comment_id,
+                    depth_level = 1
+                """,
+                (
+                    db_post_id,
+                    str(reply_id),
+                    reply.get("author_id"),
+                    reply.get("author_name"),
+                    reply.get("author_url"),
+                    reply_text,
+                    _to_int(reply.get("reaction_count")),
+                    now,
+                    now,
+                    str(comment_id),
+                ),
+            )
+            saved += 1
+
+    return saved
+
+
+def save_scraped_post_to_db(post_type, post_data, comments_data):
+    """Persist one scraped post JSON payload to the backend SQLite database."""
+    if post_type not in {"group_post", "page_post", "user_post"}:
+        return None
+    if not isinstance(post_data, dict) or not post_data.get("post_id"):
+        return None
+
+    with _DB_LOCK:
+        conn = _connect()
+        try:
+            _ensure_minimal_schema(conn)
+            source_id = _upsert_source(conn, post_type, post_data)
+            db_post_id, insert_metric = _upsert_post(conn, source_id, post_data)
+            _insert_metric_if_needed(conn, db_post_id, post_data, insert_metric)
+            comments_saved = _upsert_comments(conn, db_post_id, str(post_data["post_id"]), comments_data)
+            conn.commit()
+            return {
+                "db_path": DB_PATH,
+                "source_id": source_id,
+                "post_id": db_post_id,
+                "comments_saved": comments_saved,
+            }
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()

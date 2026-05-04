@@ -17,6 +17,7 @@ from comment_scraper import fetch_comments, fetch_replies, fb_json, GRAPHQL, PRO
 from post_scraper import fetch_posts as fetch_page_posts, extract_media as extract_page_media, parse_fb_response as parse_page_response
 from group_post_scraper_v2 import fetch_posts as fetch_group_posts
 from single_post_image import fetch_all_images
+from db_persistence import save_scraped_post_to_db
 
 
 def extract_user_id_from_url(url, cookies=None):
@@ -205,19 +206,29 @@ def convert_post_id_to_feedback_id(post_id):
     return feedback_id
 
 
-def fetch_comments_for_post(post_id, cookies=None):
+def fetch_comments_for_post(post_id, cookies=None, fb_dtsg=None, proxies=None):
     """Fetch all comments and replies for a given post_id"""
     feedback_id = convert_post_id_to_feedback_id(post_id)
     print(f"  Fetching comments for post {post_id}...")
     print(f"  Using feedback_id: {feedback_id}")
     
     all_data = []
-    comments, post_info = fetch_comments(feedback_id, cookies=cookies)
+    comments, post_info = fetch_comments(
+        feedback_id,
+        cookies=cookies,
+        fb_dtsg=fb_dtsg,
+        proxies=proxies,
+    )
     
     for c in comments:
         print(f"    🗨️ {c.get('text', '')[:50]}...")
         try:
-            c["replies"] = fetch_replies(c, cookies=cookies)
+            c["replies"] = fetch_replies(
+                c,
+                cookies=cookies,
+                fb_dtsg=fb_dtsg,
+                proxies=proxies,
+            )
         except Exception as e:
             print(f"    ⚠️ Error fetching replies for comment {c.get('comment_id')}: {e}")
             c["replies"] = []
@@ -227,17 +238,16 @@ def fetch_comments_for_post(post_id, cookies=None):
         
         # Remove internal fields before appending
         c_clean = {k: v for k, v in c.items() if not k.startswith('_')}
-        c_clean.pop("comment_id", None)
-        c_clean.pop("author_name", None)
-        c_clean.pop("author_url", None)
-        c_clean.pop("author_id", None)
-        c_clean.pop("reply_count", None)
 
         cleaned_replies = []
         for reply in c_clean.get("replies", []):
             if not isinstance(reply, dict):
                 continue
             cleaned_replies.append({
+                "comment_id": reply.get("comment_id"),
+                "author_name": reply.get("author_name"),
+                "author_url": reply.get("author_url"),
+                "author_id": reply.get("author_id"),
                 "text": reply.get("text", ""),
                 "reaction_count": str(reply.get("reaction_count", "0"))
             })
@@ -288,6 +298,12 @@ def save_post_data(post_type, post_id, post_data, comments_data):
     output_file = os.path.join(folder_path, f"{post_id}.json")
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(combined_data, f, ensure_ascii=False, indent=2)
+    try:
+        db_result = save_scraped_post_to_db(post_type, post_data, comments_data)
+        if db_result:
+            print(f"  Saved to DB: {db_result['db_path']} (post_id={db_result['post_id']})")
+    except Exception as e:
+        print(f"  Failed to save DB: {e}")
     print(f"  💾 Saved to {output_file}")
 
 

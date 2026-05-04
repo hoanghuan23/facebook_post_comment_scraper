@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     API_BASE_URL: str = "http://localhost:8000"
     
     # Database
-    DATABASE_URL: str = "sqlite:///./data/social_scraper.db"
+    DATABASE_URL: str = "sqlite:///./data/facebook_scraper.db"
     # For PostgreSQL:
     # DATABASE_URL: str = "postgresql://user:password@localhost:5432/facebook_scraper"
     
@@ -106,7 +106,7 @@ class DevelopmentSettings(Settings):
     DEBUG: bool = True
     LOG_LEVEL: str = "DEBUG"
     # Use SQLite for development
-    DATABASE_URL: str = "sqlite:///./data/social_scraper.db"
+    DATABASE_URL: str = "sqlite:///./data/facebook_scraper.db"
 
 
 class ProductionSettings(Settings):

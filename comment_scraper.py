@@ -75,7 +75,7 @@ def retry_request(url, headers, data, proxies, cookies=None, max_retries=5):
 
 # ===== PAYLOADS =====
 
-def comments_payload(feedback_id, cursor=None, cookies=None):
+def comments_payload(feedback_id, cursor=None, cookies=None, fb_dtsg=None):
     # Extract user ID from cookies if available
     user_id = "0"
     if cookies and "c_user" in cookies:
@@ -85,7 +85,7 @@ def comments_payload(feedback_id, cursor=None, cookies=None):
         "av": user_id,
         "__user": user_id,
         "__a": "1",
-        "fb_dtsg": FB_DTSG if FB_DTSG else "",
+        "fb_dtsg": fb_dtsg if fb_dtsg else (FB_DTSG if FB_DTSG else ""),
         "doc_id": "25550760954572974",
         "variables": json.dumps({
             "commentsAfterCount": -1,
@@ -100,7 +100,7 @@ def comments_payload(feedback_id, cursor=None, cookies=None):
     }
 
 
-def replies_payload(comment_feedback_id, expansion_token, cookies=None):
+def replies_payload(comment_feedback_id, expansion_token, cookies=None, fb_dtsg=None):
     # Extract user ID from cookies if available
     user_id = "0"
     if cookies and "c_user" in cookies:
@@ -110,7 +110,7 @@ def replies_payload(comment_feedback_id, expansion_token, cookies=None):
         "av": user_id,
         "__user": user_id,
         "__a": "1",
-        "fb_dtsg": FB_DTSG if FB_DTSG else "",
+        "fb_dtsg": fb_dtsg if fb_dtsg else (FB_DTSG if FB_DTSG else ""),
         "doc_id": "26570577339199586",
         "variables": json.dumps({
             "clientKey": None,
@@ -147,10 +147,11 @@ def fb_json(response_text):
     return json.loads(first)
 
 
-def fetch_comments(feedback_id, cookies=None):
+def fetch_comments(feedback_id, cookies=None, fb_dtsg=None, proxies=None):
     results = []
     cursor = None
     response_count = 0
+    request_proxies = PROXIES if proxies is None else proxies
 
     def extract_post_reaction_count(feedback):
         """Extract post reaction count from feedback object across schemas."""
@@ -304,8 +305,8 @@ def fetch_comments(feedback_id, cookies=None):
         r = retry_request(
             GRAPHQL,
             headers,
-            comments_payload(feedback_id, cursor, cookies),
-            PROXIES,
+            comments_payload(feedback_id, cursor, cookies, fb_dtsg=fb_dtsg),
+            request_proxies,
             cookies=cookies
         )
         j = fb_json(r.text)
@@ -404,16 +405,17 @@ def fetch_comments(feedback_id, cookies=None):
 
 # ===== FETCH REPLIES =====
 
-def fetch_replies(comment, cookies=None):
+def fetch_replies(comment, cookies=None, fb_dtsg=None, proxies=None):
     if not comment.get("_feedback_id") or not comment.get("_expansion_token"):
         return []
 
     headers = {**BASE_HEADERS, "x-fb-friendly-name": "Depth1CommentsListPaginationQuery"}
+    request_proxies = PROXIES if proxies is None else proxies
     r = retry_request(
         GRAPHQL,
         headers,
-        replies_payload(comment["_feedback_id"], comment["_expansion_token"], cookies),
-        PROXIES,
+        replies_payload(comment["_feedback_id"], comment["_expansion_token"], cookies, fb_dtsg=fb_dtsg),
+        request_proxies,
         cookies=cookies
     )
 

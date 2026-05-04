@@ -4,6 +4,7 @@ import json
 import time
 import re
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import parse_qs
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, 
@@ -365,6 +366,7 @@ class ScraperThread(QThread):
         self.params = params
         self.cookies = cookies  # Cookie dictionary
         self.fb_dtsg = fb_dtsg  # FB_DTSG token
+        self.proxies = None
     
     def log(self, message):
         """Emit log message"""
@@ -387,6 +389,8 @@ class ScraperThread(QThread):
                 self.log(f"🔄 Proxy: ROTATING — {proxy_url}")
         else:
             self.log("⚠️  No proxy configured")
+
+        self.proxies = proxies
 
         # Push to all scraper modules
         comment_scraper.PROXIES     = proxies
@@ -577,7 +581,7 @@ class ScraperThread(QThread):
         
         self.finished_signal.emit(True, f"Successfully scraped {all_posts_count} posts from {total_pages} page(s)")
     
-    def scrape_group_posts(self):
+    def _scrape_group_posts_sequential(self):
         """Scrape posts from one or more groups"""
         urls = self.params['urls']  # List of URLs
         count = self.params.get('count')
@@ -662,6 +666,114 @@ class ScraperThread(QThread):
                 continue
         
         self.finished_signal.emit(True, f"Successfully scraped {all_posts_count} posts from {total_groups} group(s)")
+
+    def scrape_group_posts(self):
+        """Scrape posts from one or more groups with a bounded worker pool."""
+        urls = self.params["urls"]
+        count = self.params.get("count")
+        last_24_hours_only = self.params.get("last_24_hours_only", False)
+        max_workers = max(1, min(int(self.params.get("max_workers", 3) or 3), 10))
+        min_comments = self.params.get("min_comments", 0)
+        batch_size = 2
+
+        total_groups = len(urls)
+        all_posts_count = 0
+        success_count = 0
+        error_count = 0
+
+        self.log(f"Running {total_groups} group(s) with {max_workers} worker(s)")
+
+        def process_group(group_num, url, worker_num):
+            prefix = f"[Worker {worker_num}] [Group {group_num}/{total_groups}]"
+            self.log(f"\n{prefix} Processing URL: {url}")
+            self.log(f"{prefix} Extracting group ID...")
+
+            try:
+                group_id = extract_group_id_from_url(url, cookies=self.cookies)
+            except Exception as e:
+                self.log(f"{prefix} Error extracting group ID: {e}")
+                return {"ok": False, "posts": 0, "error": str(e)}
+
+            if not group_id:
+                self.log(f"{prefix} Could not extract group ID from URL")
+                return {"ok": False, "posts": 0, "error": "Could not extract group ID"}
+
+            self.log(f"{prefix} Extracted Group ID: {group_id}")
+
+            def process_batch(batch_posts, total_so_far, total_limit):
+                total_label = total_limit if total_limit is not None else "24h"
+                self.log(f"{prefix} Processing batch of {len(batch_posts)} posts ({total_so_far}/{total_label})...")
+
+                for i, post in enumerate(batch_posts, 1):
+                    post_id = post.get("post_id")
+                    if not post_id:
+                        self.log(f"{prefix} [{i}/{len(batch_posts)}] Skipping post with no ID")
+                        continue
+
+                    self.log(f"{prefix} [{i}/{len(batch_posts)}] Processing post {post_id}...")
+
+                    try:
+                        comments, _ = fetch_comments_for_post(
+                            post_id,
+                            cookies=self.cookies,
+                            fb_dtsg=self.fb_dtsg,
+                            proxies=self.proxies,
+                        )
+                        save_post_data("group_post", post_id, post, comments)
+                        self.log(f"{prefix} Saved post {post_id}")
+                        time.sleep(1)
+                    except Exception as e:
+                        self.log(f"{prefix} Error fetching comments for {post_id}: {e}")
+                        save_post_data("group_post", post_id, post, [])
+
+            try:
+                fetch_label = "posts from last 24 hours" if last_24_hours_only else f"{count} posts"
+                self.log(f"{prefix} Fetching {fetch_label} from group {group_id} (batch size: {batch_size})...")
+                posts = fetch_group_posts(
+                    count,
+                    min_comments,
+                    batch_size=batch_size,
+                    on_batch_complete=process_batch,
+                    last_24_hours_only=last_24_hours_only,
+                    group_id=group_id,
+                    group_name=None,
+                    cookies=self.cookies or {},
+                    fb_dtsg=self.fb_dtsg or "",
+                    proxies=self.proxies,
+                )
+                self.log(f"{prefix} Completed: {len(posts)} posts processed")
+                return {"ok": True, "posts": len(posts), "error": None}
+            except Exception as e:
+                self.log(f"{prefix} Error processing group: {e}")
+                return {"ok": False, "posts": 0, "error": str(e)}
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = []
+            for group_num, url in enumerate(urls, 1):
+                worker_num = ((group_num - 1) % max_workers) + 1
+                futures.append(executor.submit(process_group, group_num, url, worker_num))
+
+            completed_groups = 0
+            for future in as_completed(futures):
+                completed_groups += 1
+                try:
+                    result = future.result()
+                except Exception as e:
+                    result = {"ok": False, "posts": 0, "error": str(e)}
+                    self.log(f"Worker failed unexpectedly: {e}")
+
+                if result["ok"]:
+                    success_count += 1
+                    all_posts_count += result["posts"]
+                else:
+                    error_count += 1
+                self.progress_signal.emit(completed_groups, total_groups)
+
+        success = success_count > 0 or total_groups == 0
+        self.finished_signal.emit(
+            success,
+            f"Scraped {all_posts_count} posts from {success_count}/{total_groups} group(s); errors: {error_count}",
+        )
 
 
 class FacebookScraperUI(QMainWindow):
@@ -915,6 +1027,18 @@ class FacebookScraperUI(QMainWindow):
         comment_layout.addWidget(self.group_min_comments)
         comment_layout.addStretch()
         input_layout.addLayout(comment_layout)
+
+        worker_layout = QHBoxLayout()
+        worker_layout.addWidget(QLabel("Workers:"))
+        self.group_max_workers = QSpinBox()
+        self.group_max_workers.setMinimum(1)
+        self.group_max_workers.setMaximum(10)
+        self.group_max_workers.setValue(3)
+        self.group_max_workers.setMinimumWidth(150)
+        self.group_max_workers.setToolTip("Maximum number of groups to scrape in parallel.")
+        worker_layout.addWidget(self.group_max_workers)
+        worker_layout.addStretch()
+        input_layout.addLayout(worker_layout)
         
         layout.addWidget(input_group)
         
@@ -983,6 +1107,7 @@ class FacebookScraperUI(QMainWindow):
         last_24_hours_only = self.group_time_filter_check.isChecked()
         count = None if last_24_hours_only else 10
         min_comments = self.group_min_comments.value()
+        max_workers = self.group_max_workers.value()
         
         if not urls_text:
             self.show_error("Please enter group URLs")
@@ -998,8 +1123,14 @@ class FacebookScraperUI(QMainWindow):
         # Start scraping in background thread
         comment_filter_msg = f" with min {min_comments} comments" if min_comments > 0 else ""
         fetch_label = "posts from last 24 hours" if last_24_hours_only else f"{count} posts"
-        self.log(f"Starting group posts scraper for {len(urls)} group(s) (fetching {fetch_label} each{comment_filter_msg})...")
-        params = {'urls': urls, 'count': count, 'min_comments': min_comments, "last_24_hours_only": last_24_hours_only}
+        self.log(f"Starting group posts scraper for {len(urls)} group(s) with {max_workers} worker(s) (fetching {fetch_label} each{comment_filter_msg})...")
+        params = {
+            'urls': urls,
+            'count': count,
+            'min_comments': min_comments,
+            "last_24_hours_only": last_24_hours_only,
+            "max_workers": max_workers,
+        }
         self.start_scraping("group_posts", params)
     
     def start_scraping(self, scraper_type, params):

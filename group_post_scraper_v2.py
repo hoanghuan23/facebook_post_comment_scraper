@@ -79,14 +79,16 @@ def extract_group_name(node):
         return None
 
 # ========= RETRY HELPER =========
-def retry_request(url, headers, data, proxies, max_retries=5):
+def retry_request(url, headers, data, proxies, cookies=None, max_retries=5):
     """Make a POST request with retry logic"""
     global PROXIES
     from proxy_utils import rotate_static_proxy, is_proxy_infra_error, is_ip_blocked
 
+    request_cookies = COOKIES if cookies is None else cookies
+
     for attempt in range(1, max_retries + 1):
         try:
-            r = requests.post(url, headers=headers, data=data, proxies=proxies, cookies=COOKIES, timeout=30)
+            r = requests.post(url, headers=headers, data=data, proxies=proxies, cookies=request_cookies, timeout=30)
             # dữ liệu group trả về
             # with open(f"group_response_attempt_{attempt}.json", "w", encoding="utf-8") as f:
             #     f.write(r.text)
@@ -168,13 +170,26 @@ def download_image(url, post_id, image_index=1, save_dir="group_post"):
         return None
 
 
-def fetch_remaining_images(last_media_id, post_id, current_image_count, save_dir="group_post", seen_media_ids=None, seen_urls=None):
+def fetch_remaining_images(
+    last_media_id,
+    post_id,
+    current_image_count,
+    save_dir="group_post",
+    seen_media_ids=None,
+    seen_urls=None,
+    cookies=None,
+    fb_dtsg=None,
+    proxies=None,
+):
     """Fetch remaining images using media ID iteration (for posts with 5+ images)"""
     if not last_media_id or not post_id:
         return []
 
     seen_media_ids = set(seen_media_ids or [])
     seen_urls = set(seen_urls or [])
+    request_cookies = COOKIES if cookies is None else cookies
+    request_fb_dtsg = FB_DTSG if fb_dtsg is None else fb_dtsg
+    request_proxies = PROXIES if proxies is None else proxies
     
     print(f"  🔄 Fetching remaining images after image #{current_image_count}...")
     
@@ -209,16 +224,23 @@ def fetch_remaining_images(last_media_id, post_id, current_image_count, save_dir
         }
         
         payload = {
-            "av": COOKIES.get("c_user", "0"),
-            "__user": COOKIES.get("c_user", "0"),
+            "av": request_cookies.get("c_user", "0"),
+            "__user": request_cookies.get("c_user", "0"),
             "__a": "1",
-            "fb_dtsg": FB_DTSG if FB_DTSG else "",
+            "fb_dtsg": request_fb_dtsg if request_fb_dtsg else "",
             "doc_id": DOC_ID_PHOTO,
             "variables": json.dumps(variables)
         }
         
         try:
-            r = requests.post(GRAPHQL_URL, headers=HEADERS_PHOTO, data=payload, proxies=PROXIES, cookies=COOKIES, timeout=30)
+            r = requests.post(
+                GRAPHQL_URL,
+                headers=HEADERS_PHOTO,
+                data=payload,
+                proxies=request_proxies,
+                cookies=request_cookies,
+                timeout=30,
+            )
             if r.status_code != 200:
                 break
             
@@ -345,7 +367,7 @@ def sanitize_group_folder_name(group_name):
     return "Unknown"
 
 
-def extract_media(node, post_id, save_dir="group_post"):
+def extract_media(node, post_id, save_dir="group_post", cookies=None, fb_dtsg=None, proxies=None):
     """Extract photo and video URLs from a post"""
     media = {
         'photos': [],
@@ -448,6 +470,9 @@ def extract_media(node, post_id, save_dir="group_post"):
             save_dir,
             seen_media_ids=seen_photo_ids,
             seen_urls=seen_photo_urls,
+            cookies=cookies,
+            fb_dtsg=fb_dtsg,
+            proxies=proxies,
         )
         media['photos'].extend(remaining_photos)
     
@@ -463,7 +488,7 @@ def post_already_exists(post_id, base_folder, name_folder):
     return os.path.exists(post_file)
 
 
-def extract_post_data(node, group_name=None):
+def extract_post_data(node, group_name=None, cookies=None, fb_dtsg=None, proxies=None):
     """Extract relevant data from a post node"""
     if not node or node.get('__typename') != 'Story':
         return None
@@ -502,7 +527,14 @@ def extract_post_data(node, group_name=None):
     # Prepare save directory for media
     media_save_dir = os.path.join("group_post", name_folder)
     
-    extracted_media = extract_media(node, post_id, media_save_dir)
+    extracted_media = extract_media(
+        node,
+        post_id,
+        media_save_dir,
+        cookies=cookies,
+        fb_dtsg=fb_dtsg,
+        proxies=proxies,
+    )
 
     post_data = {
         'id': node.get('id'),
@@ -549,7 +581,19 @@ def _parse_iso_datetime(value):
         return None
 
 
-def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None, last_24_hours_only=False):
+def fetch_posts(
+    limit=10,
+    min_comments=0,
+    batch_size=10,
+    on_batch_complete=None,
+    last_24_hours_only=False,
+    group_id=None,
+    group_name=None,
+    cookies=None,
+    fb_dtsg=None,
+    headers=None,
+    proxies=None,
+):
     """Fetch posts from Facebook group
     
     Args:
@@ -558,8 +602,19 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
         batch_size: Number of posts to fetch before calling on_batch_complete callback
         on_batch_complete: Optional callback function(batch_posts, total_so_far, limit) called after each batch
         last_24_hours_only: Only include posts whose posted_at is within the last 24 hours.
+        group_id/group_name/cookies/fb_dtsg/headers/proxies: Optional per-run context.
+            When omitted, module globals are used for backwards compatibility.
     """
     global GROUP_NAME
+    use_global_group_name = group_id is None and group_name is None
+    request_group_id = group_id or GROUP_ID
+    request_group_name = GROUP_NAME if group_name is None else group_name
+    request_cookies = COOKIES if cookies is None else cookies
+    request_fb_dtsg = FB_DTSG if fb_dtsg is None else fb_dtsg
+    request_proxies = PROXIES if proxies is None else proxies
+    request_headers = dict(HEADERS if headers is None else headers)
+    request_headers["referer"] = f"https://www.facebook.com/groups/{request_group_id}/"
+
     all_posts = []
     batch_posts = []
     cursor = None
@@ -598,14 +653,14 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
             #"sortingSetting": "TOP_POSTS",
             "stream_initial_count": 1,
             "useDefaultActor": False,
-            "id": GROUP_ID,
+            "id": request_group_id,
         }
         
         payload = {
-            "av": COOKIES.get("c_user", "0"),
-            "__user": COOKIES.get("c_user", "0"),
+            "av": request_cookies.get("c_user", "0"),
+            "__user": request_cookies.get("c_user", "0"),
             "__a": "1",
-            "fb_dtsg": FB_DTSG if FB_DTSG else "",
+            "fb_dtsg": request_fb_dtsg if request_fb_dtsg else "",
             "doc_id": DOC_ID,
             "variables": json.dumps(variables),
         }
@@ -617,7 +672,13 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
         
         while empty_retry_count < max_empty_retries:
             try:
-                r = retry_request(GRAPHQL_URL, HEADERS, payload, PROXIES)
+                r = retry_request(
+                    GRAPHQL_URL,
+                    request_headers,
+                    payload,
+                    request_proxies,
+                    cookies=request_cookies,
+                )
                 r.raise_for_status()
             except requests.RequestException as e:
                 print(f"Request failed: {e}")
@@ -699,21 +760,30 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
                     continue
                 
                 # Extract group name from first post if not set
-                if not GROUP_NAME:
-                    GROUP_NAME = extract_group_name(story_node)
-                    if GROUP_NAME:
-                        print(f"📂 Group name: {GROUP_NAME}")
+                if not request_group_name:
+                    request_group_name = extract_group_name(story_node)
+                    if use_global_group_name:
+                        GROUP_NAME = request_group_name
+                    if request_group_name:
+                        print(f"📂 Group name: {request_group_name}")
                 
                 # Check if post already exists
-                temp_group_name = GROUP_NAME or extract_group_name(story_node)
+                temp_group_name = request_group_name or extract_group_name(story_node)
                 if temp_group_name:
                     temp_name_folder = sanitize_group_folder_name(temp_group_name)
                     if post_already_exists(temp_post_id, "group_post", temp_name_folder):
                         print(f"  ⏭️  Skipping already scraped post: {temp_post_id}")
                         continue
                 
-                post_data = extract_post_data(story_node, GROUP_NAME)
+                post_data = extract_post_data(
+                    story_node,
+                    request_group_name,
+                    cookies=request_cookies,
+                    fb_dtsg=request_fb_dtsg,
+                    proxies=request_proxies,
+                )
                 if post_data:
+                    post_data["group_id"] = request_group_id
                     batch_posts.append(post_data)
                     all_posts.append(post_data)
                     posts_found += 1
