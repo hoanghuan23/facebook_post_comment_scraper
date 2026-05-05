@@ -144,6 +144,7 @@ class FacebookScraperService:
                 depth_level=0,
             )
             saved_count += 1
+            parent_comment = CommentCRUD.get_by_facebook_id(db, str(comment_id))
 
             if not source.include_replies:
                 continue
@@ -165,7 +166,7 @@ class FacebookScraperService:
                     commenter_url=reply.get("author_url"),
                     likes_count=int(reply.get("reaction_count") or 0),
                     reply_count=0,
-                    parent_comment_id=str(comment_id),
+                    parent_id=parent_comment.id if parent_comment else None,
                     depth_level=1,
                 )
                 saved_count += 1
@@ -174,14 +175,6 @@ class FacebookScraperService:
 
     @staticmethod
     def _save_metric_snapshot_if_changed(db: Session, db_post, normalized_post: Dict[str, Any]) -> bool:
-        changed = (
-            db_post.current_likes != normalized_post["likes_count"]
-            or db_post.current_shares != normalized_post["shares_count"]
-            or db_post.current_comments != normalized_post["comments_count"]
-        )
-        if not changed:
-            return False
-
         PostCRUD.update_metrics(
             db=db,
             post_id=db_post.id,
@@ -236,6 +229,9 @@ class FacebookScraperService:
                 cls._sync_post_comments(db, source, db_post)
             else:
                 updated_posts += 1
+                cls._save_metric_snapshot_if_changed(db, db_post, normalized_post)
+                if source.include_comments:
+                    cls._sync_post_comments(db, source, db_post)
 
             if raw_post.get("group_name"):
                 detected_source_name = raw_post["group_name"]
@@ -305,6 +301,9 @@ class FacebookScraperService:
                 cls._sync_post_comments(db, source, db_post)
             else:
                 updated_posts += 1
+                cls._save_metric_snapshot_if_changed(db, db_post, normalized_post)
+                if source.include_comments:
+                    cls._sync_post_comments(db, source, db_post)
 
             if raw_post.get("page_name"):
                 detected_source_name = raw_post["page_name"]

@@ -254,12 +254,7 @@ class PostCRUD:
             media_count=kwargs.get('media_count', 0),
             has_images=kwargs.get('has_images', False),
             has_videos=kwargs.get('has_videos', False),
-            initial_likes=kwargs.get('likes_count', 0),
-            initial_shares=kwargs.get('shares_count', 0),
-            initial_comments=kwargs.get('comments_count', 0),
-            current_likes=kwargs.get('likes_count', 0),
-            current_shares=kwargs.get('shares_count', 0),
-            current_comments=kwargs.get('comments_count', 0),
+            last_metric_update=kwargs.get('last_metric_update'),
         )
         db.add(db_post)
         db.commit()
@@ -339,15 +334,7 @@ class PostCRUD:
         post = db.query(models.Post).filter(models.Post.id == post_id).first()
         if not post:
             return None
-        
-        post.current_likes = likes
-        post.current_shares = shares
-        post.current_comments = comments
-        if views is not None:
-            post.current_views = views
-        
         post.last_metric_update = datetime.utcnow()
-        post.metrics_update_count += 1
         
         db.commit()
         db.refresh(post)
@@ -447,19 +434,12 @@ class PostMetricCRUD:
     def create(db: Session, post_id: int, likes: int, shares: int, comments: int,
                views: int = None) -> models.PostMetric:
         """Create a metric snapshot"""
-        # Calculate engagement metrics
-        total_engagement = likes + shares + comments
-        engagement_rate = (total_engagement / views * 100) if views and views > 0 else None
-        comment_ratio = (comments / total_engagement) if total_engagement > 0 else None
-        
         db_metric = models.PostMetric(
             post_id=post_id,
             likes_count=likes,
             shares_count=shares,
             comments_count=comments,
             views_count=views,
-            engagement_rate=engagement_rate,
-            comment_ratio=comment_ratio,
         )
         db.add(db_metric)
         db.commit()
@@ -535,7 +515,7 @@ class CommentCRUD:
             commenter_url=kwargs.get('commenter_url'),
             likes_count=kwargs.get('likes_count', 0),
             reply_count=kwargs.get('reply_count', 0),
-            parent_comment_id=kwargs.get('parent_comment_id'),
+            parent_id=kwargs.get('parent_id'),
             depth_level=kwargs.get('depth_level', 0),
         )
         db.add(db_comment)
@@ -568,7 +548,7 @@ class CommentCRUD:
             existing_comment.commenter_url = kwargs.get('commenter_url')
             existing_comment.likes_count = kwargs.get('likes_count', existing_comment.likes_count)
             existing_comment.reply_count = kwargs.get('reply_count', existing_comment.reply_count)
-            existing_comment.parent_comment_id = kwargs.get('parent_comment_id')
+            existing_comment.parent_id = kwargs.get('parent_id')
             existing_comment.depth_level = kwargs.get('depth_level', existing_comment.depth_level)
             existing_comment.last_updated = datetime.utcnow()
             db.commit()
@@ -597,8 +577,11 @@ class CommentCRUD:
     @staticmethod
     def get_replies(db: Session, parent_comment_id: str) -> List[models.Comment]:
         """Get replies to a comment"""
+        parent_comment = CommentCRUD.get_by_facebook_id(db, parent_comment_id)
+        if not parent_comment:
+            return []
         return db.query(models.Comment).filter(
-            models.Comment.parent_comment_id == parent_comment_id
+            models.Comment.parent_id == parent_comment.id
         ).order_by(models.Comment.created_at).all()
     
     @staticmethod

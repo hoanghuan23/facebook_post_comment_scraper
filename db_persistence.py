@@ -98,16 +98,9 @@ def _ensure_minimal_schema(conn):
             posted_at DATETIME NOT NULL,
             created_at DATETIME,
             is_tracked BOOLEAN DEFAULT 1,
+            tracking_until DATETIME,
             is_deleted BOOLEAN DEFAULT 0,
-            initial_likes INTEGER DEFAULT 0,
-            initial_shares INTEGER DEFAULT 0,
-            initial_comments INTEGER DEFAULT 0,
-            current_likes INTEGER DEFAULT 0,
-            current_shares INTEGER DEFAULT 0,
-            current_comments INTEGER DEFAULT 0,
-            current_views INTEGER,
-            last_metric_update DATETIME,
-            metrics_update_count INTEGER DEFAULT 0
+            last_metric_update DATETIME
         );
 
         CREATE TABLE IF NOT EXISTS post_metrics (
@@ -117,14 +110,13 @@ def _ensure_minimal_schema(conn):
             shares_count INTEGER DEFAULT 0,
             comments_count INTEGER DEFAULT 0,
             views_count INTEGER,
-            engagement_rate FLOAT,
-            comment_ratio FLOAT,
             recorded_at DATETIME
         );
 
         CREATE TABLE IF NOT EXISTS comments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             post_id INTEGER NOT NULL REFERENCES posts(id),
+            parent_id INTEGER REFERENCES comments(id),
             facebook_comment_id VARCHAR(100) NOT NULL UNIQUE,
             commenter_id VARCHAR(50),
             commenter_name VARCHAR(255),
@@ -134,7 +126,6 @@ def _ensure_minimal_schema(conn):
             reply_count INTEGER DEFAULT 0,
             created_at DATETIME,
             last_updated DATETIME,
-            parent_comment_id VARCHAR(100),
             depth_level INTEGER DEFAULT 0
         );
         """
@@ -160,7 +151,9 @@ def _default_user_id(conn):
 def _source_identity(post_type, post_data):
     source_type = "group" if post_type == "group_post" else "page" if post_type == "page_post" else "user"
     name = post_data.get("group_name") or post_data.get("page_name") or post_data.get("author_name") or "Unknown"
-    url = post_data.get("source_url") or post_data.get("permalink") or ""
+    url = (
+        post_data.get("group_link") if source_type == "group" else ""
+    ) or post_data.get("source_url") or post_data.get("permalink") or ""
     explicit_id = post_data.get("group_id") or post_data.get("source_id") or post_data.get("facebook_id")
 
     if explicit_id:
@@ -225,28 +218,22 @@ def _upsert_post(conn, source_id, post_data):
     photos = post_data.get("photos") or []
     videos = post_data.get("videos") or []
     media_count = len(photos) + len(videos)
-    likes = _to_int(post_data.get("reaction_count"))
-    shares = _to_int(post_data.get("share_count"))
-    comments = _to_int(post_data.get("comment_count"))
     posted_at = _parse_datetime(post_data.get("posted_at"))
     now = _utc_now()
 
     row = conn.execute(
-        "SELECT id, current_likes, current_shares, current_comments FROM posts WHERE facebook_post_id = ?",
+        "SELECT id FROM posts WHERE facebook_post_id = ?",
         (post_id,),
     ).fetchone()
 
     if row:
         db_post_id = row[0]
-        metrics_changed = (row[1], row[2], row[3]) != (likes, shares, comments)
         conn.execute(
             """
             UPDATE posts
             SET source_id = ?, facebook_url = ?, content = ?, media_count = ?,
                 has_images = ?, has_videos = ?, posted_at = ?, is_tracked = 1,
-                is_deleted = 0, current_likes = ?, current_shares = ?,
-                current_comments = ?, last_metric_update = ?,
-                metrics_update_count = metrics_update_count + ?
+                is_deleted = 0, last_metric_update = ?
             WHERE id = ?
             """,
             (
@@ -257,26 +244,20 @@ def _upsert_post(conn, source_id, post_data):
                 bool(photos),
                 bool(videos),
                 posted_at,
-                likes,
-                shares,
-                comments,
                 now,
-                1 if metrics_changed else 0,
                 db_post_id,
             ),
         )
-        return db_post_id, metrics_changed
+        return db_post_id, True
 
     cur = conn.execute(
         """
         INSERT INTO posts (
             source_id, facebook_post_id, facebook_url, content, media_count,
             has_images, has_videos, posted_at, created_at, is_tracked, is_deleted,
-            initial_likes, initial_shares, initial_comments,
-            current_likes, current_shares, current_comments, last_metric_update,
-            metrics_update_count
+            last_metric_update
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?, ?, ?, 1)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?)
         """,
         (
             source_id,
@@ -288,12 +269,6 @@ def _upsert_post(conn, source_id, post_data):
             bool(videos),
             posted_at,
             now,
-            likes,
-            shares,
-            comments,
-            likes,
-            shares,
-            comments,
             now,
         ),
     )
@@ -301,23 +276,15 @@ def _upsert_post(conn, source_id, post_data):
 
 
 def _insert_metric_if_needed(conn, db_post_id, post_data, should_insert):
-    if not should_insert:
-        return
-
     likes = _to_int(post_data.get("reaction_count"))
     shares = _to_int(post_data.get("share_count"))
     comments = _to_int(post_data.get("comment_count"))
-    total = likes + shares + comments
-    comment_ratio = (comments / total) if total else None
     conn.execute(
         """
-        INSERT INTO post_metrics (
-            post_id, likes_count, shares_count, comments_count,
-            engagement_rate, comment_ratio, recorded_at
-        )
-        VALUES (?, ?, ?, ?, NULL, ?, ?)
+        INSERT INTO post_metrics (post_id, likes_count, shares_count, comments_count, recorded_at)
+        VALUES (?, ?, ?, ?, ?)
         """,
-        (db_post_id, likes, shares, comments, comment_ratio, _utc_now()),
+        (db_post_id, likes, shares, comments, _utc_now()),
     )
 
 
@@ -329,6 +296,7 @@ def _comment_key(post_id, depth, index_path, text):
 def _upsert_comments(conn, db_post_id, facebook_post_id, comments_data):
     saved = 0
     now = _utc_now()
+    comment_row_ids = {}
 
     for idx, comment in enumerate(comments_data or [], 1):
         if not isinstance(comment, dict):
@@ -342,21 +310,23 @@ def _upsert_comments(conn, db_post_id, facebook_post_id, comments_data):
         )
         replies = comment.get("replies") or []
 
-        conn.execute(
+        cur = conn.execute(
             """
             INSERT INTO comments (
-                post_id, facebook_comment_id, commenter_id, commenter_name,
+                post_id, parent_id, facebook_comment_id, commenter_id, commenter_name,
                 commenter_url, comment_text, likes_count, reply_count,
-                created_at, last_updated, parent_comment_id, depth_level
+                created_at, last_updated, depth_level
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0)
+            VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
             ON CONFLICT(facebook_comment_id) DO UPDATE SET
                 post_id = excluded.post_id,
                 comment_text = excluded.comment_text,
                 likes_count = excluded.likes_count,
                 reply_count = excluded.reply_count,
                 last_updated = excluded.last_updated,
+                parent_id = NULL,
                 depth_level = 0
+            RETURNING id
             """,
             (
                 db_post_id,
@@ -371,6 +341,7 @@ def _upsert_comments(conn, db_post_id, facebook_post_id, comments_data):
                 now,
             ),
         )
+        comment_row_ids[str(comment_id)] = cur.fetchone()[0]
         saved += 1
 
         for reply_idx, reply in enumerate(replies, 1):
@@ -387,21 +358,22 @@ def _upsert_comments(conn, db_post_id, facebook_post_id, comments_data):
             conn.execute(
                 """
                 INSERT INTO comments (
-                    post_id, facebook_comment_id, commenter_id, commenter_name,
+                    post_id, parent_id, facebook_comment_id, commenter_id, commenter_name,
                     commenter_url, comment_text, likes_count, reply_count,
-                    created_at, last_updated, parent_comment_id, depth_level
+                    created_at, last_updated, depth_level
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 1)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 1)
                 ON CONFLICT(facebook_comment_id) DO UPDATE SET
                     post_id = excluded.post_id,
                     comment_text = excluded.comment_text,
                     likes_count = excluded.likes_count,
                     last_updated = excluded.last_updated,
-                    parent_comment_id = excluded.parent_comment_id,
+                    parent_id = excluded.parent_id,
                     depth_level = 1
                 """,
                 (
                     db_post_id,
+                    comment_row_ids.get(str(comment_id)),
                     str(reply_id),
                     reply.get("author_id"),
                     reply.get("author_name"),
@@ -410,7 +382,6 @@ def _upsert_comments(conn, db_post_id, facebook_post_id, comments_data):
                     _to_int(reply.get("reaction_count")),
                     now,
                     now,
-                    str(comment_id),
                 ),
             )
             saved += 1

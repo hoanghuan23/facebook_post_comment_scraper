@@ -3,6 +3,7 @@ import json
 import time
 import os
 import uuid
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 from datetime import datetime, timezone, timedelta
 
@@ -488,7 +489,23 @@ def post_already_exists(post_id, base_folder, name_folder):
     return os.path.exists(post_file)
 
 
-def extract_post_data(node, group_name=None, cookies=None, fb_dtsg=None, proxies=None):
+def build_group_link(group_id=None, permalink=None):
+    """Build a canonical group URL from explicit group_id or a post permalink."""
+    resolved_group_id = str(group_id).strip() if group_id else ""
+    if not resolved_group_id and permalink:
+        try:
+            parsed = urlparse(permalink)
+            parts = [part for part in parsed.path.split("/") if part]
+            if len(parts) >= 2 and parts[0] == "groups":
+                resolved_group_id = parts[1]
+        except Exception:
+            resolved_group_id = ""
+    if not resolved_group_id:
+        return ""
+    return f"https://www.facebook.com/groups/{resolved_group_id}/"
+
+
+def extract_post_data(node, group_name=None, group_id=None, cookies=None, fb_dtsg=None, proxies=None):
     """Extract relevant data from a post node"""
     if not node or node.get('__typename') != 'Story':
         return None
@@ -536,6 +553,7 @@ def extract_post_data(node, group_name=None, cookies=None, fb_dtsg=None, proxies
         proxies=proxies,
     )
 
+    permalink = node.get('permalink_url', '')
     post_data = {
         'id': node.get('id'),
         'post_id': post_id,
@@ -544,7 +562,8 @@ def extract_post_data(node, group_name=None, cookies=None, fb_dtsg=None, proxies
         'reaction_count': reaction_count,
         'share_count': share_count,
         'group_name': group_name,
-        'permalink': node.get('permalink_url', ''),
+        'group_link': build_group_link(group_id=group_id or GROUP_ID, permalink=permalink),
+        'permalink': permalink,
         # Added metadata fields (best-effort)
         'posted_at': posted_at,
         'scraped_at': make_scraped_at(),
@@ -778,6 +797,7 @@ def fetch_posts(
                 post_data = extract_post_data(
                     story_node,
                     request_group_name,
+                    group_id=request_group_id,
                     cookies=request_cookies,
                     fb_dtsg=request_fb_dtsg,
                     proxies=request_proxies,

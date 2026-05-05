@@ -91,6 +91,7 @@ def test_scrape_group_source_creates_posts_and_metrics(monkeypatch):
             lambda limit=20: [
                 {
                     "post_id": "1001",
+                    "group_link": "https://www.facebook.com/groups/361726451351144/",
                     "permalink": "https://facebook.com/groups/361726451351144/posts/1001",
                     "message": "Post 1",
                     "posted_at": datetime(2026, 1, 1, 9, 0, 0),
@@ -155,6 +156,7 @@ def test_scrape_group_source_updates_existing_post_without_duplicate_metric(monk
             lambda limit=20: [
                 {
                     "post_id": "1002",
+                    "group_link": "https://www.facebook.com/groups/361726451351144/",
                     "permalink": "https://facebook.com/posts/1002-new",
                     "message": "New",
                     "posted_at": datetime(2026, 1, 1, 8, 30, 0),
@@ -176,7 +178,7 @@ def test_scrape_group_source_updates_existing_post_without_duplicate_metric(monk
         assert updated_post.facebook_url == "https://facebook.com/posts/1002-new"
         assert updated_post.content == "New"
         assert updated_post.media_count == 1
-        assert len(updated_post.metrics_history) == 0
+        assert len(updated_post.metrics_history) == 1
     finally:
         db.close()
 
@@ -253,6 +255,7 @@ def test_refresh_recent_post_metrics_updates_existing_group_post(monkeypatch):
             lambda limit=20: [
                 {
                     "post_id": "post-1",
+                    "group_link": "https://www.facebook.com/groups/group-123/",
                     "permalink": "https://facebook.com/posts/post-1",
                     "message": "Old content",
                     "posted_at": datetime.utcnow(),
@@ -305,6 +308,7 @@ def test_scrape_group_source_saves_comments_and_replies_when_enabled(monkeypatch
             lambda limit=20: [
                 {
                     "post_id": "post-comments-1",
+                    "group_link": "https://www.facebook.com/groups/group-456/",
                     "permalink": "https://facebook.com/posts/post-comments-1",
                     "message": "With comments",
                     "posted_at": datetime(2026, 1, 3, 9, 0, 0),
@@ -404,6 +408,7 @@ def test_refresh_recent_post_metrics_syncs_comments_when_enabled(monkeypatch):
             lambda limit=20: [
                 {
                     "post_id": "refresh-post-1",
+                    "group_link": "https://www.facebook.com/groups/group-789/",
                     "permalink": "https://facebook.com/posts/refresh-post-1",
                     "message": "Existing post",
                     "posted_at": datetime.utcnow(),
