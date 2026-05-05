@@ -1,5 +1,7 @@
 # Authentication utilities
 from datetime import datetime, timedelta
+import logging
+from jose import JWTError, jwt
 from typing import Optional
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -60,7 +62,8 @@ def verify_token(token: str) -> dict:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload
-    except JWTError:
+    except JWTError as e:
+        logging.error(f"JWT Error: {e}")
         return None
 
 
@@ -82,7 +85,7 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    user_id: int = payload.get("sub")
+    user_id: str = payload.get("sub")
     if user_id is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -90,7 +93,7 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    user = db.query(User).filter(User.id == user_id).first()
+    user = db.query(User).filter(User.id == int(user_id)).first()
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

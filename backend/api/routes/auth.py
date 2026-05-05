@@ -82,7 +82,7 @@ async def login(credentials: UserLogin, db: Session = Depends(get_db)):
         )
     
     # Create token
-    access_token = create_access_token(data={"sub": user.id})
+    access_token = create_access_token(data={"sub": str(user.id)})
     UserCRUD.update_last_login(db, user.id)
     user = db.query(User).filter(User.id == user.id).first()
 
