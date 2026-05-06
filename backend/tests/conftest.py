@@ -2,13 +2,31 @@
 Pytest Configuration and Fixtures
 """
 
+import os
 import pytest
 import sys
 from pathlib import Path
 
+# Force tests to use an isolated in-memory database.
+# This must run before modules import backend.database.db.
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+os.environ["ENV"] = "testing"
+os.environ["DEBUG"] = "false"
+
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _assert_test_database():
+    """Prevent test runs from ever touching non-test databases."""
+    from backend.database.db import engine
+
+    database_url = str(engine.url)
+    assert database_url.startswith("sqlite:///:memory:"), (
+        f"Unsafe test database URL detected: {database_url}"
+    )
 
 
 @pytest.fixture

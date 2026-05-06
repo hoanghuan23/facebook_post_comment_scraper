@@ -29,15 +29,13 @@ class User(Base):
     username = Column(String(50), unique=True, nullable=False, index=True)
     email = Column(String(100), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
-    fb_cookies = Column(Text, nullable=True)
-    fb_dtsg = Column(String(255), nullable=True)
-    fb_user_agent = Column(String(500), nullable=True)
     is_active = Column(Boolean, default=True)
     is_admin = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     last_login = Column(DateTime, nullable=True)
 
     sources = relationship("Source", back_populates="user", cascade="all, delete-orphan")
+    sessions = relationship("FacebookSession", back_populates="user", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("idx_user_username", "username"),
@@ -49,6 +47,28 @@ class SourceType(str, enum.Enum):
     GROUP = "group"
     PAGE = "page"
     USER = "user"
+
+
+class FacebookSession(Base):
+    __tablename__ = "facebook_sessions"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    fb_user_id = Column(String(50), nullable=True)
+    fb_cookies = Column(Text, nullable=True)
+    fb_dtsg = Column(String(255), nullable=True)
+    fb_user_agent = Column(String(500), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    is_valid = Column(Boolean, nullable=False, default=True)
+    last_verified = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="sessions")
+
+    __table_args__ = (
+        Index("idx_fb_sessions_user", "user_id", "is_active"),
+    )
 
 
 class PermissionStatus(str, enum.Enum):
@@ -186,7 +206,7 @@ class Comment(Base):
     reply_count = Column(Integer, default=0)
     depth_level = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
-    last_updated = Column(DateTime, nullable=True)
+    last_updated = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     post = relationship("Post", back_populates="comments")
     parent = relationship("Comment", remote_side=[id], backref="replies")

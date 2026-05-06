@@ -7,13 +7,18 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from sqlalchemy import text
 
-from backend.config import settings
+from backend.config import settings, get_database_file_path
 from backend.database.db import get_db, init_db
 from backend.utils.logger import setup_logging
 from backend.scheduler.task_scheduler import start_scheduler, stop_scheduler
 
+from backend.database.db import Base, engine  # Ensure models are imported for database initialization
+
+
+Base.metadata.create_all(bind=engine)
 # Configure logging
 logger = setup_logging(settings.LOG_LEVEL)
+sqlite_db_path = get_database_file_path(settings.DATABASE_URL)
 
 # Database initialization
 @asynccontextmanager
@@ -39,6 +44,8 @@ async def lifespan(app: FastAPI):
     
     logger.info(f"API running at {settings.API_BASE_URL}")
     logger.info(f"Database: {settings.DATABASE_URL}")
+    if sqlite_db_path:
+        logger.info(f"SQLite file: {sqlite_db_path.resolve()}")
     logger.info(f"Debug mode: {settings.DEBUG}")
     if settings.PROXY_ENABLED:
         logger.info("Proxy rotation enabled")

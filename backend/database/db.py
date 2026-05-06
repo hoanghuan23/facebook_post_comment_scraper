@@ -4,20 +4,17 @@ from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import StaticPool
 import os
 
-from backend.config import settings
+from backend.config import settings, get_database_file_path
 from backend.database.models import Base
 
 
 def _ensure_sqlite_parent_dir(database_url: str) -> None:
     """Create parent directory for file-based SQLite URLs."""
-    if not database_url.startswith("sqlite:///"):
+    sqlite_file = get_database_file_path(database_url)
+    if not sqlite_file:
         return
 
-    raw_path = database_url.replace("sqlite:///", "", 1)
-    if raw_path == ":memory:" or raw_path.startswith("file:"):
-        return
-
-    abs_path = os.path.abspath(raw_path)
+    abs_path = os.path.abspath(str(sqlite_file))
     parent_dir = os.path.dirname(abs_path)
     if parent_dir:
         os.makedirs(parent_dir, exist_ok=True)

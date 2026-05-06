@@ -9,7 +9,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from backend.database.crud import CommentCRUD, PostCRUD, PostMetricCRUD, SourceCRUD
+from backend.database.crud import CommentCRUD, FacebookSessionCRUD, PostCRUD, PostMetricCRUD, SourceCRUD
 from backend.config import settings
 from backend.database.models import Source, SourceType
 import comment_scraper
@@ -110,11 +110,11 @@ class FacebookScraperService:
     """Bridge existing Facebook scraper scripts into backend storage flows."""
 
     @staticmethod
-    def _apply_source_auth_context(source: Source) -> None:
-        user = source.user
-        cookies = _load_json_dict(user.fb_cookies) if user else {}
+    def _apply_source_auth_context(db: Session, source: Source) -> None:
+        session = FacebookSessionCRUD.get_active_by_user_id(db, source.user_id)
+        cookies = _load_json_dict(session.fb_cookies) if session else {}
         group_scraper.COOKIES = cookies
-        group_scraper.FB_DTSG = user.fb_dtsg if user and user.fb_dtsg else ""
+        group_scraper.FB_DTSG = session.fb_dtsg if session and session.fb_dtsg else ""
 
     @staticmethod
     def _apply_group_context(source: Source) -> None:
@@ -239,7 +239,7 @@ class FacebookScraperService:
 
     @classmethod
     def scrape_group_source(cls, db: Session, source: Source, limit: int = 20) -> FacebookScrapeResult:
-        cls._apply_source_auth_context(source)
+        cls._apply_source_auth_context(db, source)
         cls._apply_group_context(source)
 
         raw_posts = group_scraper.fetch_posts(limit=limit)
@@ -311,7 +311,7 @@ class FacebookScraperService:
 
     @classmethod
     def scrape_timeline_source(cls, db: Session, source: Source, limit: int = 20) -> FacebookScrapeResult:
-        cls._apply_source_auth_context(source)
+        cls._apply_source_auth_context(db, source)
         cls._apply_timeline_context(source)
 
         base_folder = "page_post" if source.source_type == SourceType.PAGE else "user_post"
@@ -384,7 +384,7 @@ class FacebookScraperService:
 
     @classmethod
     def refresh_recent_post_metrics(cls, db: Session, source: Source, limit: int = 20) -> Dict[str, int]:
-        cls._apply_source_auth_context(source)
+        cls._apply_source_auth_context(db, source)
         fetched_posts: List[Dict[str, Any]]
         normalize_post: Any
 

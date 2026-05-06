@@ -1,7 +1,40 @@
 # Configuration file for the application
+from pathlib import Path
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 from typing import Optional
 import os
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def normalize_database_url(database_url: str) -> str:
+    """Normalize SQLite URLs so relative paths are anchored to project root."""
+    if not database_url.startswith("sqlite:///"):
+        return database_url
+
+    raw_path = database_url.replace("sqlite:///", "", 1)
+    if raw_path == ":memory:" or raw_path.startswith("file:"):
+        return database_url
+
+    sqlite_path = Path(raw_path)
+    if not sqlite_path.is_absolute():
+        sqlite_path = (PROJECT_ROOT / sqlite_path).resolve()
+
+    return f"sqlite:///{sqlite_path.as_posix()}"
+
+
+def get_database_file_path(database_url: str) -> Optional[Path]:
+    """Return the SQLite DB file path when database_url points to a file."""
+    if not database_url.startswith("sqlite:///"):
+        return None
+
+    raw_path = database_url.replace("sqlite:///", "", 1)
+    if raw_path == ":memory:" or raw_path.startswith("file:"):
+        return None
+
+    return Path(raw_path)
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
@@ -90,6 +123,11 @@ class Settings(BaseSettings):
     CORS_CREDENTIALS: bool = True
     CORS_METHODS: list = ["*"]
     CORS_HEADERS: list = ["*"]
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def _normalize_database_url(cls, value: str) -> str:
+        return normalize_database_url(str(value))
     
     class Config:
         env_file = ".env"

@@ -20,7 +20,7 @@ from backend.api.auth import (
     verify_password,
     get_current_user
 )
-from backend.database.crud import UserCRUD
+from backend.database.crud import FacebookSessionCRUD, UserCRUD
 
 router = APIRouter()
 
@@ -152,28 +152,34 @@ async def update_facebook_credentials(
             detail="No Facebook credentials provided",
         )
 
-    updated_user = UserCRUD.update(db, current_user.id, **payload)
-    if not updated_user:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update credentials")
+    active_session = FacebookSessionCRUD.upsert_active_for_user(
+        db=db,
+        user_id=current_user.id,
+        fb_cookies=payload.get("fb_cookies"),
+        fb_dtsg=payload.get("fb_dtsg"),
+        fb_user_agent=payload.get("fb_user_agent"),
+    )
 
     return {
         "message": "Facebook credentials updated successfully",
         "updated_at": datetime.utcnow().isoformat(),
-        "has_cookies": bool(updated_user.fb_cookies),
-        "has_fb_dtsg": bool(updated_user.fb_dtsg),
-        "has_user_agent": bool(updated_user.fb_user_agent),
+        "has_cookies": bool(active_session.fb_cookies),
+        "has_fb_dtsg": bool(active_session.fb_dtsg),
+        "has_user_agent": bool(active_session.fb_user_agent),
     }
 
 
 @router.get("/me/facebook-credentials")
 async def get_facebook_credentials_status(
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """Return whether Facebook scraper credentials are configured."""
+    active_session = FacebookSessionCRUD.get_active_by_user_id(db, current_user.id)
     return {
-        "has_cookies": bool(current_user.fb_cookies),
-        "has_fb_dtsg": bool(current_user.fb_dtsg),
-        "has_user_agent": bool(current_user.fb_user_agent),
+        "has_cookies": bool(active_session and active_session.fb_cookies),
+        "has_fb_dtsg": bool(active_session and active_session.fb_dtsg),
+        "has_user_agent": bool(active_session and active_session.fb_user_agent),
     }
 
 

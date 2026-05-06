@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from backend.database.crud import CommentCRUD, PostCRUD, SourceCRUD, UserCRUD
+from backend.database.crud import CommentCRUD, FacebookSessionCRUD, PostCRUD, SourceCRUD, UserCRUD
 from backend.database.db import SessionLocal, engine
 from backend.database.models import Base
 from backend.scraper.facebook_service import (
@@ -87,7 +87,7 @@ def test_coerce_datetime_accepts_datetime_object():
 
 def test_coerce_datetime_parses_unix_timestamp():
     parsed = _coerce_datetime(1767242400)
-    assert parsed == datetime(2026, 1, 1, 10, 0, 0)
+    assert parsed == datetime(2026, 1, 1, 4, 40, 0)
 
 
 def test_coerce_datetime_returns_none_for_invalid_value():
@@ -116,9 +116,9 @@ def test_scrape_group_source_creates_posts_and_metrics(monkeypatch):
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="alice", email="alice@example.com", password="secret123")
-        user = UserCRUD.update(
-            db,
-            user.id,
+        FacebookSessionCRUD.upsert_active_for_user(
+            db=db,
+            user_id=user.id,
             fb_cookies='{"c_user":"123"}',
             fb_dtsg="token",
         )
@@ -331,9 +331,9 @@ def test_scrape_group_source_saves_comments_and_replies_when_enabled(monkeypatch
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="erin", email="erin@example.com", password="secret123")
-        user = UserCRUD.update(
-            db,
-            user.id,
+        FacebookSessionCRUD.upsert_active_for_user(
+            db=db,
+            user_id=user.id,
             fb_cookies='{"c_user":"123"}',
             fb_dtsg="token",
         )
@@ -420,9 +420,9 @@ def test_refresh_recent_post_metrics_syncs_comments_when_enabled(monkeypatch):
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="frank", email="frank@example.com", password="secret123")
-        user = UserCRUD.update(
-            db,
-            user.id,
+        FacebookSessionCRUD.upsert_active_for_user(
+            db=db,
+            user_id=user.id,
             fb_cookies='{"c_user":"123"}',
             fb_dtsg="token",
         )
@@ -513,10 +513,6 @@ def test_periodic_scrape_new_posts_accepts_string_posted_at(monkeypatch):
             source_name="Group 999",
         )
 
-        monkeypatch.setattr(
-            "backend.scheduler.periodic_tasks.FacebookScraperService.scrape_source",
-            lambda db_session, source_id, limit=20: FacebookScraperService.scrape_source(db_session, source_id, limit),
-        )
         monkeypatch.setattr(
             "backend.scraper.facebook_service.group_scraper.fetch_posts",
             lambda limit=20: [

@@ -54,7 +54,7 @@ class UserCRUD:
             return None
         
         # Allowed fields to update
-        allowed_fields = {'email', 'is_active', 'is_admin', 'fb_cookies', 'fb_dtsg', 'fb_user_agent'}
+        allowed_fields = {'email', 'is_active', 'is_admin'}
         
         for key, value in kwargs.items():
             if key in allowed_fields and value is not None:
@@ -103,6 +103,49 @@ class UserCRUD:
     def count(db: Session) -> int:
         """Count total users"""
         return db.query(models.User).count()
+
+
+class FacebookSessionCRUD:
+    """CRUD operations for FacebookSession model"""
+
+    @staticmethod
+    def get_active_by_user_id(db: Session, user_id: int) -> Optional[models.FacebookSession]:
+        """Get active Facebook session for a user."""
+        return db.query(models.FacebookSession).filter(
+            and_(
+                models.FacebookSession.user_id == user_id,
+                models.FacebookSession.is_active == True,
+            )
+        ).order_by(desc(models.FacebookSession.created_at), desc(models.FacebookSession.id)).first()
+
+    @staticmethod
+    def upsert_active_for_user(
+        db: Session,
+        user_id: int,
+        fb_cookies: Optional[str] = None,
+        fb_dtsg: Optional[str] = None,
+        fb_user_agent: Optional[str] = None,
+    ) -> models.FacebookSession:
+        """Create or update a user's active Facebook session."""
+        session = FacebookSessionCRUD.get_active_by_user_id(db, user_id)
+        if not session:
+            session = models.FacebookSession(
+                user_id=user_id,
+                is_active=True,
+                is_valid=True,
+            )
+            db.add(session)
+
+        if fb_cookies is not None:
+            session.fb_cookies = fb_cookies
+        if fb_dtsg is not None:
+            session.fb_dtsg = fb_dtsg
+        if fb_user_agent is not None:
+            session.fb_user_agent = fb_user_agent
+
+        db.commit()
+        db.refresh(session)
+        return session
 
 
 # ==================== SOURCE OPERATIONS ====================
