@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     PROXY_ENABLED: bool = True
     PROXY_URL: Optional[str] = None
     PROXY_ROTATION_ENABLED: bool = True
-    PROXY_ROTATION_INTERVAL: int = 10  # Rotate after N requests
+    PROXY_ROTATION_INTERVAL: int = 5  # xoay sau 5 requests tránh bị block IP
     
     # Scraping settings
     SCRAPER_ENABLED: bool = True
@@ -47,15 +47,15 @@ class Settings(BaseSettings):
     SCHEDULER_ENABLED: bool = True
     
     # Task schedules (cron expressions or seconds)
-    TASK_SCRAPE_NEW_POSTS_INTERVAL: int = 30
-    TASK_UPDATE_RECENT_METRICS_INTERVAL: int = 30
-    TASK_CLEANUP_OLD_DATA_INTERVAL: int = 30
-    TASK_GENERATE_ANALYTICS_INTERVAL: int = 30
-    TASK_HEALTH_CHECK_INTERVAL: int = 30
+    TASK_SCRAPE_NEW_POSTS_INTERVAL: int = 600  # mỗi 10 phút
+    TASK_UPDATE_RECENT_METRICS_INTERVAL: int = 1800 # mỗi 30 phút
+    TASK_CLEANUP_OLD_DATA_INTERVAL: int = 3600  # mỗi 1 giờ
+    TASK_GENERATE_ANALYTICS_INTERVAL: int = 86400 # mỗi 24 giờ
+    TASK_HEALTH_CHECK_INTERVAL: int = 60 # mỗi 1 phút
     
     # Data retention
-    DATA_RETENTION_DAYS: int = 90  # Delete posts older than N days
-    KEEP_DELETED_POSTS_DAYS: int = 30  # Keep deleted posts for N days
+    DATA_RETENTION_DAYS: int = 30  # xóa dữ liệu cũ hơn N ngày
+    KEEP_DELETED_POSTS_DAYS: int = 7  # giữ các bài viết đã xóa trong N ngày để phân tích sau
     
     # Logging
     LOG_LEVEL: str = "INFO"
@@ -78,8 +78,8 @@ class Settings(BaseSettings):
     
     # Rate limiting
     RATE_LIMIT_ENABLED: bool = True
-    RATE_LIMIT_REQUESTS: int = 100
-    RATE_LIMIT_PERIOD: int = 60  # seconds
+    RATE_LIMIT_REQUESTS: int = 100 # số lượng request tối đa trong khoảng thời gian (60s)
+    RATE_LIMIT_PERIOD: int = 60  # khoảng thời gian
     
     # CORS settings
     CORS_ORIGINS: list = [
