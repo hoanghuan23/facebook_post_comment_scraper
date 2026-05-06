@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 import base64
 import json
@@ -38,14 +38,48 @@ def _load_json_dict(raw_value: Optional[str]) -> Dict[str, Any]:
     return json.loads(raw_value)
 
 
+def _coerce_datetime(value: Any) -> Optional[datetime]:
+    """Convert raw scraper datetime-like values into UTC naive datetime."""
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.utcfromtimestamp(float(value))
+        except (TypeError, ValueError, OSError):
+            return None
+
+    if isinstance(value, str):
+        candidate = value.strip()
+        if not candidate:
+            return None
+        try:
+            if candidate.isdigit():
+                return datetime.utcfromtimestamp(float(candidate))
+            parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                return parsed
+            return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        except ValueError:
+            return None
+
+    return None
+
+
 def _normalize_group_post(post: Dict[str, Any]) -> Dict[str, Any]:
     photos = post.get("photos") or []
     videos = post.get("videos") or []
+    posted_at = _coerce_datetime(post.get("posted_at")) or datetime.utcnow()
     return {
         "facebook_post_id": str(post["post_id"]),
         "facebook_url": post.get("permalink") or "",
         "content": post.get("message") or None,
-        "posted_at": post.get("posted_at") or datetime.utcnow(),
+        "posted_at": posted_at,
         "likes_count": int(post.get("reaction_count") or 0),
         "shares_count": int(post.get("share_count") or 0),
         "comments_count": int(post.get("comment_count") or 0),
@@ -57,11 +91,12 @@ def _normalize_group_post(post: Dict[str, Any]) -> Dict[str, Any]:
 
 def _normalize_timeline_post(post: Dict[str, Any]) -> Dict[str, Any]:
     media = post.get("media") or []
+    posted_at = _coerce_datetime(post.get("posted_at")) or datetime.utcnow()
     return {
         "facebook_post_id": str(post["post_id"]),
         "facebook_url": post.get("permalink") or "",
         "content": post.get("text") or None,
-        "posted_at": post.get("posted_at") or datetime.utcnow(),
+        "posted_at": posted_at,
         "likes_count": int(post.get("reaction_count") or 0),
         "shares_count": int(post.get("share_count") or 0),
         "comments_count": int(post.get("comment_count") or 0),
@@ -191,6 +226,17 @@ class FacebookScraperService:
         )
         return True
 
+    @staticmethod
+    def _ensure_valid_posted_at(raw_post: Dict[str, Any], normalized_post: Dict[str, Any]) -> None:
+        if isinstance(normalized_post.get("posted_at"), datetime):
+            return
+        fallback = datetime.utcnow()
+        normalized_post["posted_at"] = fallback
+        logger.warning(
+            "Invalid posted_at for post %s; fallback to utcnow()",
+            raw_post.get("post_id"),
+        )
+
     @classmethod
     def scrape_group_source(cls, db: Session, source: Source, limit: int = 20) -> FacebookScrapeResult:
         cls._apply_source_auth_context(source)
@@ -210,6 +256,7 @@ class FacebookScraperService:
                 continue
 
             normalized_post = _normalize_group_post(raw_post)
+            cls._ensure_valid_posted_at(raw_post, normalized_post)
             db_post, created = PostCRUD.upsert_for_source(
                 db=db,
                 source_id=source.id,
@@ -282,6 +329,7 @@ class FacebookScraperService:
                 continue
 
             normalized_post = _normalize_timeline_post(raw_post)
+            cls._ensure_valid_posted_at(raw_post, normalized_post)
             db_post, created = PostCRUD.upsert_for_source(
                 db=db,
                 source_id=source.id,

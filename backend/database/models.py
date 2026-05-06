@@ -64,7 +64,15 @@ class Source(Base):
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    source_type = Column(Enum(SourceType), nullable=False)
+    source_type = Column(
+        Enum(
+            SourceType,
+            values_callable=lambda enum_cls: [item.value for item in enum_cls],
+            native_enum=False,
+            validate_strings=True,
+        ),
+        nullable=False,
+    )
     facebook_id = Column(String(50), nullable=False)
     facebook_url = Column(String(255), nullable=False)
     source_name = Column(String(255), nullable=True)
@@ -76,7 +84,15 @@ class Source(Base):
     include_comments = Column(Boolean, default=True)
     include_replies = Column(Boolean, default=True)
     max_days_old = Column(Integer, default=30)
-    permission_status = Column(Enum(PermissionStatus), default=PermissionStatus.NOT_CHECKED)
+    permission_status = Column(
+        Enum(
+            PermissionStatus,
+            values_callable=lambda enum_cls: [item.value for item in enum_cls],
+            native_enum=False,
+            validate_strings=True,
+        ),
+        default=PermissionStatus.NOT_CHECKED,
+    )
     permission_message = Column(Text, nullable=True)
     access_restrictions = Column(Text, nullable=True)
     permission_checked_at = Column(DateTime, nullable=True)

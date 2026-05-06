@@ -5,9 +5,11 @@ from backend.database.db import SessionLocal, engine
 from backend.database.models import Base
 from backend.scraper.facebook_service import (
     FacebookScraperService,
+    _coerce_datetime,
     _normalize_group_post,
     _normalize_timeline_post,
 )
+from backend.scheduler.periodic_tasks import periodic_scrape_new_posts
 
 
 def setup_function():
@@ -65,6 +67,49 @@ def test_normalize_timeline_post_maps_media_and_text():
     assert normalized["media_count"] == 2
     assert normalized["has_images"] is True
     assert normalized["has_videos"] is True
+
+
+def test_coerce_datetime_parses_iso_z():
+    parsed = _coerce_datetime("2026-01-01T10:00:00Z")
+    assert parsed == datetime(2026, 1, 1, 10, 0, 0)
+
+
+def test_coerce_datetime_parses_offset_to_utc():
+    parsed = _coerce_datetime("2026-01-01T17:00:00+07:00")
+    assert parsed == datetime(2026, 1, 1, 10, 0, 0)
+
+
+def test_coerce_datetime_accepts_datetime_object():
+    value = datetime(2026, 1, 1, 10, 0, 0)
+    parsed = _coerce_datetime(value)
+    assert parsed == value
+
+
+def test_coerce_datetime_parses_unix_timestamp():
+    parsed = _coerce_datetime(1767242400)
+    assert parsed == datetime(2026, 1, 1, 10, 0, 0)
+
+
+def test_coerce_datetime_returns_none_for_invalid_value():
+    parsed = _coerce_datetime("not-a-date")
+    assert parsed is None
+
+
+def test_normalize_group_post_falls_back_when_invalid_posted_at():
+    normalized = _normalize_group_post(
+        {
+            "post_id": "123",
+            "permalink": "https://facebook.com/posts/123",
+            "message": "hello",
+            "posted_at": "invalid-datetime",
+            "reaction_count": 1,
+            "share_count": 1,
+            "comment_count": 1,
+            "photos": [],
+            "videos": [],
+        }
+    )
+    assert isinstance(normalized["posted_at"], datetime)
 
 
 def test_scrape_group_source_creates_posts_and_metrics(monkeypatch):
@@ -451,5 +496,51 @@ def test_refresh_recent_post_metrics_syncs_comments_when_enabled(monkeypatch):
         assert synced_comment is not None
         assert synced_comment.post_id == post.id
         assert synced_comment.depth_level == 0
+    finally:
+        db.close()
+
+
+def test_periodic_scrape_new_posts_accepts_string_posted_at(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="greg", email="greg@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-999",
+            facebook_url="https://www.facebook.com/groups/group-999",
+            source_name="Group 999",
+        )
+
+        monkeypatch.setattr(
+            "backend.scheduler.periodic_tasks.FacebookScraperService.scrape_source",
+            lambda db_session, source_id, limit=20: FacebookScraperService.scrape_source(db_session, source_id, limit),
+        )
+        monkeypatch.setattr(
+            "backend.scraper.facebook_service.group_scraper.fetch_posts",
+            lambda limit=20: [
+                {
+                    "post_id": "string-datetime-post",
+                    "group_link": "https://www.facebook.com/groups/group-999/",
+                    "permalink": "https://facebook.com/posts/string-datetime-post",
+                    "message": "Post with string datetime",
+                    "posted_at": "2026-01-03T09:00:00Z",
+                    "reaction_count": 3,
+                    "share_count": 1,
+                    "comment_count": 2,
+                    "group_name": "Group 999",
+                    "photos": [],
+                    "videos": [],
+                }
+            ],
+        )
+
+        import asyncio
+        asyncio.run(periodic_scrape_new_posts())
+
+        post = PostCRUD.get_by_source_and_facebook_post_id(db, source.id, "string-datetime-post")
+        assert post is not None
+        assert isinstance(post.posted_at, datetime)
     finally:
         db.close()
