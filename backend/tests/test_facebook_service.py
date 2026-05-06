@@ -1,8 +1,12 @@
 from datetime import datetime
+from types import SimpleNamespace
 
+from fastapi import BackgroundTasks
 from backend.database.crud import CommentCRUD, FacebookSessionCRUD, PostCRUD, SourceCRUD, UserCRUD
 from backend.database.db import SessionLocal, engine
-from backend.database.models import Base
+from backend.database.models import Base, ScraperLog
+from backend.database.schemas import SourceCreate
+from backend.api.routes.sources import _bootstrap_scrape_source_last_24h, create_source
 from backend.scraper.facebook_service import (
     FacebookScraperService,
     _coerce_datetime,
@@ -540,3 +544,146 @@ def test_periodic_scrape_new_posts_accepts_string_posted_at(monkeypatch):
         assert isinstance(post.posted_at, datetime)
     finally:
         db.close()
+
+
+def test_scrape_source_last_24_hours_uses_unbounded_recent_fetch(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="henry", email="henry@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-24h",
+            facebook_url="https://www.facebook.com/groups/group-24h",
+            source_name="Group 24h",
+        )
+
+        calls = []
+
+        def fake_fetch_posts(limit=10, **kwargs):
+            calls.append({"limit": limit, **kwargs})
+            return [
+                {
+                    "post_id": "recent-1",
+                    "group_link": "https://www.facebook.com/groups/group-24h/",
+                    "permalink": "https://facebook.com/posts/recent-1",
+                    "message": "Recent post",
+                    "posted_at": datetime(2026, 1, 3, 9, 0, 0),
+                    "reaction_count": 1,
+                    "share_count": 0,
+                    "comment_count": 0,
+                    "group_name": "Group 24h",
+                    "photos": [],
+                    "videos": [],
+                }
+            ]
+
+        monkeypatch.setattr(
+            "backend.scraper.facebook_service.group_scraper.fetch_posts",
+            fake_fetch_posts,
+        )
+
+        result = FacebookScraperService.scrape_source(
+            db,
+            source.id,
+            last_24_hours_only=True,
+        )
+        created_post = PostCRUD.get_by_source_and_facebook_post_id(db, source.id, "recent-1")
+
+        assert result.total_fetched == 1
+        assert created_post is not None
+        assert calls
+        assert calls[0]["limit"] is None
+        assert calls[0]["last_24_hours_only"] is True
+    finally:
+        db.close()
+
+
+def test_create_source_enqueues_background_bootstrap_scrape(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="ivy", email="ivy@example.com", password="secret123")
+
+        monkeypatch.setattr(
+            "backend.api.routes.sources.FacebookURLParser.parse",
+            lambda _url: {
+                "is_valid": True,
+                "facebook_id": "new-group-1",
+                "source_type": SimpleNamespace(value="group"),
+            },
+        )
+
+        source_data = SourceCreate(
+            source_type="group",
+            facebook_url="https://www.facebook.com/groups/new-group-1",
+            include_comments=True,
+            include_replies=True,
+            max_days_old=30,
+            check_access=False,
+        )
+
+        background_tasks = BackgroundTasks()
+        added_tasks = []
+
+        def fake_add_task(func, *args, **kwargs):
+            added_tasks.append((func, args, kwargs))
+
+        monkeypatch.setattr(background_tasks, "add_task", fake_add_task)
+
+        import asyncio
+
+        created_source = asyncio.run(
+            create_source(
+                source_data=source_data,
+                background_tasks=background_tasks,
+                current_user=user,
+                db=db,
+            )
+        )
+
+        assert created_source.id is not None
+        assert len(added_tasks) == 1
+        task_func, task_args, task_kwargs = added_tasks[0]
+        assert task_func.__name__ == "_bootstrap_scrape_source_last_24h"
+        assert task_args == (created_source.id,)
+        assert task_kwargs == {}
+    finally:
+        db.close()
+
+
+def test_bootstrap_scrape_logs_error_without_crashing(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="jack", email="jack@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-bootstrap-fail",
+            facebook_url="https://www.facebook.com/groups/group-bootstrap-fail",
+            source_name="Bootstrap Fail",
+        )
+    finally:
+        db.close()
+
+    monkeypatch.setattr(
+        "backend.api.routes.sources.FacebookScraperService.scrape_source",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("bootstrap failed")),
+    )
+
+    _bootstrap_scrape_source_last_24h(source.id)
+
+    verify_db = SessionLocal()
+    try:
+        log = (
+            verify_db.query(ScraperLog)
+            .filter(ScraperLog.source_id == source.id)
+            .order_by(ScraperLog.id.desc())
+            .first()
+        )
+        assert log is not None
+        assert "Bootstrap 24h scrape failed" in log.message
+        assert log.error_type == "RuntimeError"
+    finally:
+        verify_db.close()

@@ -238,11 +238,20 @@ class FacebookScraperService:
         )
 
     @classmethod
-    def scrape_group_source(cls, db: Session, source: Source, limit: int = 20) -> FacebookScrapeResult:
+    def scrape_group_source(
+        cls,
+        db: Session,
+        source: Source,
+        limit: int = 20,
+        last_24_hours_only: bool = False,
+    ) -> FacebookScrapeResult:
         cls._apply_source_auth_context(db, source)
         cls._apply_group_context(source)
 
-        raw_posts = group_scraper.fetch_posts(limit=limit)
+        if last_24_hours_only:
+            raw_posts = group_scraper.fetch_posts(limit=None, last_24_hours_only=True)
+        else:
+            raw_posts = group_scraper.fetch_posts(limit=limit)
         created_posts = 0
         updated_posts = 0
         skipped_posts = 0
@@ -310,12 +319,25 @@ class FacebookScraperService:
         )
 
     @classmethod
-    def scrape_timeline_source(cls, db: Session, source: Source, limit: int = 20) -> FacebookScrapeResult:
+    def scrape_timeline_source(
+        cls,
+        db: Session,
+        source: Source,
+        limit: int = 20,
+        last_24_hours_only: bool = False,
+    ) -> FacebookScrapeResult:
         cls._apply_source_auth_context(db, source)
         cls._apply_timeline_context(source)
 
         base_folder = "page_post" if source.source_type == SourceType.PAGE else "user_post"
-        raw_posts = timeline_scraper.fetch_posts(limit=limit, base_folder=base_folder)
+        if last_24_hours_only:
+            raw_posts = timeline_scraper.fetch_posts(
+                limit=None,
+                base_folder=base_folder,
+                last_24_hours_only=True,
+            )
+        else:
+            raw_posts = timeline_scraper.fetch_posts(limit=limit, base_folder=base_folder)
         created_posts = 0
         updated_posts = 0
         skipped_posts = 0
@@ -426,12 +448,28 @@ class FacebookScraperService:
         }
 
     @classmethod
-    def scrape_source(cls, db: Session, source_id: int, limit: int = 20) -> FacebookScrapeResult:
+    def scrape_source(
+        cls,
+        db: Session,
+        source_id: int,
+        limit: int = 20,
+        last_24_hours_only: bool = False,
+    ) -> FacebookScrapeResult:
         source = SourceCRUD.get_by_id(db, source_id)
         if not source:
             raise ValueError(f"Source {source_id} not found")
         if source.source_type == SourceType.GROUP:
-            return cls.scrape_group_source(db, source, limit=limit)
+            return cls.scrape_group_source(
+                db,
+                source,
+                limit=limit,
+                last_24_hours_only=last_24_hours_only,
+            )
         if source.source_type in {SourceType.PAGE, SourceType.USER}:
-            return cls.scrape_timeline_source(db, source, limit=limit)
+            return cls.scrape_timeline_source(
+                db,
+                source,
+                limit=limit,
+                last_24_hours_only=last_24_hours_only,
+            )
         raise NotImplementedError(f"Facebook source type '{source.source_type.value}' is not implemented yet")

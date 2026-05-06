@@ -1,17 +1,19 @@
 # Source management routes
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from backend.api.auth import get_current_user
-from backend.database.crud import SourceCRUD, PostCRUD, duplicate_check_source, get_source_stats
-from backend.database.db import get_db
-from backend.database.models import User
+from backend.config import settings
+from backend.database.crud import LogCRUD, SourceCRUD, PostCRUD, duplicate_check_source, get_source_stats
+from backend.database.db import SessionLocal, get_db
+from backend.database.models import SourceType, User
 from backend.database.schemas import SourceCreate, SourceDetail, SourceResponse, SourceUpdate, PostResponse
+from backend.scraper.facebook_service import FacebookScraperService
 from backend.utils.facebook_url_parser import FacebookURLParser, FacebookSourceType
 from backend.utils.permission_checker import FacebookPermissionChecker, SourceAccessValidator
 
@@ -19,9 +21,54 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _bootstrap_scrape_source_last_24h(source_id: int):
+    db = SessionLocal()
+    try:
+        source = SourceCRUD.get_by_id(db, source_id)
+        if not source:
+            logger.warning("Skip bootstrap scrape: source %s not found", source_id)
+            return
+        if source.source_type not in {SourceType.GROUP, SourceType.PAGE, SourceType.USER}:
+            logger.info(
+                "Skip bootstrap scrape for source %s: unsupported type %s",
+                source_id,
+                source.source_type.value,
+            )
+            return
+
+        logger.info("Bootstrap 24h scrape started for source %s", source_id)
+        result = FacebookScraperService.scrape_source(
+            db,
+            source_id=source_id,
+            last_24_hours_only=True,
+        )
+        next_scrape = datetime.utcnow() + timedelta(seconds=settings.TASK_SCRAPE_NEW_POSTS_INTERVAL)
+        SourceCRUD.update_scrape_info(db, source_id, next_scrape=next_scrape)
+        logger.info(
+            "Bootstrap 24h scrape finished for source %s: fetched=%s created=%s updated=%s",
+            source_id,
+            result.total_fetched,
+            result.created_posts,
+            result.updated_posts,
+        )
+    except Exception as exc:
+        logger.exception("Bootstrap 24h scrape failed for source %s: %s", source_id, exc)
+        LogCRUD.create_scraper_log(
+            db,
+            message=f"Bootstrap 24h scrape failed for source {source_id}",
+            log_level="ERROR",
+            source_id=source_id,
+            error_type=type(exc).__name__,
+            error_details=str(exc),
+        )
+    finally:
+        db.close()
+
+
 @router.post("/", response_model=SourceResponse)
 async def create_source(
     source_data: SourceCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -76,8 +123,15 @@ async def create_source(
             source_type=source_data.source_type,
             user_cookies=None
         )
+
+        status_map = {
+            "oke": "granted",
+            "private": "denied",
+            "error": "unknown",
+            "may_require_auth": "unknown",
+        }
         
-        permission_status = permission_result['status'].value
+        permission_status = permission_result['status'].get(permission_result['status'].value, "unknown")
         permission_message = permission_result['message']
         is_accessible = permission_result['accessible']
         
@@ -108,6 +162,8 @@ async def create_source(
         permission_checked_at=datetime.utcnow() if source_data.check_access else None,
     )
     
+    background_tasks.add_task(_bootstrap_scrape_source_last_24h, source.id)
+
     logger.info(f"Source created: {facebook_id} by user {current_user.id}")
     return source
 
