@@ -336,17 +336,25 @@ class PostCRUD:
             query = query.filter(models.Post.is_tracked == True)
         
         return query.order_by(desc(models.Post.posted_at)).offset(skip).limit(limit).all()
+
+    @staticmethod
+    def get_latest_posted_at_by_source(db: Session, source_id: int, tracked_only: bool = True) -> Optional[datetime]:
+        """Get latest posted_at timestamp for a source."""
+        query = db.query(func.max(models.Post.posted_at)).filter(models.Post.source_id == source_id)
+        if tracked_only:
+            query = query.filter(models.Post.is_tracked == True)
+        return query.scalar()
     
     @staticmethod
     def get_recent_posts(db: Session, hours: int = 24, limit: int = 100) -> List[models.Post]:
-        """Get posts from last N hours"""
+        """Get tracked posts created in last N hours (recent by created_at)."""
         cutoff_time = datetime.utcnow() - timedelta(hours=hours)
         return db.query(models.Post).filter(
             and_(
-                models.Post.posted_at >= cutoff_time,
+                models.Post.created_at >= cutoff_time,
                 models.Post.is_tracked == True
             )
-        ).order_by(desc(models.Post.posted_at)).limit(limit).all()
+        ).order_by(desc(models.Post.created_at)).limit(limit).all()
     
     @staticmethod
     def get_old_posts(db: Session, days: int = 30) -> List[models.Post]:

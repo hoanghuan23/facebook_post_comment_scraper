@@ -80,15 +80,22 @@ async def periodic_scrape_new_posts():
                     SourceCRUD.update_scrape_info(db, source.id, next_scrape=next_scrape)
                     continue
 
-                result = FacebookScraperService.scrape_source(db, source.id, limit=20)
+                latest_posted_at = PostCRUD.get_latest_posted_at_by_source(db, source.id, tracked_only=True)
+                result = FacebookScraperService.scrape_source(
+                    db,
+                    source.id,
+                    limit=20,
+                    min_posted_at=latest_posted_at,
+                )
                 scraped_count += 1
                 SourceCRUD.update_scrape_info(db, source.id, next_scrape=next_scrape)
                 logger.info(
-                    "Source %s scrape complete: fetched=%s created=%s updated=%s",
+                    "Source %s scrape complete: fetched=%s created=%s updated=%s latest_cutoff=%s",
                     source.id,
                     result.total_fetched,
                     result.created_posts,
                     result.updated_posts,
+                    latest_posted_at.isoformat() if latest_posted_at else None,
                 )
             except Exception as exc:
                 errors_count += 1
@@ -155,7 +162,7 @@ async def update_recent_post_metrics():
                 continue
 
             try:
-                result = FacebookScraperService.refresh_recent_post_metrics(db, source, limit=20)
+                result = FacebookScraperService.refresh_recent_post_metrics(db, source, limit=None)
                 refreshed_sources.add(source.id)
                 updated_posts += result["updated"]
                 logger.info(

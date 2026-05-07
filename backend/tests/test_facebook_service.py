@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 from fastapi import BackgroundTasks
@@ -13,7 +13,7 @@ from backend.scraper.facebook_service import (
     _normalize_group_post,
     _normalize_timeline_post,
 )
-from backend.scheduler.periodic_tasks import periodic_scrape_new_posts
+from backend.scheduler.periodic_tasks import periodic_scrape_new_posts, update_recent_post_metrics
 
 
 def setup_function():
@@ -544,6 +544,300 @@ def test_periodic_scrape_new_posts_accepts_string_posted_at(monkeypatch):
         assert isinstance(post.posted_at, datetime)
     finally:
         db.close()
+
+
+def test_get_latest_posted_at_by_source_returns_latest_and_none_for_empty():
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="latest-ts", email="latest-ts@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-latest-ts",
+            facebook_url="https://www.facebook.com/groups/group-latest-ts",
+            source_name="Group Latest TS",
+        )
+
+        assert PostCRUD.get_latest_posted_at_by_source(db, source.id) is None
+
+        PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="latest-post-1",
+            facebook_url="https://facebook.com/posts/latest-post-1",
+            posted_at=datetime(2026, 1, 1, 9, 0, 0),
+            content="First",
+        )
+        PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="latest-post-2",
+            facebook_url="https://facebook.com/posts/latest-post-2",
+            posted_at=datetime(2026, 1, 1, 10, 0, 0),
+            content="Second",
+        )
+
+        latest = PostCRUD.get_latest_posted_at_by_source(db, source.id)
+        assert latest == datetime(2026, 1, 1, 10, 0, 0)
+    finally:
+        db.close()
+
+
+def test_get_recent_posts_uses_created_at_window():
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="recent-created-at", email="recent-created-at@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-recent-created-at",
+            facebook_url="https://www.facebook.com/groups/group-recent-created-at",
+            source_name="Recent Created At Group",
+        )
+
+        recent_created_old_posted = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="recent-created-old-posted",
+            facebook_url="https://facebook.com/posts/recent-created-old-posted",
+            posted_at=datetime(2020, 1, 1, 0, 0, 0),
+            content="Recent created, old posted",
+        )
+        old_created_new_posted = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="old-created-new-posted",
+            facebook_url="https://facebook.com/posts/old-created-new-posted",
+            posted_at=datetime.utcnow(),
+            content="Old created, new posted",
+        )
+
+        old_created_new_posted.created_at = datetime.utcnow() - timedelta(hours=30)
+        db.commit()
+        db.refresh(old_created_new_posted)
+
+        recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=50)
+        recent_ids = {post.id for post in recent_posts}
+
+        assert recent_created_old_posted.id in recent_ids
+        assert old_created_new_posted.id not in recent_ids
+    finally:
+        db.close()
+
+
+def test_scrape_source_min_posted_at_filters_old_and_equal_posts(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="cutoff-user", email="cutoff-user@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-cutoff",
+            facebook_url="https://www.facebook.com/groups/group-cutoff",
+            source_name="Cutoff Group",
+        )
+
+        cutoff = datetime(2026, 1, 3, 9, 0, 0)
+        monkeypatch.setattr(
+            "backend.scraper.facebook_service.group_scraper.fetch_posts",
+            lambda limit=20: [
+                {
+                    "post_id": "old-post",
+                    "group_link": "https://www.facebook.com/groups/group-cutoff/",
+                    "permalink": "https://facebook.com/posts/old-post",
+                    "message": "Old",
+                    "posted_at": datetime(2026, 1, 3, 8, 59, 0),
+                    "reaction_count": 1,
+                    "share_count": 0,
+                    "comment_count": 0,
+                    "group_name": "Cutoff Group",
+                    "photos": [],
+                    "videos": [],
+                },
+                {
+                    "post_id": "equal-post",
+                    "group_link": "https://www.facebook.com/groups/group-cutoff/",
+                    "permalink": "https://facebook.com/posts/equal-post",
+                    "message": "Equal",
+                    "posted_at": cutoff,
+                    "reaction_count": 2,
+                    "share_count": 0,
+                    "comment_count": 0,
+                    "group_name": "Cutoff Group",
+                    "photos": [],
+                    "videos": [],
+                },
+                {
+                    "post_id": "new-post",
+                    "group_link": "https://www.facebook.com/groups/group-cutoff/",
+                    "permalink": "https://facebook.com/posts/new-post",
+                    "message": "New",
+                    "posted_at": datetime(2026, 1, 3, 9, 1, 0),
+                    "reaction_count": 3,
+                    "share_count": 1,
+                    "comment_count": 1,
+                    "group_name": "Cutoff Group",
+                    "photos": [],
+                    "videos": [],
+                },
+            ],
+        )
+
+        result = FacebookScraperService.scrape_source(
+            db,
+            source.id,
+            limit=10,
+            min_posted_at=cutoff,
+        )
+
+        assert result.total_fetched == 3
+        assert result.created_posts == 1
+        assert PostCRUD.get_by_source_and_facebook_post_id(db, source.id, "old-post") is None
+        assert PostCRUD.get_by_source_and_facebook_post_id(db, source.id, "equal-post") is None
+        created = PostCRUD.get_by_source_and_facebook_post_id(db, source.id, "new-post")
+        assert created is not None
+        assert len(created.metrics_history) == 1
+    finally:
+        db.close()
+
+
+def test_update_recent_post_metrics_only_refreshes_sources_with_recent_created_posts(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="metrics-created-at", email="metrics-created-at@example.com", password="secret123")
+        recent_source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-metrics-recent",
+            facebook_url="https://www.facebook.com/groups/group-metrics-recent",
+            source_name="Metrics Recent Group",
+        )
+        old_source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-metrics-old",
+            facebook_url="https://www.facebook.com/groups/group-metrics-old",
+            source_name="Metrics Old Group",
+        )
+
+        recent_post = PostCRUD.create(
+            db,
+            source_id=recent_source.id,
+            facebook_post_id="metrics-recent-post",
+            facebook_url="https://facebook.com/posts/metrics-recent-post",
+            posted_at=datetime(2020, 1, 1, 0, 0, 0),
+            content="Recent created",
+        )
+        old_post = PostCRUD.create(
+            db,
+            source_id=old_source.id,
+            facebook_post_id="metrics-old-post",
+            facebook_url="https://facebook.com/posts/metrics-old-post",
+            posted_at=datetime.utcnow(),
+            content="Old created",
+        )
+
+        old_post.created_at = datetime.utcnow() - timedelta(hours=30)
+        db.commit()
+        db.refresh(recent_post)
+        db.refresh(old_post)
+        recent_source_id = recent_source.id
+        old_source_id = old_source.id
+    finally:
+        db.close()
+
+    calls = []
+
+    def fake_refresh_recent_post_metrics(_db, source, limit=20):
+        calls.append(source.id)
+        return {"fetched": 1, "updated": 1, "skipped": 0}
+
+    monkeypatch.setattr(
+        "backend.scheduler.periodic_tasks.FacebookScraperService.refresh_recent_post_metrics",
+        fake_refresh_recent_post_metrics,
+    )
+
+    import asyncio
+    asyncio.run(update_recent_post_metrics())
+
+    assert recent_source_id in calls
+    assert old_source_id not in calls
+
+
+def test_periodic_scrape_new_posts_uses_latest_db_post_as_cutoff(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="periodic-cutoff", email="periodic-cutoff@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-periodic-cutoff",
+            facebook_url="https://www.facebook.com/groups/group-periodic-cutoff",
+            source_name="Periodic Cutoff Group",
+        )
+        PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="seed-post",
+            facebook_url="https://facebook.com/posts/seed-post",
+            posted_at=datetime(2026, 1, 4, 10, 0, 0),
+            content="Seed",
+        )
+        source_id = source.id
+    finally:
+        db.close()
+
+    monkeypatch.setattr(
+        "backend.scraper.facebook_service.group_scraper.fetch_posts",
+        lambda limit=20: [
+            {
+                "post_id": "periodic-old",
+                "group_link": "https://www.facebook.com/groups/group-periodic-cutoff/",
+                "permalink": "https://facebook.com/posts/periodic-old",
+                "message": "Old periodic",
+                "posted_at": datetime(2026, 1, 4, 9, 0, 0),
+                "reaction_count": 1,
+                "share_count": 0,
+                "comment_count": 0,
+                "group_name": "Periodic Cutoff Group",
+                "photos": [],
+                "videos": [],
+            },
+            {
+                "post_id": "periodic-new",
+                "group_link": "https://www.facebook.com/groups/group-periodic-cutoff/",
+                "permalink": "https://facebook.com/posts/periodic-new",
+                "message": "New periodic",
+                "posted_at": datetime(2026, 1, 4, 10, 1, 0),
+                "reaction_count": 5,
+                "share_count": 1,
+                "comment_count": 2,
+                "group_name": "Periodic Cutoff Group",
+                "photos": [],
+                "videos": [],
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        "backend.scraper.facebook_service.comment_scraper.fetch_comments",
+        lambda feedback_id, cookies=None: ([], {"is_active": True}),
+    )
+
+    import asyncio
+    asyncio.run(periodic_scrape_new_posts())
+
+    verify_db = SessionLocal()
+    try:
+        assert PostCRUD.get_by_source_and_facebook_post_id(verify_db, source_id, "periodic-old") is None
+        assert PostCRUD.get_by_source_and_facebook_post_id(verify_db, source_id, "periodic-new") is not None
+    finally:
+        verify_db.close()
 
 
 def test_scrape_source_last_24_hours_uses_unbounded_recent_fetch(monkeypatch):

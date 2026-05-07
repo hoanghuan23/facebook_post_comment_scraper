@@ -295,6 +295,7 @@ class FacebookScraperService:
         source: Source,
         limit: int = 20,
         last_24_hours_only: bool = False,
+        min_posted_at: Optional[datetime] = None,
     ) -> FacebookScrapeResult:
         cls._apply_source_auth_context(db, source)
         resolved_group_id = cls._resolve_group_id(source)
@@ -312,6 +313,7 @@ class FacebookScraperService:
         created_posts = 0
         updated_posts = 0
         skipped_posts = 0
+        skipped_by_cutoff = 0
         post_ids: List[int] = []
         detected_source_name = source.source_name
 
@@ -323,6 +325,9 @@ class FacebookScraperService:
 
             normalized_post = _normalize_group_post(raw_post)
             cls._ensure_valid_posted_at(raw_post, normalized_post)
+            if min_posted_at is not None and normalized_post["posted_at"] <= min_posted_at:
+                skipped_by_cutoff += 1
+                continue
             db_post, created = PostCRUD.upsert_for_source(
                 db=db,
                 source_id=source.id,
@@ -358,12 +363,13 @@ class FacebookScraperService:
             SourceCRUD.update(db, source.id, source_name=detected_source_name)
 
         logger.info(
-            "Scraped group source %s: fetched=%s created=%s updated=%s skipped=%s",
+            "Scraped group source %s: fetched=%s created=%s updated=%s skipped=%s filtered_by_cutoff=%s",
             source.id,
             len(raw_posts),
             created_posts,
             updated_posts,
             skipped_posts,
+            skipped_by_cutoff,
         )
         return FacebookScrapeResult(
             source_id=source.id,
@@ -382,6 +388,7 @@ class FacebookScraperService:
         source: Source,
         limit: int = 20,
         last_24_hours_only: bool = False,
+        min_posted_at: Optional[datetime] = None,
     ) -> FacebookScrapeResult:
         cls._apply_source_auth_context(db, source)
         cls._apply_timeline_context(source)
@@ -398,6 +405,7 @@ class FacebookScraperService:
         created_posts = 0
         updated_posts = 0
         skipped_posts = 0
+        skipped_by_cutoff = 0
         post_ids: List[int] = []
         detected_source_name = source.source_name
 
@@ -409,6 +417,9 @@ class FacebookScraperService:
 
             normalized_post = _normalize_timeline_post(raw_post)
             cls._ensure_valid_posted_at(raw_post, normalized_post)
+            if min_posted_at is not None and normalized_post["posted_at"] <= min_posted_at:
+                skipped_by_cutoff += 1
+                continue
             db_post, created = PostCRUD.upsert_for_source(
                 db=db,
                 source_id=source.id,
@@ -444,12 +455,13 @@ class FacebookScraperService:
             SourceCRUD.update(db, source.id, source_name=detected_source_name)
 
         logger.info(
-            "Scraped timeline source %s: fetched=%s created=%s updated=%s skipped=%s",
+            "Scraped timeline source %s: fetched=%s created=%s updated=%s skipped=%s filtered_by_cutoff=%s",
             source.id,
             len(raw_posts),
             created_posts,
             updated_posts,
             skipped_posts,
+            skipped_by_cutoff,
         )
         return FacebookScrapeResult(
             source_id=source.id,
@@ -511,6 +523,7 @@ class FacebookScraperService:
         source_id: int,
         limit: int = 20,
         last_24_hours_only: bool = False,
+        min_posted_at: Optional[datetime] = None,
     ) -> FacebookScrapeResult:
         source = SourceCRUD.get_by_id(db, source_id)
         if not source:
@@ -521,6 +534,7 @@ class FacebookScraperService:
                 source,
                 limit=limit,
                 last_24_hours_only=last_24_hours_only,
+                min_posted_at=min_posted_at,
             )
         if source.source_type in {SourceType.PAGE, SourceType.USER}:
             return cls.scrape_timeline_source(
@@ -528,5 +542,6 @@ class FacebookScraperService:
                 source,
                 limit=limit,
                 last_24_hours_only=last_24_hours_only,
+                min_posted_at=min_posted_at,
             )
         raise NotImplementedError(f"Facebook source type '{source.source_type.value}' is not implemented yet")
