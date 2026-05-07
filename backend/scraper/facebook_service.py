@@ -124,6 +124,57 @@ class FacebookScraperService:
         group_scraper.WRITE_DEBUG_FILES = settings.SCRAPER_WRITE_DEBUG_FILES
 
     @staticmethod
+    def _resolve_group_id(source: Source) -> str:
+        """Resolve group slug URL to numeric group id when possible."""
+        facebook_id = str(source.facebook_id or "").strip()
+        if not facebook_id:
+            return facebook_id
+        if facebook_id.isdigit():
+            return facebook_id
+
+        try:
+            from main import extract_group_id_from_url
+
+            resolved_id = extract_group_id_from_url(
+                source.facebook_url,
+                cookies=group_scraper.COOKIES or None,
+            )
+            if resolved_id:
+                return str(resolved_id).strip()
+        except Exception as exc:
+            logger.warning(
+                "Failed to resolve group id from URL for source %s (%s): %s",
+                source.id,
+                source.facebook_url,
+                exc,
+            )
+        return facebook_id
+
+    @staticmethod
+    def _fetch_group_posts_with_compat(
+        *,
+        limit: Optional[int],
+        last_24_hours_only: bool,
+        group_id: str,
+        group_name: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        """Call group scraper with new args, fallback to legacy signature for compatibility."""
+        try:
+            return group_scraper.fetch_posts(
+                limit=limit,
+                last_24_hours_only=last_24_hours_only,
+                group_id=group_id,
+                group_name=group_name,
+                cookies=group_scraper.COOKIES,
+                fb_dtsg=group_scraper.FB_DTSG,
+            )
+        except TypeError:
+            # Legacy tests/mocks may patch fetch_posts(limit=...) only.
+            if last_24_hours_only:
+                return group_scraper.fetch_posts(limit=None, last_24_hours_only=True)
+            return group_scraper.fetch_posts(limit=limit)
+
+    @staticmethod
     def _apply_timeline_context(source: Source) -> None:
         timeline_scraper.USER_ID = source.facebook_id
         timeline_scraper.PAGE_NAME = source.source_name
@@ -246,12 +297,18 @@ class FacebookScraperService:
         last_24_hours_only: bool = False,
     ) -> FacebookScrapeResult:
         cls._apply_source_auth_context(db, source)
+        resolved_group_id = cls._resolve_group_id(source)
+        if resolved_group_id and resolved_group_id != source.facebook_id:
+            SourceCRUD.update(db, source.id, facebook_id=resolved_group_id)
+            source.facebook_id = resolved_group_id
         cls._apply_group_context(source)
 
-        if last_24_hours_only:
-            raw_posts = group_scraper.fetch_posts(limit=None, last_24_hours_only=True)
-        else:
-            raw_posts = group_scraper.fetch_posts(limit=limit)
+        raw_posts = cls._fetch_group_posts_with_compat(
+            limit=None if last_24_hours_only else limit,
+            last_24_hours_only=last_24_hours_only,
+            group_id=source.facebook_id,
+            group_name=source.source_name,
+        )
         created_posts = 0
         updated_posts = 0
         skipped_posts = 0

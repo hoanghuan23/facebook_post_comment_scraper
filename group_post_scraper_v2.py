@@ -354,8 +354,29 @@ def clean_data_blocks(blocks):
 def parse_fb_response(text):
     """Parse Facebook response using the same logic as post_scraper"""
     text = text.replace("for (;;);", "").strip()
-    extracted = extract_data_blocks(text)
-    cleaned = clean_data_blocks(extracted)
+
+    # Prefer line-by-line JSON parsing first because Facebook often streams
+    # multiple JSON lines, including useful blocks without a top-level "data".
+    parsed_blocks = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        try:
+            obj = json.loads(s)
+        except Exception:
+            continue
+
+        if isinstance(obj, dict) and isinstance(obj.get("data"), dict):
+            parsed_blocks.append(obj["data"])
+        elif isinstance(obj, dict):
+            parsed_blocks.append(obj)
+
+    if not parsed_blocks:
+        # Fallback for single-line / embedded JSON payloads.
+        parsed_blocks = extract_data_blocks(text)
+
+    cleaned = clean_data_blocks(parsed_blocks)
     return cleaned
 
 
@@ -641,6 +662,9 @@ def fetch_posts(
     cutoff_time = datetime.now(timezone.utc) - timedelta(hours=24) if last_24_hours_only else None
     stop_due_to_time = False
     max_pages = int(os.getenv("SCRAPER_MAX_24H_PAGES", "100")) if last_24_hours_only else None
+    page_size = int(os.getenv("SCRAPER_GROUP_PAGE_SIZE", "10"))
+    if page_size <= 0:
+        page_size = 10
     
     if min_comments > 0:
         print(f"📊 Filtering posts with at least {min_comments} comments")
@@ -653,12 +677,12 @@ def fetch_posts(
     
     while limit is None or len(all_posts) < limit:
         if max_pages is not None and page_num > max_pages:
-            print(f"Reached safety max pages ({max_pages}) for 24h fetch. Stopping.")
+            print(f"Reached safety max pages ({max_pages}) for 24h fetch. Stopping. reason=max_pages")
             break
         print(f"\nFetching page {page_num}...")
         
         variables = {
-            "count": 3,
+            "count": page_size,
             "cursor": cursor,
             "feedLocation": "GROUP",
             "feedType": "DISCUSSION",
@@ -729,12 +753,15 @@ def fetch_posts(
         # Extract posts from the response array
         posts_found = 0
         next_cursor = None
+        has_next_page = False
         
         for item in data:
             if not isinstance(item, dict):
                 continue
             
-            node = item.get('node', {})
+            node = item.get('node')
+            if not isinstance(node, dict):
+                continue
             node_typename = node.get('__typename')
             
             # Collect Story nodes from multiple sources
@@ -748,8 +775,20 @@ def fetch_posts(
             elif node_typename == 'Group':
                 edges = node.get('group_feed', {}).get('edges', [])
                 for edge in edges:
-                    edge_node = edge.get('node', {})
-                    if edge_node.get('__typename') == 'Story':
+                    if not isinstance(edge, dict):
+                        continue
+                    edge_node = edge.get('node')
+                    if isinstance(edge_node, dict) and edge_node.get('__typename') == 'Story':
+                        story_nodes.append(edge_node)
+
+            # Some responses use timeline_list_feed_units shape (similar to page timeline)
+            if "timeline_list_feed_units" in node:
+                tl_edges = node.get("timeline_list_feed_units", {}).get("edges", [])
+                for edge in tl_edges:
+                    if not isinstance(edge, dict):
+                        continue
+                    edge_node = edge.get("node")
+                    if isinstance(edge_node, dict) and edge_node.get("__typename") == "Story":
                         story_nodes.append(edge_node)
             
             # Process all found Story nodes
@@ -822,22 +861,60 @@ def fetch_posts(
             # Break outer loop if limit reached
             if limit is not None and len(all_posts) >= limit:
                 break
+
+            # Keep behavior aligned with page scraper: once an older post is seen,
+            # stop pagination because feed is chronological.
+            if stop_due_to_time:
+                break
             
-            # Look for pagination info
-            if 'page_info' in item:
-                page_info = item['page_info']
-                if page_info.get('has_next_page'):
-                    next_cursor = page_info.get('end_cursor')
+            # Look for pagination info (prefer Group -> group_feed.page_info)
+            page_info = None
+            if node_typename == 'Group':
+                page_info = (node.get('group_feed') or {}).get('page_info')
+            # Fallback: page-like timeline structure
+            if not isinstance(page_info, dict):
+                page_info = (node.get("timeline_list_feed_units") or {}).get("page_info")
+            if not isinstance(page_info, dict):
+                page_info = item.get('page_info')
+            if isinstance(page_info, dict):
+                candidate_has_next = bool(page_info.get('has_next_page'))
+                candidate_cursor = page_info.get('end_cursor')
+                # Keep the best available pagination signal seen in this page.
+                has_next_page = has_next_page or candidate_has_next
+                if candidate_cursor:
+                    next_cursor = candidate_cursor
+
+        # Last fallback: search page_info at top-level blocks if not found above.
+        if not next_cursor:
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                page_info = item.get("page_info")
+                if isinstance(page_info, dict):
+                    candidate_cursor = page_info.get("end_cursor")
+                    candidate_has_next = bool(page_info.get("has_next_page"))
+                    if candidate_cursor:
+                        next_cursor = candidate_cursor
+                    has_next_page = has_next_page or candidate_has_next
         
-        print(f"Found {posts_found} posts on this page")
-        
-        # Check if we should continue
+        print(
+            f"Found {posts_found} posts on this page "
+            f"(has_next_page={has_next_page}, next_cursor={'yes' if next_cursor else 'no'})"
+        )
+
         if stop_due_to_time:
             print("Reached posts older than 24h. Stopping pagination.")
             break
+        
+        if limit is not None and len(all_posts) >= limit:
+            print("No more pages or reached limit. Stopping. reason=limit")
+            break
 
-        if not next_cursor or (limit is not None and len(all_posts) >= limit):
-            print("No more pages or reached limit. Stopping.")
+        if not has_next_page or not next_cursor:
+            if not has_next_page:
+                print("No more pages or reached limit. Stopping. reason=no_next_page")
+            else:
+                print("No more pages or reached limit. Stopping. reason=no_cursor")
             break
         
         cursor = next_cursor

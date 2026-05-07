@@ -123,15 +123,7 @@ async def create_source(
             source_type=source_data.source_type,
             user_cookies=None
         )
-
-        status_map = {
-            "oke": "granted",
-            "private": "denied",
-            "error": "unknown",
-            "may_require_auth": "unknown",
-        }
-        
-        permission_status = permission_result['status'].get(permission_result['status'].value, "unknown")
+        permission_status = permission_result['status'].value
         permission_message = permission_result['message']
         is_accessible = permission_result['accessible']
         

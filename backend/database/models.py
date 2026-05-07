@@ -3,6 +3,7 @@ import enum
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     Enum,
@@ -126,6 +127,10 @@ class Source(Base):
 
     __table_args__ = (
         UniqueConstraint("user_id", "facebook_id", name="uq_user_source"),
+        CheckConstraint(
+            "permission_status IN ('granted', 'denied', 'restricted', 'not_checked', 'error')",
+            name="ck_sources_permission_status",
+        ),
         Index("idx_source_user_active", "user_id", "is_active"),
         Index("idx_source_next_scrape", "next_scrape"),
         Index("idx_source_permission", "permission_status"),
