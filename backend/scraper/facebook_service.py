@@ -195,6 +195,8 @@ class FacebookScraperService:
         if not source.include_comments:
             return 0
 
+        # Replies are intentionally disabled at runtime to reduce scrape scope.
+        # Keep `include_replies` in source settings for backward compatibility only.
         cls._apply_comment_context()
         feedback_id = cls._build_feedback_id(db_post.facebook_post_id)
         try:
@@ -230,32 +232,6 @@ class FacebookScraperService:
                 depth_level=0,
             )
             saved_count += 1
-            parent_comment = CommentCRUD.get_by_facebook_id(db, str(comment_id))
-
-            if not source.include_replies:
-                continue
-
-            comment["replies"] = comment_scraper.fetch_replies(comment, cookies=group_scraper.COOKIES)
-
-            for reply in comment.get("replies", []):
-                reply_id = reply.get("comment_id")
-                if not reply_id:
-                    continue
-
-                CommentCRUD.upsert(
-                    db=db,
-                    post_id=db_post.id,
-                    facebook_comment_id=str(reply_id),
-                    comment_text=reply.get("text") or "",
-                    commenter_id=reply.get("author_id"),
-                    commenter_name=reply.get("author_name"),
-                    commenter_url=reply.get("author_url"),
-                    likes_count=int(reply.get("reaction_count") or 0),
-                    reply_count=0,
-                    parent_id=parent_comment.id if parent_comment else None,
-                    depth_level=1,
-                )
-                saved_count += 1
 
         return saved_count
 

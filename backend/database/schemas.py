@@ -60,6 +60,7 @@ class SourceCreate(BaseModel):
     source_type: Literal["group", "page", "user"]
     facebook_url: str
     include_comments: bool = True
+    # Backward-compatible only: replies are currently disabled in runtime scraper flow.
     include_replies: bool = True
     max_days_old: int = 30
     check_access: bool = True  # Có kiểm tra quyền trước khi lưu không
@@ -69,6 +70,7 @@ class SourceUpdate(BaseModel):
     """Update source settings"""
     source_name: Optional[str] = None
     include_comments: Optional[bool] = None
+    # Backward-compatible only: replies are currently disabled in runtime scraper flow.
     include_replies: Optional[bool] = None
     max_days_old: Optional[int] = None
     is_active: Optional[bool] = None

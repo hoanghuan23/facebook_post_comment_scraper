@@ -331,7 +331,7 @@ def test_refresh_recent_post_metrics_updates_existing_group_post(monkeypatch):
         db.close()
 
 
-def test_scrape_group_source_saves_comments_and_replies_when_enabled(monkeypatch):
+def test_scrape_group_source_saves_only_top_level_comments_when_replies_enabled(monkeypatch):
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="erin", email="erin@example.com", password="secret123")
@@ -389,33 +389,29 @@ def test_scrape_group_source_saves_comments_and_replies_when_enabled(monkeypatch
                 {"is_active": True},
             ),
         )
+        fetch_replies_called = {"called": False}
+
+        def _unexpected_fetch_replies(*args, **kwargs):
+            fetch_replies_called["called"] = True
+            return []
+
         monkeypatch.setattr(
             "backend.scraper.facebook_service.comment_scraper.fetch_replies",
-            lambda comment, cookies=None: [
-                {
-                    "comment_id": "r1",
-                    "author_id": "u2",
-                    "author_name": "User Two",
-                    "author_url": "https://facebook.com/u2",
-                    "text": "Reply",
-                    "reaction_count": 1,
-                }
-            ],
+            _unexpected_fetch_replies,
         )
 
         FacebookScraperService.scrape_source(db, source.id, limit=5)
         post = PostCRUD.get_by_source_and_facebook_post_id(db, source.id, "post-comments-1")
         top_comment = CommentCRUD.get_by_facebook_id(db, "c1")
-        reply_comment = CommentCRUD.get_by_facebook_id(db, "r1")
 
         assert post is not None
         assert top_comment is not None
         assert top_comment.post_id == post.id
         assert top_comment.depth_level == 0
         assert top_comment.reply_count == 1
-        assert reply_comment is not None
-        assert reply_comment.parent_comment_id == "c1"
-        assert reply_comment.depth_level == 1
+        assert fetch_replies_called["called"] is False
+        assert CommentCRUD.get_replies(db, "c1") == []
+        assert CommentCRUD.count_by_post(db, post.id) == 1
     finally:
         db.close()
 
