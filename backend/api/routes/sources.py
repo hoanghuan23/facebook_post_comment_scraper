@@ -9,7 +9,15 @@ from sqlalchemy.orm import Session
 
 from backend.api.auth import get_current_user
 from backend.config import settings
-from backend.database.crud import LogCRUD, SourceCRUD, PostCRUD, duplicate_check_source, get_source_stats
+from backend.database.crud import (
+    FacebookSessionCRUD,
+    LogCRUD,
+    PostCRUD,
+    ScrapeJobCRUD,
+    SourceCRUD,
+    duplicate_check_source,
+    get_source_stats,
+)
 from backend.database.db import SessionLocal, get_db
 from backend.database.models import SourceType, User
 from backend.database.schemas import SourceCreate, SourceDetail, SourceResponse, SourceUpdate, PostResponse
@@ -21,41 +29,84 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _format_source_label(source_id: int, source_name: str = None) -> str:
+    return f"{source_name or 'unknown'} (id={source_id})"
+
+
 def _bootstrap_scrape_source_last_24h(source_id: int):
     db = SessionLocal()
+    started_at = datetime.utcnow()
+    started_ts = datetime.utcnow().timestamp()
+    scrape_job_id = None
     try:
         source = SourceCRUD.get_by_id(db, source_id)
         if not source:
-            logger.warning("Skip bootstrap scrape: source %s not found", source_id)
+            logger.warning("Bỏ qua bootstrap scrape 24h: source_id=%s reason=not_found", source_id)
             return
+        source_label = _format_source_label(source.id, source.source_name)
         if source.source_type not in {SourceType.GROUP, SourceType.PAGE, SourceType.USER}:
             logger.info(
-                "Skip bootstrap scrape for source %s: unsupported type %s",
-                source_id,
+                "Bỏ qua bootstrap scrape 24h: source=%s reason=unsupported_type type=%s",
+                source_label,
                 source.source_type.value,
             )
             return
 
-        logger.info("Bootstrap 24h scrape started for source %s", source_id)
+        logger.info(
+            "Bắt đầu bootstrap scrape 24h: source=%s thread=%s started_at=%s",
+            source_label,
+            "background_task",
+            started_at.isoformat(),
+        )
+        active_session = FacebookSessionCRUD.get_active_by_user_id(db, source.user_id)
+        scrape_job = ScrapeJobCRUD.create_job(
+            db=db,
+            source_id=source_id,
+            session_id=active_session.id if active_session else None,
+            status="running",
+            started_at=started_at,
+        )
+        scrape_job_id = scrape_job.id
         result = FacebookScraperService.scrape_source(
             db,
             source_id=source_id,
             last_24_hours_only=True,
         )
+        ScrapeJobCRUD.mark_done(
+            db=db,
+            job_id=scrape_job_id,
+            posts_found=result.total_fetched,
+            posts_new=result.created_posts,
+            finished_at=datetime.utcnow(),
+        )
         next_scrape = datetime.utcnow() + timedelta(seconds=settings.TASK_SCRAPE_NEW_POSTS_INTERVAL)
         SourceCRUD.update_scrape_info(db, source_id, next_scrape=next_scrape)
+        duration_seconds = round(datetime.utcnow().timestamp() - started_ts, 3)
+        post_per_second = round(result.total_fetched / duration_seconds, 3) if duration_seconds > 0 else 0.0
         logger.info(
-            "Bootstrap 24h scrape finished for source %s: fetched=%s created=%s updated=%s",
-            source_id,
+            "Kết thúc bootstrap scrape 24h: source=%s fetched=%s created_posts=%s updated_posts=%s skipped_posts=%s filtered_by_cutoff=%s duration_seconds=%s post_per_second=%s next_scrape=%s",
+            source_label,
             result.total_fetched,
             result.created_posts,
             result.updated_posts,
+            result.skipped_posts,
+            result.filtered_by_cutoff,
+            duration_seconds,
+            post_per_second,
+            next_scrape.isoformat(),
         )
     except Exception as exc:
-        logger.exception("Bootstrap 24h scrape failed for source %s: %s", source_id, exc)
+        if scrape_job_id is not None:
+            ScrapeJobCRUD.mark_failed(
+                db=db,
+                job_id=scrape_job_id,
+                error_message=str(exc),
+                finished_at=datetime.utcnow(),
+            )
+        logger.exception("Bootstrap scrape 24h thất bại: source_id=%s error=%s", source_id, exc)
         LogCRUD.create_scraper_log(
             db,
-            message=f"Bootstrap 24h scrape failed for source {source_id}",
+            message=f"Bootstrap scrape 24h thất bại cho source {source_id}",
             log_level="ERROR",
             source_id=source_id,
             error_type=type(exc).__name__,

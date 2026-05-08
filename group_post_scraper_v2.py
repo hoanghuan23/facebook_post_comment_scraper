@@ -1,4 +1,4 @@
-import requests
+﻿import requests
 import json
 import time
 import os
@@ -90,45 +90,45 @@ def retry_request(url, headers, data, proxies, cookies=None, max_retries=5):
     for attempt in range(1, max_retries + 1):
         try:
             r = requests.post(url, headers=headers, data=data, proxies=proxies, cookies=request_cookies, timeout=30)
-            # dữ liệu group trả về
+            # dá»¯ liá»‡u group tráº£ vá»
             # with open(f"group_response_attempt_{attempt}.json", "w", encoding="utf-8") as f:
             #     f.write(r.text)
-            #     print(f"lưu thành công dữ liệu group")
+            #     print(f"lÆ°u thÃ nh cÃ´ng dá»¯ liá»‡u group")
             if r.status_code == 200:
                 return r
             if is_proxy_infra_error(status_code=r.status_code):
-                print(f"  🚫 Attempt {attempt}/{max_retries}: Proxy auth failed (HTTP {r.status_code}) — rotating static proxy...")
+                print(f"  ðŸš« Attempt {attempt}/{max_retries}: Proxy auth failed (HTTP {r.status_code}) â€” rotating static proxy...")
                 new_p = rotate_static_proxy()
                 if new_p:
                     proxies = new_p
                     PROXIES = new_p
             elif is_ip_blocked(status_code=r.status_code, response_text=r.text):
-                print(f"  🛽 Attempt {attempt}/{max_retries}: Facebook blocked this IP (HTTP {r.status_code}) — rotating static proxy...")
+                print(f"  ðŸ›½ Attempt {attempt}/{max_retries}: Facebook blocked this IP (HTTP {r.status_code}) â€” rotating static proxy...")
                 new_p = rotate_static_proxy()
                 if new_p:
                     proxies = new_p
                     PROXIES = new_p
             else:
-                print(f"  ⚠️ Attempt {attempt}/{max_retries}: Status {r.status_code}")
+                print(f"  âš ï¸ Attempt {attempt}/{max_retries}: Status {r.status_code}")
         except requests.exceptions.ProxyError as e:
-            print(f"  🚫 Attempt {attempt}/{max_retries}: Proxy unreachable — rotating static proxy...")
+            print(f"  ðŸš« Attempt {attempt}/{max_retries}: Proxy unreachable â€” rotating static proxy...")
             new_p = rotate_static_proxy()
             if new_p:
                 proxies = new_p
                 PROXIES = new_p
         except Exception as e:
             if is_proxy_infra_error(exc=e):
-                print(f"  🚫 Attempt {attempt}/{max_retries}: Proxy connection error — rotating static proxy...")
+                print(f"  ðŸš« Attempt {attempt}/{max_retries}: Proxy connection error â€” rotating static proxy...")
                 new_p = rotate_static_proxy()
                 if new_p:
                     proxies = new_p
                     PROXIES = new_p
             else:
-                print(f"  ⚠️ Attempt {attempt}/{max_retries}: {str(e)}")
+                print(f"  âš ï¸ Attempt {attempt}/{max_retries}: {str(e)}")
 
         if attempt < max_retries:
             wait_time = attempt * 2
-            print(f"  ⏳ Retrying in {wait_time} seconds...")
+            print(f"  â³ Retrying in {wait_time} seconds...")
             time.sleep(wait_time)
 
     raise Exception(f"Failed after {max_retries} attempts")
@@ -163,11 +163,11 @@ def download_image(url, post_id, image_index=1, save_dir="group_post"):
         with open(filepath, 'wb') as f:
             f.write(response.content)
         
-        print(f"  📥 Downloaded image: {filename}")
+        print(f"  ðŸ“¥ Downloaded image: {filename}")
         return filename
     
     except Exception as e:
-        print(f"  ❌ Failed to download image: {str(e)}")
+        print(f"  âŒ Failed to download image: {str(e)}")
         return None
 
 
@@ -192,7 +192,7 @@ def fetch_remaining_images(
     request_fb_dtsg = FB_DTSG if fb_dtsg is None else fb_dtsg
     request_proxies = PROXIES if proxies is None else proxies
     
-    print(f"  🔄 Fetching remaining images after image #{current_image_count}...")
+    print(f"  ðŸ”„ Fetching remaining images after image #{current_image_count}...")
     
     DOC_ID_PHOTO = "26168653472729001"  # CometPhotoRootContentQuery
     HEADERS_PHOTO = {
@@ -290,11 +290,11 @@ def fetch_remaining_images(
                 break  # No more images
                 
         except Exception as e:
-            print(f"  ⚠️ Error fetching next image: {e}")
+            print(f"  âš ï¸ Error fetching next image: {e}")
             break
     
     if remaining_photos:
-        print(f"  ✅ Fetched {len(remaining_photos)} additional images")
+        print(f"  âœ… Fetched {len(remaining_photos)} additional images")
     
     return remaining_photos
 
@@ -619,7 +619,7 @@ def extract_post_data(node, group_name=None, group_id=None, cookies=None, fb_dts
         post_file = os.path.join(post_dir, f"{post_id}.json")
         with open(post_file, "w", encoding="utf-8") as f:
             json.dump(post_data, f, ensure_ascii=False, indent=2)
-        print(f"✓ Saved to {post_file}")
+        print(f"âœ“ Saved to {post_file}")
     
     return post_data
 
@@ -684,19 +684,19 @@ def fetch_posts(
         page_size = 10
     
     if min_comments > 0:
-        print(f"📊 Filtering posts with at least {min_comments} comments")
+        print(f"ðŸ“Š Filtering posts with at least {min_comments} comments")
     
     if cutoff_time:
-        print(f"Filtering posts from last 24 hours only (since {cutoff_time.isoformat()})")
+        print(f"Chi lay bai dang trong 24h gan nhat (tu {cutoff_time.isoformat()})")
 
     if limit is not None and batch_size > 0 and batch_size < limit:
-        print(f"📦 Processing in batches of {batch_size} posts")
+        print(f"ðŸ“¦ Processing in batches of {batch_size} posts")
     
     while limit is None or len(all_posts) < limit:
         if max_pages is not None and page_num > max_pages:
-            print(f"Reached safety max pages ({max_pages}) for 24h fetch. Stopping. reason=max_pages")
+            print(f"Dat gioi han an toan so trang ({max_pages}) cho che do 24h. Dung lai. reason=max_pages")
             break
-        print(f"\nFetching page {page_num}...")
+        print(f"\nĐang lấy trang {page_num}...")
         
         variables = {
             "count": page_size,
@@ -741,7 +741,7 @@ def fetch_posts(
                 )
                 r.raise_for_status()
             except requests.RequestException as e:
-                print(f"Request failed: {e}")
+                print(f"Yeu cau that bai: {e}")
                 break
             
             # Parse the response
@@ -753,13 +753,13 @@ def fetch_posts(
             else:
                 empty_retry_count += 1
                 if empty_retry_count < max_empty_retries:
-                    print(f"  ⚠️ Empty response, retrying ({empty_retry_count}/{max_empty_retries})...")
+                    print(f"  âš ï¸ Phan hoi rong, dang thu lai ({empty_retry_count}/{max_empty_retries})...")
                     time.sleep(2)  # Wait before retry
                 else:
-                    print(f"  ❌ Empty response after {max_empty_retries} attempts, skipping page")
+                    print(f"  âŒ Phan hoi rong sau {max_empty_retries} lan thu, bo qua trang")
         
         if not data or len(data) == 0:
-            print("❌ No data received after retries, stopping pagination")
+            print("âŒ Khong nhan duoc du lieu sau khi thu lai, dung phan trang")
             break
         
         # Save raw response for debugging
@@ -812,7 +812,7 @@ def fetch_posts(
             for story_node in story_nodes:
                 # Skip reels and video posts
                 if is_reel_or_video_post(story_node):
-                    print(f"  ⏭️  Skipping reel/video post")
+                    print(f"Bỏ qua bài reel/video")
                     continue
 
                 temp_post_id = story_node.get('post_id')
@@ -821,17 +821,17 @@ def fetch_posts(
 
                 if cutoff_time:
                     if not posted_dt:
-                        print(f"  Skipping post {temp_post_id} because posted_at is unknown")
+                        print(f"  Skipping post {temp_post_id} vi khong xac dinh duoc posted_at")
                         continue
                     if posted_dt < cutoff_time:
-                        print(f"  Reached post older than 24h: {temp_post_id} ({posted_at})")
+                        print(f"  Da gap post cu hon 24h: {temp_post_id} ({posted_at})")
                         stop_due_to_time = True
                         continue
                 
                 # Check comment count threshold
                 comment_count = extract_comment_count(story_node)
                 if min_comments > 0 and comment_count < min_comments:
-                    print(f"  ⏭️  Skipping post with only {comment_count} comments (need {min_comments}+)")
+                    print(f"  â­ï¸  Bo qua post chi co {comment_count} binh luan (can {min_comments}+)")
                     continue
                 
                 # Extract group name from first post if not set
@@ -840,14 +840,14 @@ def fetch_posts(
                     if use_global_group_name:
                         GROUP_NAME = request_group_name
                     if request_group_name:
-                        print(f"📂 Group name: {request_group_name}")
+                        print(f"ðŸ“‚ Ten group: {request_group_name}")
                 
                 # Check if post already exists
                 temp_group_name = request_group_name or extract_group_name(story_node)
                 if temp_group_name:
                     temp_name_folder = sanitize_group_folder_name(temp_group_name)
                     if post_already_exists(temp_post_id, "group_post", temp_name_folder):
-                        print(f"  ⏭️  Skipping already scraped post: {temp_post_id}")
+                        print(f"  â­ï¸  Bo qua post da scrape truoc do: {temp_post_id}")
                         continue
                 
                 post_data = extract_post_data(
@@ -864,12 +864,12 @@ def fetch_posts(
                     batch_posts.append(post_data)
                     all_posts.append(post_data)
                     posts_found += 1
-                    print(f"  - Found post: {post_data['post_id']}")
+                    print(f"  - Tìm thấy post: {post_data['post_id']}")
                     
                     # Check if we should process this batch
                     if batch_size > 0 and len(batch_posts) >= batch_size and on_batch_complete:
                         total_label = limit if limit is not None else "24h"
-                        print(f"\n📦 Batch complete: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
+                        print(f"\nðŸ“¦ Hoan tat lo: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
                         on_batch_complete(batch_posts, len(all_posts), limit)
                         batch_posts = []  # Reset batch
                     
@@ -916,23 +916,23 @@ def fetch_posts(
                     has_next_page = has_next_page or candidate_has_next
         
         print(
-            f"Found {posts_found} posts on this page "
+            f"Tim thay {posts_found} post trong trang nay "
             f"(has_next_page={has_next_page}, next_cursor={'yes' if next_cursor else 'no'})"
         )
 
         if stop_due_to_time:
-            print("Reached posts older than 24h. Stopping pagination.")
+            print("Da gap post cu hon 24h. Dung phan trang.")
             break
         
         if limit is not None and len(all_posts) >= limit:
-            print("No more pages or reached limit. Stopping. reason=limit")
+            print("Không còn trang hoặc đã đạt giới hạn. Dừng lại. reason=limit")
             break
 
         if not has_next_page or not next_cursor:
             if not has_next_page:
-                print("No more pages or reached limit. Stopping. reason=no_next_page")
+                print("Không còn trang hoặc đã đạt giới hạn. Dừng lại. reason=no_next_page")
             else:
-                print("No more pages or reached limit. Stopping. reason=no_cursor")
+                print("Không còn trang hoặc đã đạt giới hạn. Dừng lại. reason=no_cursor")
             break
         
         cursor = next_cursor
@@ -942,12 +942,12 @@ def fetch_posts(
     # Process any remaining posts in the final batch
     if batch_posts and on_batch_complete:
         total_label = limit if limit is not None else "24h"
-        print(f"\n📦 Final batch: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
+        print(f"\nðŸ“¦ Lo cuoi: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
         on_batch_complete(batch_posts, len(all_posts), limit)
     
     return all_posts
 
-# # log raw node của 1 post dùng biệt hiệu đăng bài
+# # log raw node cá»§a 1 post dÃ¹ng biá»‡t hiá»‡u Ä‘Äƒng bÃ i
 # def log_raw_node_for_post(post_id_to_find):
 #     posts = fetch_posts(limit=100)
 #     for post in posts:
@@ -971,7 +971,7 @@ if __name__ == "__main__":
     with open("group_posts.json", "w", encoding="utf-8") as f:
         json.dump(posts, f, ensure_ascii=False, indent=2)
     
-    print(f"\n✓ Saved {len(posts)} posts to group_posts.json")
+    print(f"\nâœ“ Saved {len(posts)} posts to group_posts.json")
     
     # Print summary
     print("\nSummary:")
@@ -980,9 +980,10 @@ if __name__ == "__main__":
         videos = len(post['videos'])
         print(f"{i}. Post ID: {post['post_id']}")
         if photos:
-            print(f"   📷 {photos} photo(s)")
+            print(f"   ðŸ“· {photos} photo(s)")
         if videos:
-            print(f"   🎥 {videos} video(s)")
+            print(f"   ðŸŽ¥ {videos} video(s)")
         if post['message']:
             preview = post['message'][:100] + '...' if len(post['message']) > 100 else post['message']
             print(f"   {preview}")
+

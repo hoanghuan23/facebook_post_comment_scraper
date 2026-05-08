@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func
 
 from backend.config import settings
-from backend.database.crud import AnalyticsCRUD, LogCRUD, PostCRUD, SourceCRUD
+from backend.database.crud import AnalyticsCRUD, FacebookSessionCRUD, LogCRUD, PostCRUD, ScrapeJobCRUD, SourceCRUD
 from backend.database.db import SessionLocal
 from backend.database.models import AnalyticsCache, Comment, Post, Source, SourceType
 from backend.scraper.facebook_service import FacebookScraperService
@@ -29,6 +29,12 @@ def _format_post_update_list(post_refs, max_items: int = 10) -> str:
     shown = post_refs[:max_items]
     suffix = f" ... +{len(post_refs) - max_items} more" if len(post_refs) > max_items else ""
     return ", ".join(shown) + suffix if shown else "-"
+
+
+def _safe_rate(count: int, duration_seconds: float) -> float:
+    if duration_seconds <= 0:
+        return 0.0
+    return round(count / duration_seconds, 3)
 
 
 def _start_task_log(db, task_name: str):
@@ -72,11 +78,12 @@ async def periodic_scrape_new_posts():
     task_log = _start_task_log(db, "periodic_scrape_new_posts")
 
     try:
-        due_sources = SourceCRUD.get_due_for_scraping(db, limit=settings.SCRAPER_MAX_WORKERS * 5)
-        # due_sources = SourceCRUD.get_due_for_scraping(db, limit=100) # giới hạn chạy 100 nguồn
-        logger.info("periodic_scrape_new_posts START: total_due_sources=%s", len(due_sources))
+        # due_sources = SourceCRUD.get_due_for_scraping(db, limit=settings.SCRAPER_MAX_WORKERS * 5)
+        due_sources = SourceCRUD.get_due_for_scraping(db, limit=100) # giới hạn chạy 100 nguồn
+        total_due_sources = len(due_sources)
+        logger.info("Bắt đầu periodic_scrape_new_posts: total_due_sources=%s", total_due_sources)
         if not due_sources:
-            logger.info("periodic_scrape_new_posts DONE: total_due_sources=0")
+            logger.info("Kết thúc periodic_scrape_new_posts: total_due_sources=0")
             _finish_task_log(db, task_log, 0, started_at_ts)
             return
 
@@ -91,18 +98,25 @@ async def periodic_scrape_new_posts():
             for source in due_sources
         ]
 
+        source_index_map = {job["id"]: idx for idx, job in enumerate(source_jobs, start=1)}
+
         def _scrape_source_job(job: dict):
             job_db = SessionLocal()
             source_id = job["id"]
+            scrape_job_id = None
+            progress_index = source_index_map.get(source_id, 0)
             source_label = _format_source_label(source_id, job.get("source_name"))
             thread_label = _current_thread_label()
             next_scrape = datetime.utcnow() + timedelta(seconds=settings.TASK_SCRAPE_NEW_POSTS_INTERVAL)
+            source_started_at = time.time()
             try:
                 if job["source_type"] not in {SourceType.GROUP, SourceType.PAGE, SourceType.USER}:
                     logger.info(
-                        "periodic_scrape_new_posts SKIP: thread=%s source=%s reason=unsupported_type type=%s",
+                        "Bỏ qua periodic_scrape_new_posts: thread=%s source=%s progress=%s/%s reason=unsupported_type type=%s",
                         thread_label,
                         source_label,
+                        progress_index,
+                        total_due_sources,
                         job["source_type"].value,
                     )
                     SourceCRUD.update_scrape_info(job_db, source_id, next_scrape=next_scrape)
@@ -110,18 +124,36 @@ async def periodic_scrape_new_posts():
 
                 if job["is_accessible"] is False and job["permission_checked_at"] is not None:
                     logger.warning(
-                        "periodic_scrape_new_posts SKIP: thread=%s source=%s reason=inaccessible",
+                        "Bỏ qua periodic_scrape_new_posts: thread=%s source=%s progress=%s/%s reason=inaccessible",
                         thread_label,
                         source_label,
+                        progress_index,
+                        total_due_sources,
                     )
                     SourceCRUD.update_scrape_info(job_db, source_id, next_scrape=next_scrape)
                     return {"status": "skipped"}
 
                 latest_posted_at = PostCRUD.get_latest_posted_at_by_source(job_db, source_id, tracked_only=True)
+                source = SourceCRUD.get_by_id(job_db, source_id)
+                active_session = (
+                    FacebookSessionCRUD.get_active_by_user_id(job_db, source.user_id)
+                    if source
+                    else None
+                )
+                scrape_job = ScrapeJobCRUD.create_job(
+                    db=job_db,
+                    source_id=source_id,
+                    session_id=active_session.id if active_session else None,
+                    status="running",
+                    started_at=datetime.utcnow(),
+                )
+                scrape_job_id = scrape_job.id
                 logger.info(
-                    "periodic_scrape_new_posts SOURCE START: thread=%s source=%s latest_cutoff=%s",
+                    "Bắt đầu scrape source: thread=%s source=%s progress=%s/%s latest_cutoff=%s",
                     thread_label,
                     source_label,
+                    progress_index,
+                    total_due_sources,
                     latest_posted_at.isoformat() if latest_posted_at else None,
                 )
                 result = FacebookScraperService.scrape_source(
@@ -130,21 +162,48 @@ async def periodic_scrape_new_posts():
                     limit=10,
                     min_posted_at=latest_posted_at,
                 )
+                ScrapeJobCRUD.mark_done(
+                    db=job_db,
+                    job_id=scrape_job_id,
+                    posts_found=result.total_fetched,
+                    posts_new=result.created_posts,
+                    finished_at=datetime.utcnow(),
+                )
                 SourceCRUD.update_scrape_info(job_db, source_id, next_scrape=next_scrape)
+                source_duration = round(time.time() - source_started_at, 3)
                 logger.info(
-                    "periodic_scrape_new_posts SOURCE DONE: thread=%s source=%s fetched=%s created_posts=%s updated_posts=%s",
+                    "Kết thúc scrape source: thread=%s source=%s progress=%s/%s fetched=%s created_posts=%s updated_posts=%s skipped_posts=%s filtered_by_cutoff=%s duration_seconds=%s",
                     thread_label,
                     source_label,
+                    progress_index,
+                    total_due_sources,
                     result.total_fetched,
                     result.created_posts,
                     result.updated_posts,
+                    result.skipped_posts,
+                    result.filtered_by_cutoff,
+                    source_duration,
                 )
-                return {"status": "scraped", "created_posts": result.created_posts}
+                return {
+                    "status": "scraped",
+                    "created_posts": result.created_posts,
+                    "updated_posts": result.updated_posts,
+                    "fetched_posts": result.total_fetched,
+                }
             except Exception as exc:
+                if scrape_job_id is not None:
+                    ScrapeJobCRUD.mark_failed(
+                        db=job_db,
+                        job_id=scrape_job_id,
+                        error_message=str(exc),
+                        finished_at=datetime.utcnow(),
+                    )
                 logger.exception(
-                    "periodic_scrape_new_posts ERROR: thread=%s source=%s error=%s",
+                    "Lỗi periodic_scrape_new_posts: thread=%s source=%s progress=%s/%s error=%s",
                     thread_label,
                     source_label,
+                    progress_index,
+                    total_due_sources,
                     exc,
                 )
                 SourceCRUD.update_scrape_info(job_db, source_id, next_scrape=next_scrape)
@@ -162,26 +221,36 @@ async def periodic_scrape_new_posts():
 
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [executor.submit(_scrape_source_job, job) for job in source_jobs]
+            total_updated_posts = 0
+            total_fetched_posts = 0
             for future in as_completed(futures):
                 outcome = future.result()
                 if outcome["status"] == "scraped":
                     scraped_count += 1
                     total_new_posts_created += outcome.get("created_posts", 0)
+                    total_updated_posts += outcome.get("updated_posts", 0)
+                    total_fetched_posts += outcome.get("fetched_posts", 0)
                 elif outcome["status"] == "skipped":
                     skipped_count += 1
                 else:
                     errors_count += 1
+        total_duration = round(time.time() - started_at_ts, 3)
         logger.info(
-            "periodic_scrape_new_posts DONE: scraped_sources=%s skipped_sources=%s error_sources=%s total_due_sources=%s total_new_posts_created=%s",
+            "Kết thúc periodic_scrape_new_posts: scraped_sources=%s skipped_sources=%s error_sources=%s total_due_sources=%s total_fetched_posts=%s total_new_posts_created=%s total_updated_posts=%s duration_seconds=%s source_per_second=%s post_per_second=%s",
             scraped_count,
             skipped_count,
             errors_count,
-            len(due_sources),
+            total_due_sources,
+            total_fetched_posts,
             total_new_posts_created,
+            total_updated_posts,
+            total_duration,
+            _safe_rate(scraped_count + skipped_count + errors_count, total_duration),
+            _safe_rate(total_fetched_posts, total_duration),
         )
         _finish_task_log(db, task_log, scraped_count, started_at_ts, errors_count=errors_count)
     except Exception as exc:
-        logger.exception("periodic_scrape_new_posts failed: %s", exc)
+        logger.exception("periodic_scrape_new_posts thất bại: %s", exc)
         _finish_task_log(
             db,
             task_log,
@@ -205,65 +274,87 @@ async def update_recent_post_metrics():
     task_log = _start_task_log(db, "update_recent_post_metrics")
 
     try:
-        recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=settings.SCRAPER_MAX_WORKERS * 50)
-        # recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=100) # giới hạn chạy 100 post gần đây
+        # recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=settings.SCRAPER_MAX_WORKERS * 50)
+        recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=100) # giới hạn chạy 100 post gần đây
         source_ids = list({post.source_id for post in recent_posts})
         logger.info(
-            "update_recent_post_metrics START: recent_posts_count=%s candidate_source_count=%s",
+            "Bắt đầu update_recent_post_metrics: recent_posts_count=%s candidate_source_count=%s",
             len(recent_posts),
             len(source_ids),
         )
         if not recent_posts:
-            logger.info("update_recent_post_metrics DONE: recent_posts_count=0 candidate_source_count=0")
+            logger.info("Kết thúc update_recent_post_metrics: recent_posts_count=0 candidate_source_count=0")
             _finish_task_log(db, task_log, 0, started_at_ts)
             return
 
+        total_sources = len(source_ids)
+        source_index_map = {sid: idx for idx, sid in enumerate(source_ids, start=1)}
+
         def _refresh_metrics_job(source_id: int):
             job_db = SessionLocal()
+            source_started_at = time.time()
             try:
                 source = SourceCRUD.get_by_id(job_db, source_id)
                 if not source or not source.is_active:
                     return {"status": "ignored"}
                 source_label = _format_source_label(source.id, source.source_name)
                 thread_label = _current_thread_label()
+                progress_index = source_index_map.get(source_id, 0)
                 if source.is_accessible is False and source.permission_checked_at is not None:
                     logger.warning(
-                        "update_recent_post_metrics SKIP: thread=%s source=%s reason=inaccessible",
+                        "Bỏ qua update_recent_post_metrics: thread=%s source=%s progress=%s/%s reason=inaccessible",
                         thread_label,
                         source_label,
+                        progress_index,
+                        total_sources,
                     )
                     return {"status": "skipped"}
                 if source.source_type not in {SourceType.GROUP, SourceType.PAGE, SourceType.USER}:
                     logger.info(
-                        "update_recent_post_metrics SKIP: thread=%s source=%s reason=unsupported_type type=%s",
+                        "Bỏ qua update_recent_post_metrics: thread=%s source=%s progress=%s/%s reason=unsupported_type type=%s",
                         thread_label,
                         source_label,
+                        progress_index,
+                        total_sources,
                         source.source_type.value,
                     )
                     return {"status": "skipped"}
 
                 logger.info(
-                    "update_recent_post_metrics SOURCE START: thread=%s source=%s",
+                    "Bắt đầu cập nhật metric source: thread=%s source=%s progress=%s/%s",
                     thread_label,
                     source_label,
+                    progress_index,
+                    total_sources,
                 )
                 result = FacebookScraperService.refresh_recent_post_metrics(job_db, source, limit=None)
                 updated_post_refs = result.get("updated_post_refs", [])
+                source_duration = round(time.time() - source_started_at, 3)
                 logger.info(
-                    "update_recent_post_metrics SOURCE DONE: thread=%s source=%s fetched=%s updated_count=%s skipped=%s updated_posts=[%s]",
+                    "Kết thúc cập nhật metric source: thread=%s source=%s progress=%s/%s fetched=%s updated_count=%s skipped=%s updated_posts=[%s] duration_seconds=%s",
                     thread_label,
                     source_label,
+                    progress_index,
+                    total_sources,
                     result["fetched"],
                     result["updated"],
                     result["skipped"],
                     _format_post_update_list(updated_post_refs, max_items=10),
+                    source_duration,
                 )
-                return {"status": "refreshed", "source_id": source.id, "updated": result["updated"]}
+                return {
+                    "status": "refreshed",
+                    "source_id": source.id,
+                    "updated": result["updated"],
+                    "fetched": result["fetched"],
+                }
             except Exception as exc:
                 logger.exception(
-                    "update_recent_post_metrics ERROR: thread=%s source_id=%s error=%s",
+                    "Lỗi update_recent_post_metrics: thread=%s source_id=%s progress=%s/%s error=%s",
                     _current_thread_label(),
                     source_id,
+                    source_index_map.get(source_id, 0),
+                    total_sources,
                     exc,
                 )
                 LogCRUD.create_scraper_log(
@@ -280,24 +371,32 @@ async def update_recent_post_metrics():
 
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [executor.submit(_refresh_metrics_job, source_id) for source_id in source_ids]
+            total_fetched = 0
             for future in as_completed(futures):
                 outcome = future.result()
                 if outcome["status"] == "refreshed":
                     refreshed_sources.add(outcome["source_id"])
                     updated_posts += outcome["updated"]
+                    total_fetched += outcome.get("fetched", 0)
                 elif outcome["status"] == "error":
                     errors_count += 1
 
+        total_duration = round(time.time() - started_at_ts, 3)
         logger.info(
-            "update_recent_post_metrics DONE: refreshed_sources=%s updated_posts_total=%s error_sources=%s recent_posts_count=%s",
+            "Kết thúc update_recent_post_metrics: refreshed_sources=%s updated_posts_total=%s error_sources=%s recent_posts_count=%s candidate_source_count=%s fetched_posts_total=%s duration_seconds=%s source_per_second=%s post_per_second=%s",
             len(refreshed_sources),
             updated_posts,
             errors_count,
             len(recent_posts),
+            total_sources,
+            total_fetched,
+            total_duration,
+            _safe_rate(len(refreshed_sources), total_duration),
+            _safe_rate(updated_posts, total_duration),
         )
         _finish_task_log(db, task_log, updated_posts, started_at_ts, errors_count=errors_count)
     except Exception as exc:
-        logger.exception("update_recent_post_metrics failed: %s", exc)
+        logger.exception("update_recent_post_metrics thất bại: %s", exc)
         _finish_task_log(
             db,
             task_log,

@@ -172,14 +172,13 @@ CREATE TABLE scrape_jobs (
                    CHECK (status IN ('pending', 'running', 'done', 'failed')),
     posts_found    INTEGER NOT NULL DEFAULT 0,
     posts_new      INTEGER NOT NULL DEFAULT 0,
-    posts_updated  INTEGER NOT NULL DEFAULT 0,
     error_message  TEXT,
     started_at     DATETIME,
-    finished_at    DATETIME,
-    created_at     DATETIME NOT NULL DEFAULT (datetime('now'))
+    finished_at    DATETIME
 );
-CREATE TABLE sqlite_sequence(name,seq);
+
 CREATE INDEX idx_jobs_source_time
-    ON scrape_jobs(source_id, created_at DESC);
+    ON scrape_jobs(source_id, started_at DESC);
+
 CREATE INDEX idx_jobs_status
-    ON scrape_jobs(status, created_at DESC);
+    ON scrape_jobs(status, started_at DESC);

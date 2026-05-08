@@ -331,6 +331,29 @@ class AnalyticsCache(Base):
     )
 
 
+class ScrapeJob(Base):
+    __tablename__ = "scrape_jobs"
+
+    id = Column(Integer, primary_key=True)
+    source_id = Column(Integer, ForeignKey("sources.id"), nullable=False)
+    session_id = Column(Integer, ForeignKey("facebook_sessions.id"), nullable=True)
+    status = Column(String(10), nullable=False, default="pending")
+    posts_found = Column(Integer, nullable=False, default=0)
+    posts_new = Column(Integer, nullable=False, default=0)
+    error_message = Column(Text, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'running', 'done', 'failed')",
+            name="ck_scrape_jobs_status",
+        ),
+        Index("idx_jobs_source_time", "source_id", "started_at"),
+        Index("idx_jobs_status", "status", "started_at"),
+    )
+
+
 class ScraperLog(Base):
     __tablename__ = "scraper_logs"
 

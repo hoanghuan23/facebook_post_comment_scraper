@@ -27,6 +27,7 @@ class FacebookScrapeResult:
     created_posts: int
     updated_posts: int
     skipped_posts: int
+    filtered_by_cutoff: int
     post_ids: List[int]
 
 
@@ -372,7 +373,7 @@ class FacebookScraperService:
             SourceCRUD.update(db, source.id, source_name=detected_source_name)
 
         logger.info(
-            "Scraped group source %s: fetched=%s created=%s updated=%s skipped=%s filtered_by_cutoff=%s",
+            "Hoàn tất scrape source group: source_id=%s fetched=%s created=%s updated=%s skipped=%s filtered_by_cutoff=%s",
             source.id,
             len(raw_posts),
             created_posts,
@@ -387,6 +388,7 @@ class FacebookScraperService:
             created_posts=created_posts,
             updated_posts=updated_posts,
             skipped_posts=skipped_posts,
+            filtered_by_cutoff=skipped_by_cutoff,
             post_ids=post_ids,
         )
 
@@ -462,7 +464,7 @@ class FacebookScraperService:
             SourceCRUD.update(db, source.id, source_name=detected_source_name)
 
         logger.info(
-            "Scraped timeline source %s: fetched=%s created=%s updated=%s skipped=%s filtered_by_cutoff=%s",
+            "Hoàn tất scrape source timeline: source_id=%s fetched=%s created=%s updated=%s skipped=%s filtered_by_cutoff=%s",
             source.id,
             len(raw_posts),
             created_posts,
@@ -477,6 +479,7 @@ class FacebookScraperService:
             created_posts=created_posts,
             updated_posts=updated_posts,
             skipped_posts=skipped_posts,
+            filtered_by_cutoff=skipped_by_cutoff,
             post_ids=post_ids,
         )
 

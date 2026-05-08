@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from fastapi import BackgroundTasks
 from backend.database.crud import CommentCRUD, FacebookSessionCRUD, PostCRUD, SourceCRUD, UserCRUD
 from backend.database.db import SessionLocal, engine
-from backend.database.models import Base, ScraperLog
+from backend.database.models import Base, ScrapeJob, ScraperLog
 from backend.database.schemas import SourceCreate
 from backend.api.routes.sources import _bootstrap_scrape_source_last_24h, create_source
 from backend.scraper.facebook_service import (
@@ -924,11 +924,11 @@ def test_periodic_scrape_new_posts_logs_source_name_and_summary(monkeypatch, cap
         asyncio.run(periodic_scrape_new_posts())
 
     logs = caplog.text
-    assert "periodic_scrape_new_posts SOURCE START" in logs
+    assert "Bắt đầu scrape source" in logs
     assert f"Log Periodic Group (id={source.id})" in logs
-    assert "periodic_scrape_new_posts SOURCE DONE" in logs
+    assert "Kết thúc scrape source" in logs
     assert "created_posts=1" in logs
-    assert "periodic_scrape_new_posts DONE" in logs
+    assert "Kết thúc periodic_scrape_new_posts" in logs
     assert "total_new_posts_created=1" in logs
 
 
@@ -970,11 +970,11 @@ def test_update_recent_post_metrics_logs_updated_post_list_capped(monkeypatch, c
         asyncio.run(update_recent_post_metrics())
 
     logs = caplog.text
-    assert "update_recent_post_metrics SOURCE START" in logs
+    assert "Bắt đầu cập nhật metric source" in logs
     assert f"Log Metrics Group (id={source_id})" in logs
-    assert "update_recent_post_metrics SOURCE DONE" in logs
+    assert "Kết thúc cập nhật metric source" in logs
     assert "updated_posts=[post-1, post-2, post-3, post-4, post-5, post-6, post-7, post-8, post-9, post-10 ... +2 more]" in logs
-    assert "update_recent_post_metrics DONE" in logs
+    assert "Kết thúc update_recent_post_metrics" in logs
     assert "updated_posts_total=12" in logs
 
 
@@ -1238,7 +1238,216 @@ def test_bootstrap_scrape_logs_error_without_crashing(monkeypatch):
             .first()
         )
         assert log is not None
-        assert "Bootstrap 24h scrape failed" in log.message
+        assert "Bootstrap scrape 24h thất bại" in log.message
         assert log.error_type == "RuntimeError"
+    finally:
+        verify_db.close()
+
+
+def test_periodic_scrape_new_posts_creates_done_scrape_job_without_session(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="periodic-job-no-session", email="periodic-job-no-session@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-periodic-job-no-session",
+            facebook_url="https://www.facebook.com/groups/group-periodic-job-no-session",
+            source_name="Periodic Job No Session",
+        )
+        source_id = source.id
+    finally:
+        db.close()
+
+    monkeypatch.setattr(
+        "backend.scraper.facebook_service.group_scraper.fetch_posts",
+        lambda limit=20: [
+            {
+                "post_id": "periodic-job-post-1",
+                "group_link": "https://www.facebook.com/groups/group-periodic-job-no-session/",
+                "permalink": "https://facebook.com/posts/periodic-job-post-1",
+                "message": "Periodic job post",
+                "posted_at": datetime(2026, 1, 6, 10, 0, 0),
+                "reaction_count": 2,
+                "share_count": 1,
+                "comment_count": 1,
+                "group_name": "Periodic Job No Session",
+                "photos": [],
+                "videos": [],
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        "backend.scraper.facebook_service.comment_scraper.fetch_comments",
+        lambda feedback_id, cookies=None: ([], {"is_active": True}),
+    )
+
+    import asyncio
+    asyncio.run(periodic_scrape_new_posts())
+
+    verify_db = SessionLocal()
+    try:
+        job = (
+            verify_db.query(ScrapeJob)
+            .filter(ScrapeJob.source_id == source_id)
+            .order_by(ScrapeJob.id.desc())
+            .first()
+        )
+        assert job is not None
+        assert job.status == "done"
+        assert job.session_id is None
+        assert job.posts_found == 1
+        assert job.posts_new == 1
+        assert job.started_at is not None
+        assert job.finished_at is not None
+    finally:
+        verify_db.close()
+
+
+def test_periodic_scrape_new_posts_marks_failed_scrape_job_and_keeps_counters_default(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="periodic-job-failed", email="periodic-job-failed@example.com", password="secret123")
+        session = FacebookSessionCRUD.upsert_active_for_user(
+            db=db,
+            user_id=user.id,
+            fb_cookies='{"c_user":"123"}',
+            fb_dtsg="token",
+        )
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-periodic-job-failed",
+            facebook_url="https://www.facebook.com/groups/group-periodic-job-failed",
+            source_name="Periodic Job Failed",
+        )
+        source_id = source.id
+        session_id = session.id
+    finally:
+        db.close()
+
+    monkeypatch.setattr(
+        "backend.scheduler.periodic_tasks.FacebookScraperService.scrape_source",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("periodic scrape failed")),
+    )
+
+    import asyncio
+    asyncio.run(periodic_scrape_new_posts())
+
+    verify_db = SessionLocal()
+    try:
+        job = (
+            verify_db.query(ScrapeJob)
+            .filter(ScrapeJob.source_id == source_id)
+            .order_by(ScrapeJob.id.desc())
+            .first()
+        )
+        assert job is not None
+        assert job.status == "failed"
+        assert job.session_id == session_id
+        assert job.error_message == "periodic scrape failed"
+        assert job.posts_found == 0
+        assert job.posts_new == 0
+        assert job.started_at is not None
+        assert job.finished_at is not None
+    finally:
+        verify_db.close()
+
+
+def test_bootstrap_scrape_creates_done_scrape_job_with_session(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="bootstrap-job-done", email="bootstrap-job-done@example.com", password="secret123")
+        session = FacebookSessionCRUD.upsert_active_for_user(
+            db=db,
+            user_id=user.id,
+            fb_cookies='{"c_user":"123"}',
+            fb_dtsg="token",
+        )
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-bootstrap-job-done",
+            facebook_url="https://www.facebook.com/groups/group-bootstrap-job-done",
+            source_name="Bootstrap Job Done",
+        )
+        source_id = source.id
+        session_id = session.id
+    finally:
+        db.close()
+
+    monkeypatch.setattr(
+        "backend.api.routes.sources.FacebookScraperService.scrape_source",
+        lambda *args, **kwargs: SimpleNamespace(
+            total_fetched=3,
+            created_posts=2,
+            updated_posts=1,
+            skipped_posts=0,
+            filtered_by_cutoff=0,
+        ),
+    )
+
+    _bootstrap_scrape_source_last_24h(source_id)
+
+    verify_db = SessionLocal()
+    try:
+        job = (
+            verify_db.query(ScrapeJob)
+            .filter(ScrapeJob.source_id == source_id)
+            .order_by(ScrapeJob.id.desc())
+            .first()
+        )
+        assert job is not None
+        assert job.status == "done"
+        assert job.session_id == session_id
+        assert job.posts_found == 3
+        assert job.posts_new == 2
+        assert job.started_at is not None
+        assert job.finished_at is not None
+    finally:
+        verify_db.close()
+
+
+def test_bootstrap_scrape_marks_failed_scrape_job_and_keeps_counters_default(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="bootstrap-job-failed", email="bootstrap-job-failed@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-bootstrap-job-failed",
+            facebook_url="https://www.facebook.com/groups/group-bootstrap-job-failed",
+            source_name="Bootstrap Job Failed",
+        )
+        source_id = source.id
+    finally:
+        db.close()
+
+    monkeypatch.setattr(
+        "backend.api.routes.sources.FacebookScraperService.scrape_source",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("bootstrap failed job")),
+    )
+
+    _bootstrap_scrape_source_last_24h(source_id)
+
+    verify_db = SessionLocal()
+    try:
+        job = (
+            verify_db.query(ScrapeJob)
+            .filter(ScrapeJob.source_id == source_id)
+            .order_by(ScrapeJob.id.desc())
+            .first()
+        )
+        assert job is not None
+        assert job.status == "failed"
+        assert job.error_message == "bootstrap failed job"
+        assert job.posts_found == 0
+        assert job.posts_new == 0
+        assert job.started_at is not None
+        assert job.finished_at is not None
     finally:
         verify_db.close()

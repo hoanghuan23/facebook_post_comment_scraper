@@ -148,6 +148,70 @@ class FacebookSessionCRUD:
         return session
 
 
+class ScrapeJobCRUD:
+    """CRUD operations for ScrapeJob model."""
+
+    @staticmethod
+    def create_job(
+        db: Session,
+        source_id: int,
+        session_id: Optional[int] = None,
+        status: str = "running",
+        started_at: Optional[datetime] = None,
+    ) -> models.ScrapeJob:
+        """Create a scrape job row before scraping starts."""
+        db_job = models.ScrapeJob(
+            source_id=source_id,
+            session_id=session_id,
+            status=status,
+            started_at=started_at or datetime.utcnow(),
+        )
+        db.add(db_job)
+        db.commit()
+        db.refresh(db_job)
+        return db_job
+
+    @staticmethod
+    def mark_done(
+        db: Session,
+        job_id: int,
+        posts_found: int,
+        posts_new: int,
+        finished_at: Optional[datetime] = None,
+    ) -> Optional[models.ScrapeJob]:
+        """Mark scrape job as done and update counters."""
+        job = db.query(models.ScrapeJob).filter(models.ScrapeJob.id == job_id).first()
+        if not job:
+            return None
+
+        job.status = "done"
+        job.posts_found = posts_found
+        job.posts_new = posts_new
+        job.finished_at = finished_at or datetime.utcnow()
+        db.commit()
+        db.refresh(job)
+        return job
+
+    @staticmethod
+    def mark_failed(
+        db: Session,
+        job_id: int,
+        error_message: str,
+        finished_at: Optional[datetime] = None,
+    ) -> Optional[models.ScrapeJob]:
+        """Mark scrape job as failed and store error message."""
+        job = db.query(models.ScrapeJob).filter(models.ScrapeJob.id == job_id).first()
+        if not job:
+            return None
+
+        job.status = "failed"
+        job.error_message = error_message
+        job.finished_at = finished_at or datetime.utcnow()
+        db.commit()
+        db.refresh(job)
+        return job
+
+
 # ==================== SOURCE OPERATIONS ====================
 
 class SourceCRUD:
