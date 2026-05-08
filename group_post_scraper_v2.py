@@ -406,14 +406,20 @@ def extract_media(node, post_id, save_dir="group_post", cookies=None, fb_dtsg=No
     attachments = node.get('attachments', [])
     
     for attachment in attachments:
+        if not isinstance(attachment, dict):
+            continue
+
         styles = attachment.get('styles', {}) or {}
         styled_attachment = styles.get('attachment', {}) or {}
+        attachment_media = attachment.get('media') or {}
+        if not isinstance(attachment_media, dict):
+            attachment_media = {}
 
         # Some group posts expose the image under styles.attachment.media,
         # others only under attachment.media. Try both.
-        single_media = styled_attachment.get('media') or attachment.get('media') or {}
+        single_media = styled_attachment.get('media') or attachment_media or {}
         if isinstance(single_media, dict):
-            media_id = single_media.get('id') or attachment.get('media', {}).get('id')
+            media_id = single_media.get('id') or attachment_media.get('id')
 
             photo_image = single_media.get('photo_image') or single_media.get('image')
             image_url = photo_image.get('uri') if photo_image else None
@@ -446,7 +452,11 @@ def extract_media(node, post_id, save_dir="group_post", cookies=None, fb_dtsg=No
             or styled_attachment.get('all_subattachments', {}).get('nodes', [])
         )
         for subattachment in subattachments:
+            if not isinstance(subattachment, dict):
+                continue
             photo_data = subattachment.get('media', {}) or {}
+            if not isinstance(photo_data, dict):
+                continue
             media_id = photo_data.get('id')
             photo_image = photo_data.get('photo_image') or photo_data.get('image')
 
@@ -475,8 +485,8 @@ def extract_media(node, post_id, save_dir="group_post", cookies=None, fb_dtsg=No
                 })
 
         # Handle video attachments from the direct attachment media shape
-        if 'media' in attachment and attachment['media'].get('__typename') == 'Video':
-            video_data = attachment.get('media', {})
+        if isinstance(attachment_media, dict) and attachment_media.get('__typename') == 'Video':
+            video_data = attachment_media
             media['videos'].append({
                 'id': video_data.get('id'),
                 'url': video_data.get('playable_url'),

@@ -1,4 +1,6 @@
 # Main FastAPI application
+import sys
+
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -16,6 +18,13 @@ from backend.database.db import Base, engine  # Ensure models are imported for d
 
 
 Base.metadata.create_all(bind=engine)
+
+# Ensure terminal output uses UTF-8 to avoid UnicodeEncodeError on Windows consoles.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # Configure logging
 logger = setup_logging(settings.LOG_LEVEL)
 sqlite_db_path = get_database_file_path(settings.DATABASE_URL)

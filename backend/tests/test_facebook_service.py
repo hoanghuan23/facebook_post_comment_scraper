@@ -542,6 +542,49 @@ def test_periodic_scrape_new_posts_accepts_string_posted_at(monkeypatch):
         db.close()
 
 
+def test_scrape_group_source_handles_none_attachment_media_without_crash(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="none-media", email="none-media@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-none-media",
+            facebook_url="https://www.facebook.com/groups/group-none-media",
+            source_name="None Media Group",
+        )
+
+        monkeypatch.setattr(
+            "backend.scraper.facebook_service.group_scraper.fetch_posts",
+            lambda limit=20: [
+                {
+                    "post_id": "none-media-post",
+                    "group_link": "https://www.facebook.com/groups/group-none-media/",
+                    "permalink": "https://facebook.com/posts/none-media-post",
+                    "message": "Post with none media",
+                    "posted_at": "2026-01-03T09:00:00Z",
+                    "reaction_count": 3,
+                    "share_count": 1,
+                    "comment_count": 2,
+                    "group_name": "None Media Group",
+                    "photos": [],
+                    "videos": [],
+                    "attachments": [
+                        {"media": None, "styles": {"attachment": {"media": None}}},
+                    ],
+                }
+            ],
+        )
+
+        result = FacebookScraperService.scrape_source(db, source.id, limit=5)
+        post = PostCRUD.get_by_source_and_facebook_post_id(db, source.id, "none-media-post")
+        assert result.created_posts == 1
+        assert post is not None
+    finally:
+        db.close()
+
+
 def test_get_latest_posted_at_by_source_returns_latest_and_none_for_empty():
     db = SessionLocal()
     try:
@@ -834,6 +877,103 @@ def test_periodic_scrape_new_posts_uses_latest_db_post_as_cutoff(monkeypatch):
         assert PostCRUD.get_by_source_and_facebook_post_id(verify_db, source_id, "periodic-new") is not None
     finally:
         verify_db.close()
+
+
+def test_periodic_scrape_new_posts_logs_source_name_and_summary(monkeypatch, caplog):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="log-periodic", email="log-periodic@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-log-periodic",
+            facebook_url="https://www.facebook.com/groups/group-log-periodic",
+            source_name="Log Periodic Group",
+        )
+    finally:
+        db.close()
+
+    monkeypatch.setattr(
+        "backend.scraper.facebook_service.group_scraper.fetch_posts",
+        lambda limit=20: [
+            {
+                "post_id": "log-periodic-new",
+                "group_link": "https://www.facebook.com/groups/group-log-periodic/",
+                "permalink": "https://facebook.com/posts/log-periodic-new",
+                "message": "New periodic",
+                "posted_at": datetime(2026, 1, 4, 10, 1, 0),
+                "reaction_count": 5,
+                "share_count": 1,
+                "comment_count": 2,
+                "group_name": "Log Periodic Group",
+                "photos": [],
+                "videos": [],
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        "backend.scraper.facebook_service.comment_scraper.fetch_comments",
+        lambda feedback_id, cookies=None: ([], {"is_active": True}),
+    )
+
+    import asyncio
+    with caplog.at_level("INFO", logger="facebook_scraper"):
+        asyncio.run(periodic_scrape_new_posts())
+
+    logs = caplog.text
+    assert "periodic_scrape_new_posts SOURCE START" in logs
+    assert f"Log Periodic Group (id={source.id})" in logs
+    assert "periodic_scrape_new_posts SOURCE DONE" in logs
+    assert "created_posts=1" in logs
+    assert "periodic_scrape_new_posts DONE" in logs
+    assert "total_new_posts_created=1" in logs
+
+
+def test_update_recent_post_metrics_logs_updated_post_list_capped(monkeypatch, caplog):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="log-metrics", email="log-metrics@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-log-metrics",
+            facebook_url="https://www.facebook.com/groups/group-log-metrics",
+            source_name="Log Metrics Group",
+        )
+        source_id = source.id
+        PostCRUD.create(
+            db,
+            source_id=source_id,
+            facebook_post_id="seed-metrics-post",
+            facebook_url="https://facebook.com/posts/seed-metrics-post",
+            posted_at=datetime.utcnow(),
+            content="Seed",
+        )
+    finally:
+        db.close()
+
+    def fake_refresh_recent_post_metrics(_db, _source, limit=20):
+        refs = [f"post-{idx}" for idx in range(1, 13)]
+        return {"fetched": 20, "updated": 12, "skipped": 8, "updated_post_refs": refs}
+
+    monkeypatch.setattr(
+        "backend.scheduler.periodic_tasks.FacebookScraperService.refresh_recent_post_metrics",
+        fake_refresh_recent_post_metrics,
+    )
+
+    import asyncio
+    with caplog.at_level("INFO", logger="facebook_scraper"):
+        asyncio.run(update_recent_post_metrics())
+
+    logs = caplog.text
+    assert "update_recent_post_metrics SOURCE START" in logs
+    assert f"Log Metrics Group (id={source_id})" in logs
+    assert "update_recent_post_metrics SOURCE DONE" in logs
+    assert "updated_posts=[post-1, post-2, post-3, post-4, post-5, post-6, post-7, post-8, post-9, post-10 ... +2 more]" in logs
+    assert "update_recent_post_metrics DONE" in logs
+    assert "updated_posts_total=12" in logs
 
 
 def test_scrape_source_last_24_hours_uses_unbounded_recent_fetch(monkeypatch):

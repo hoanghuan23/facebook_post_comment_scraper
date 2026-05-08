@@ -70,7 +70,7 @@ temp/
 # Local databases and runtime state
 *.sqlite
 *.sqlite3
-# *.db
+*.db
 *.pid
 facebook_scraper.db-shm
 facebook_scraper.db-wal

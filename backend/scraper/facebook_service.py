@@ -450,7 +450,7 @@ class FacebookScraperService:
         )
 
     @classmethod
-    def refresh_recent_post_metrics(cls, db: Session, source: Source, limit: int = 20) -> Dict[str, int]:
+    def refresh_recent_post_metrics(cls, db: Session, source: Source, limit: int = 20) -> Dict[str, Any]:
         cls._apply_source_auth_context(db, source)
         fetched_posts: List[Dict[str, Any]]
         normalize_post: Any
@@ -469,6 +469,7 @@ class FacebookScraperService:
 
         updated_posts = 0
         skipped_posts = 0
+        updated_post_refs: List[str] = []
         for raw_post in fetched_posts:
             facebook_post_id = raw_post.get("post_id")
             if not facebook_post_id:
@@ -483,6 +484,7 @@ class FacebookScraperService:
             normalized_post = normalize_post(raw_post)
             if cls._save_metric_snapshot_if_changed(db, db_post, normalized_post):
                 updated_posts += 1
+                updated_post_refs.append(str(db_post.facebook_post_id or db_post.id))
             if source.include_comments:
                 cls._sync_post_comments(db, source, db_post)
 
@@ -490,6 +492,7 @@ class FacebookScraperService:
             "fetched": len(fetched_posts),
             "updated": updated_posts,
             "skipped": skipped_posts,
+            "updated_post_refs": updated_post_refs,
         }
 
     @classmethod
