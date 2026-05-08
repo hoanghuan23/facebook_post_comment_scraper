@@ -687,7 +687,7 @@ def fetch_posts(
         print(f"ðŸ“Š Filtering posts with at least {min_comments} comments")
     
     if cutoff_time:
-        print(f"Chi lay bai dang trong 24h gan nhat (tu {cutoff_time.isoformat()})")
+        print(f"Chỉ lấy bài đăng trong 24h gần nhất (từ {cutoff_time.isoformat()})")
 
     if limit is not None and batch_size > 0 and batch_size < limit:
         print(f"ðŸ“¦ Processing in batches of {batch_size} posts")
@@ -824,7 +824,7 @@ def fetch_posts(
                         print(f"  Skipping post {temp_post_id} vi khong xac dinh duoc posted_at")
                         continue
                     if posted_dt < cutoff_time:
-                        print(f"  Da gap post cu hon 24h: {temp_post_id} ({posted_at})")
+                        print(f"  Đã gặp post cũ hơn 24h: {temp_post_id} ({posted_at})")
                         stop_due_to_time = True
                         continue
                 
@@ -840,7 +840,7 @@ def fetch_posts(
                     if use_global_group_name:
                         GROUP_NAME = request_group_name
                     if request_group_name:
-                        print(f"ðŸ“‚ Ten group: {request_group_name}")
+                        print(f"Tên group: {request_group_name}")
                 
                 # Check if post already exists
                 temp_group_name = request_group_name or extract_group_name(story_node)
@@ -916,12 +916,12 @@ def fetch_posts(
                     has_next_page = has_next_page or candidate_has_next
         
         print(
-            f"Tim thay {posts_found} post trong trang nay "
+            f"Tìm thấy {posts_found} post trong trang này"
             f"(has_next_page={has_next_page}, next_cursor={'yes' if next_cursor else 'no'})"
         )
 
         if stop_due_to_time:
-            print("Da gap post cu hon 24h. Dung phan trang.")
+            print("Đã gặp post cũ hơn 24h. Dừng phân trang.")
             break
         
         if limit is not None and len(all_posts) >= limit:

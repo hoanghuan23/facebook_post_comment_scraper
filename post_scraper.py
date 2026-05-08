@@ -540,7 +540,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
         print(f"ðŸ“Š Filtering posts with at least {min_comments} comments")
     
     if cutoff_time:
-        print(f"Chi lay bai dang trong 24h gan nhat (tu {cutoff_time.isoformat()})")
+        print(f"Chỉ lấy bài đăng trong 24h gần nhất (từ {cutoff_time.isoformat()})")
 
     if limit is not None and batch_size > 0 and batch_size < limit:
         print(f"ðŸ“¦ Xu ly theo lo {batch_size} posts")
@@ -686,7 +686,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
                     print(f"  Skipping post {post_id} vi khong xac dinh duoc posted_at")
                     continue
                 if posted_dt < cutoff_time:
-                    print(f"  Da gap post cu hon 24h: {post_id} ({posted_at})")
+                    print(f"  Đã gặp post cũ hơn 24h: {post_id} ({posted_at})")
                     stop_due_to_time = True
                     continue
             
@@ -784,7 +784,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
                 break
 
         if stop_due_to_time:
-            print("Da gap post cu hon 24h. Dung phan trang.")
+            print("Đã gặp post cũ hơn 24h. Dừng phân trang.")
             break
 
         # update cursor - get page_info from timeline_block or find it in cleaned_data
