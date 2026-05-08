@@ -1,6 +1,7 @@
 # Periodic tasks for the scheduler
 import logging
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
@@ -17,6 +18,11 @@ logger = logging.getLogger("facebook_scraper")
 
 def _format_source_label(source_id: int, source_name: str = None) -> str:
     return f"{source_name or 'unknown'} (id={source_id})"
+
+
+def _current_thread_label() -> str:
+    thread = threading.current_thread()
+    return f"{thread.name}/{thread.ident}"
 
 
 def _format_post_update_list(post_refs, max_items: int = 10) -> str:
@@ -67,6 +73,7 @@ async def periodic_scrape_new_posts():
 
     try:
         due_sources = SourceCRUD.get_due_for_scraping(db, limit=settings.SCRAPER_MAX_WORKERS * 5)
+        # due_sources = SourceCRUD.get_due_for_scraping(db, limit=100) # giới hạn chạy 100 nguồn
         logger.info("periodic_scrape_new_posts START: total_due_sources=%s", len(due_sources))
         if not due_sources:
             logger.info("periodic_scrape_new_posts DONE: total_due_sources=0")
@@ -88,11 +95,13 @@ async def periodic_scrape_new_posts():
             job_db = SessionLocal()
             source_id = job["id"]
             source_label = _format_source_label(source_id, job.get("source_name"))
+            thread_label = _current_thread_label()
             next_scrape = datetime.utcnow() + timedelta(seconds=settings.TASK_SCRAPE_NEW_POSTS_INTERVAL)
             try:
                 if job["source_type"] not in {SourceType.GROUP, SourceType.PAGE, SourceType.USER}:
                     logger.info(
-                        "periodic_scrape_new_posts SKIP: source=%s reason=unsupported_type type=%s",
+                        "periodic_scrape_new_posts SKIP: thread=%s source=%s reason=unsupported_type type=%s",
+                        thread_label,
                         source_label,
                         job["source_type"].value,
                     )
@@ -101,7 +110,8 @@ async def periodic_scrape_new_posts():
 
                 if job["is_accessible"] is False and job["permission_checked_at"] is not None:
                     logger.warning(
-                        "periodic_scrape_new_posts SKIP: source=%s reason=inaccessible",
+                        "periodic_scrape_new_posts SKIP: thread=%s source=%s reason=inaccessible",
+                        thread_label,
                         source_label,
                     )
                     SourceCRUD.update_scrape_info(job_db, source_id, next_scrape=next_scrape)
@@ -109,7 +119,8 @@ async def periodic_scrape_new_posts():
 
                 latest_posted_at = PostCRUD.get_latest_posted_at_by_source(job_db, source_id, tracked_only=True)
                 logger.info(
-                    "periodic_scrape_new_posts SOURCE START: source=%s latest_cutoff=%s",
+                    "periodic_scrape_new_posts SOURCE START: thread=%s source=%s latest_cutoff=%s",
+                    thread_label,
                     source_label,
                     latest_posted_at.isoformat() if latest_posted_at else None,
                 )
@@ -121,7 +132,8 @@ async def periodic_scrape_new_posts():
                 )
                 SourceCRUD.update_scrape_info(job_db, source_id, next_scrape=next_scrape)
                 logger.info(
-                    "periodic_scrape_new_posts SOURCE DONE: source=%s fetched=%s created_posts=%s updated_posts=%s",
+                    "periodic_scrape_new_posts SOURCE DONE: thread=%s source=%s fetched=%s created_posts=%s updated_posts=%s",
+                    thread_label,
                     source_label,
                     result.total_fetched,
                     result.created_posts,
@@ -129,7 +141,12 @@ async def periodic_scrape_new_posts():
                 )
                 return {"status": "scraped", "created_posts": result.created_posts}
             except Exception as exc:
-                logger.exception("Failed scraping source %s: %s", source_id, exc)
+                logger.exception(
+                    "periodic_scrape_new_posts ERROR: thread=%s source=%s error=%s",
+                    thread_label,
+                    source_label,
+                    exc,
+                )
                 SourceCRUD.update_scrape_info(job_db, source_id, next_scrape=next_scrape)
                 LogCRUD.create_scraper_log(
                     job_db,
@@ -143,7 +160,7 @@ async def periodic_scrape_new_posts():
             finally:
                 job_db.close()
 
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [executor.submit(_scrape_source_job, job) for job in source_jobs]
             for future in as_completed(futures):
                 outcome = future.result()
@@ -189,6 +206,7 @@ async def update_recent_post_metrics():
 
     try:
         recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=settings.SCRAPER_MAX_WORKERS * 50)
+        # recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=100) # giới hạn chạy 100 post gần đây
         source_ids = list({post.source_id for post in recent_posts})
         logger.info(
             "update_recent_post_metrics START: recent_posts_count=%s candidate_source_count=%s",
@@ -207,25 +225,33 @@ async def update_recent_post_metrics():
                 if not source or not source.is_active:
                     return {"status": "ignored"}
                 source_label = _format_source_label(source.id, source.source_name)
+                thread_label = _current_thread_label()
                 if source.is_accessible is False and source.permission_checked_at is not None:
                     logger.warning(
-                        "update_recent_post_metrics SKIP: source=%s reason=inaccessible",
+                        "update_recent_post_metrics SKIP: thread=%s source=%s reason=inaccessible",
+                        thread_label,
                         source_label,
                     )
                     return {"status": "skipped"}
                 if source.source_type not in {SourceType.GROUP, SourceType.PAGE, SourceType.USER}:
                     logger.info(
-                        "update_recent_post_metrics SKIP: source=%s reason=unsupported_type type=%s",
+                        "update_recent_post_metrics SKIP: thread=%s source=%s reason=unsupported_type type=%s",
+                        thread_label,
                         source_label,
                         source.source_type.value,
                     )
                     return {"status": "skipped"}
 
-                logger.info("update_recent_post_metrics SOURCE START: source=%s", source_label)
+                logger.info(
+                    "update_recent_post_metrics SOURCE START: thread=%s source=%s",
+                    thread_label,
+                    source_label,
+                )
                 result = FacebookScraperService.refresh_recent_post_metrics(job_db, source, limit=None)
                 updated_post_refs = result.get("updated_post_refs", [])
                 logger.info(
-                    "update_recent_post_metrics SOURCE DONE: source=%s fetched=%s updated_count=%s skipped=%s updated_posts=[%s]",
+                    "update_recent_post_metrics SOURCE DONE: thread=%s source=%s fetched=%s updated_count=%s skipped=%s updated_posts=[%s]",
+                    thread_label,
                     source_label,
                     result["fetched"],
                     result["updated"],
@@ -234,7 +260,12 @@ async def update_recent_post_metrics():
                 )
                 return {"status": "refreshed", "source_id": source.id, "updated": result["updated"]}
             except Exception as exc:
-                logger.exception("Failed refreshing metrics for source %s: %s", source_id, exc)
+                logger.exception(
+                    "update_recent_post_metrics ERROR: thread=%s source_id=%s error=%s",
+                    _current_thread_label(),
+                    source_id,
+                    exc,
+                )
                 LogCRUD.create_scraper_log(
                     job_db,
                     message=f"Failed refreshing metrics for source {source_id}",
@@ -247,7 +278,7 @@ async def update_recent_post_metrics():
             finally:
                 job_db.close()
 
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [executor.submit(_refresh_metrics_job, source_id) for source_id in source_ids]
             for future in as_completed(futures):
                 outcome = future.result()

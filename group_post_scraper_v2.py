@@ -389,7 +389,7 @@ def sanitize_group_folder_name(group_name):
     return "Unknown"
 
 
-def extract_media(node, post_id, save_dir="group_post", cookies=None, fb_dtsg=None, proxies=None):
+def extract_media(node, post_id, save_dir="group_post", cookies=None, fb_dtsg=None, proxies=None, download_media=True):
     """Extract photo and video URLs from a post"""
     media = {
         'photos': [],
@@ -427,7 +427,9 @@ def extract_media(node, post_id, save_dir="group_post", cookies=None, fb_dtsg=No
             if image_url and media_is_new and image_url not in seen_photo_urls:
                 image_index += 1
                 last_media_id = media_id
-                saved_filename = download_image(image_url, post_id, image_index, save_dir)
+                saved_filename = None
+                if download_media:
+                    saved_filename = download_image(image_url, post_id, image_index, save_dir)
                 if media_id:
                     seen_photo_ids.add(media_id)
                 seen_photo_urls.add(image_url)
@@ -465,7 +467,9 @@ def extract_media(node, post_id, save_dir="group_post", cookies=None, fb_dtsg=No
             if image_url and media_is_new and image_url not in seen_photo_urls:
                 image_index += 1
                 last_media_id = media_id
-                saved_filename = download_image(image_url, post_id, image_index, save_dir)
+                saved_filename = None
+                if download_media:
+                    saved_filename = download_image(image_url, post_id, image_index, save_dir)
                 if media_id:
                     seen_photo_ids.add(media_id)
                 seen_photo_urls.add(image_url)
@@ -494,7 +498,7 @@ def extract_media(node, post_id, save_dir="group_post", cookies=None, fb_dtsg=No
             })
     
     # Fetch remaining images if we have exactly 5 photos (indicating there may be more)
-    if image_index == 5 and last_media_id:
+    if download_media and image_index == 5 and last_media_id:
         remaining_photos = fetch_remaining_images(
             last_media_id,
             post_id,
@@ -536,7 +540,7 @@ def build_group_link(group_id=None, permalink=None):
     return f"https://www.facebook.com/groups/{resolved_group_id}/"
 
 
-def extract_post_data(node, group_name=None, group_id=None, cookies=None, fb_dtsg=None, proxies=None):
+def extract_post_data(node, group_name=None, group_id=None, cookies=None, fb_dtsg=None, proxies=None, download_media=True):
     """Extract relevant data from a post node"""
     if not node or node.get('__typename') != 'Story':
         return None
@@ -582,6 +586,7 @@ def extract_post_data(node, group_name=None, group_id=None, cookies=None, fb_dts
         cookies=cookies,
         fb_dtsg=fb_dtsg,
         proxies=proxies,
+        download_media=download_media,
     )
 
     permalink = node.get('permalink_url', '')
@@ -643,6 +648,7 @@ def fetch_posts(
     fb_dtsg=None,
     headers=None,
     proxies=None,
+    download_media=True,
 ):
     """Fetch posts from Facebook group
     
@@ -654,6 +660,7 @@ def fetch_posts(
         last_24_hours_only: Only include posts whose posted_at is within the last 24 hours.
         group_id/group_name/cookies/fb_dtsg/headers/proxies: Optional per-run context.
             When omitted, module globals are used for backwards compatibility.
+        download_media: Whether to download media files locally. Metadata is still extracted when False.
     """
     global GROUP_NAME
     use_global_group_name = group_id is None and group_name is None
@@ -850,6 +857,7 @@ def fetch_posts(
                     cookies=request_cookies,
                     fb_dtsg=request_fb_dtsg,
                     proxies=request_proxies,
+                    download_media=download_media,
                 )
                 if post_data:
                     post_data["group_id"] = request_group_id

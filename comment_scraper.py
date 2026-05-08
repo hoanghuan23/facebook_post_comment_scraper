@@ -314,8 +314,6 @@ def fetch_comments(feedback_id, cookies=None, fb_dtsg=None, proxies=None):
         # Extract post-level info as early as possible (works even when there are 0 comments)
         if response_count == 0 and post_info is None:
             post_info = extract_post_info_from_response(j)
-            if post_info:
-                print(f"📎 Extracted post info (top-level): {post_info}")
         
         # Save each JSON response for inspection
         response_count += 1

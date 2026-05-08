@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     SCRAPER_TIMEOUT: int = 30
     SCRAPER_RETRY_ATTEMPTS: int = 3
     SCRAPER_WRITE_DEBUG_FILES: bool = False
+    SCRAPER_DOWNLOAD_MEDIA: bool = False
     SCRAPER_GROUP_PAGE_SIZE: int = 10
     SCRAPER_MAX_24H_PAGES: int = 100
     

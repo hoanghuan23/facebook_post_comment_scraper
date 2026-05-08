@@ -157,6 +157,7 @@ class FacebookScraperService:
         last_24_hours_only: bool,
         group_id: str,
         group_name: Optional[str],
+        download_media: bool,
     ) -> List[Dict[str, Any]]:
         """Call group scraper with new args, fallback to legacy signature for compatibility."""
         try:
@@ -167,12 +168,43 @@ class FacebookScraperService:
                 group_name=group_name,
                 cookies=group_scraper.COOKIES,
                 fb_dtsg=group_scraper.FB_DTSG,
+                download_media=download_media,
             )
         except TypeError:
             # Legacy tests/mocks may patch fetch_posts(limit=...) only.
             if last_24_hours_only:
                 return group_scraper.fetch_posts(limit=None, last_24_hours_only=True)
             return group_scraper.fetch_posts(limit=limit)
+
+    @staticmethod
+    def _fetch_timeline_posts_with_compat(
+        *,
+        limit: Optional[int],
+        base_folder: str,
+        last_24_hours_only: bool,
+        download_media: bool,
+    ) -> List[Dict[str, Any]]:
+        try:
+            if last_24_hours_only:
+                return timeline_scraper.fetch_posts(
+                    limit=None,
+                    base_folder=base_folder,
+                    last_24_hours_only=True,
+                    download_media=download_media,
+                )
+            return timeline_scraper.fetch_posts(
+                limit=limit,
+                base_folder=base_folder,
+                download_media=download_media,
+            )
+        except TypeError:
+            if last_24_hours_only:
+                return timeline_scraper.fetch_posts(
+                    limit=None,
+                    base_folder=base_folder,
+                    last_24_hours_only=True,
+                )
+            return timeline_scraper.fetch_posts(limit=limit, base_folder=base_folder)
 
     @staticmethod
     def _apply_timeline_context(source: Source) -> None:
@@ -285,6 +317,7 @@ class FacebookScraperService:
             last_24_hours_only=last_24_hours_only,
             group_id=source.facebook_id,
             group_name=source.source_name,
+            download_media=settings.SCRAPER_DOWNLOAD_MEDIA,
         )
         created_posts = 0
         updated_posts = 0
@@ -370,14 +403,12 @@ class FacebookScraperService:
         cls._apply_timeline_context(source)
 
         base_folder = "page_post" if source.source_type == SourceType.PAGE else "user_post"
-        if last_24_hours_only:
-            raw_posts = timeline_scraper.fetch_posts(
-                limit=None,
-                base_folder=base_folder,
-                last_24_hours_only=True,
-            )
-        else:
-            raw_posts = timeline_scraper.fetch_posts(limit=limit, base_folder=base_folder)
+        raw_posts = cls._fetch_timeline_posts_with_compat(
+            limit=limit,
+            base_folder=base_folder,
+            last_24_hours_only=last_24_hours_only,
+            download_media=settings.SCRAPER_DOWNLOAD_MEDIA,
+        )
         created_posts = 0
         updated_posts = 0
         skipped_posts = 0
@@ -457,12 +488,23 @@ class FacebookScraperService:
 
         if source.source_type == SourceType.GROUP:
             cls._apply_group_context(source)
-            fetched_posts = group_scraper.fetch_posts(limit=limit)
+            fetched_posts = cls._fetch_group_posts_with_compat(
+                limit=limit,
+                last_24_hours_only=False,
+                group_id=source.facebook_id,
+                group_name=source.source_name,
+                download_media=settings.SCRAPER_DOWNLOAD_MEDIA,
+            )
             normalize_post = _normalize_group_post
         elif source.source_type in {SourceType.PAGE, SourceType.USER}:
             cls._apply_timeline_context(source)
             base_folder = "page_post" if source.source_type == SourceType.PAGE else "user_post"
-            fetched_posts = timeline_scraper.fetch_posts(limit=limit, base_folder=base_folder)
+            fetched_posts = cls._fetch_timeline_posts_with_compat(
+                limit=limit,
+                base_folder=base_folder,
+                last_24_hours_only=False,
+                download_media=settings.SCRAPER_DOWNLOAD_MEDIA,
+            )
             normalize_post = _normalize_timeline_post
         else:
             raise NotImplementedError(f"Facebook source type '{source.source_type.value}' is not implemented yet")

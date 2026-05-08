@@ -14,6 +14,8 @@ from backend.scraper.facebook_service import (
     _normalize_timeline_post,
 )
 from backend.scheduler.periodic_tasks import periodic_scrape_new_posts, update_recent_post_metrics
+import post_scraper
+import group_post_scraper_v2
 
 
 def setup_function():
@@ -1028,6 +1030,129 @@ def test_scrape_source_last_24_hours_uses_unbounded_recent_fetch(monkeypatch):
         assert calls[0]["last_24_hours_only"] is True
     finally:
         db.close()
+
+
+def test_scrape_source_passes_download_media_flag_to_group_fetch_posts(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="group-media-flag", email="group-media-flag@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-media-flag",
+            facebook_url="https://www.facebook.com/groups/group-media-flag",
+            source_name="Group Media Flag",
+        )
+
+        calls = []
+
+        def fake_fetch_posts(limit=10, **kwargs):
+            calls.append({"limit": limit, **kwargs})
+            return []
+
+        monkeypatch.setattr("backend.scraper.facebook_service.group_scraper.fetch_posts", fake_fetch_posts)
+        monkeypatch.setattr("backend.scraper.facebook_service.settings.SCRAPER_DOWNLOAD_MEDIA", False)
+
+        FacebookScraperService.scrape_source(db, source.id, limit=5)
+
+        assert calls
+        assert calls[0]["download_media"] is False
+    finally:
+        db.close()
+
+
+def test_refresh_recent_post_metrics_passes_download_media_flag_to_timeline_fetch_posts(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="timeline-media-flag", email="timeline-media-flag@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="page",
+            facebook_id="page-media-flag",
+            facebook_url="https://www.facebook.com/page-media-flag",
+            source_name="Page Media Flag",
+        )
+
+        calls = []
+
+        def fake_fetch_posts(limit=10, **kwargs):
+            calls.append({"limit": limit, **kwargs})
+            return []
+
+        monkeypatch.setattr("backend.scraper.facebook_service.timeline_scraper.fetch_posts", fake_fetch_posts)
+        monkeypatch.setattr("backend.scraper.facebook_service.settings.SCRAPER_DOWNLOAD_MEDIA", False)
+
+        FacebookScraperService.refresh_recent_post_metrics(db, source, limit=5)
+
+        assert calls
+        assert calls[0]["download_media"] is False
+    finally:
+        db.close()
+
+
+def test_post_extract_media_skips_download_when_flag_disabled(monkeypatch):
+    called = {"download": False}
+
+    def fake_download_image(*args, **kwargs):
+        called["download"] = True
+        return "file.jpg"
+
+    monkeypatch.setattr(post_scraper, "download_image", fake_download_image)
+
+    node = {
+        "attachments": [
+            {
+                "styles": {
+                    "attachment": {
+                        "media": {
+                            "id": "m1",
+                            "photo_image": {"uri": "https://example.com/a.jpg"},
+                        }
+                    }
+                }
+            }
+        ]
+    }
+
+    media = post_scraper.extract_media(node, "post-1", download_media=False)
+
+    assert called["download"] is False
+    assert media
+    assert media[0]["type"] == "photo"
+    assert media[0]["saved_as"] is None
+
+
+def test_group_extract_media_skips_download_when_flag_disabled(monkeypatch):
+    called = {"download": False}
+
+    def fake_download_image(*args, **kwargs):
+        called["download"] = True
+        return "file.jpg"
+
+    monkeypatch.setattr(group_post_scraper_v2, "download_image", fake_download_image)
+
+    node = {
+        "attachments": [
+            {
+                "styles": {
+                    "attachment": {
+                        "media": {
+                            "id": "m1",
+                            "photo_image": {"uri": "https://example.com/a.jpg", "width": 1200, "height": 800},
+                        }
+                    }
+                }
+            }
+        ]
+    }
+
+    media = group_post_scraper_v2.extract_media(node, "post-1", download_media=False)
+
+    assert called["download"] is False
+    assert media["photos"]
+    assert media["photos"][0]["saved_as"] is None
 
 
 def test_create_source_enqueues_background_bootstrap_scrape(monkeypatch):

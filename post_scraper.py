@@ -397,7 +397,7 @@ def extract_permalink(node):
 # Global counter for tracking image indices per post
 _image_counters = {}
 
-def extract_media(node, post_id, save_dir="page_post"):
+def extract_media(node, post_id, save_dir="page_post", download_media=True):
     global _image_counters
     
     # Initialize counter for this post if not exists
@@ -424,7 +424,9 @@ def extract_media(node, post_id, save_dir="page_post"):
             if image_url and media_is_new and image_url not in seen_photo_urls:
                 _image_counters[post_id] += 1
                 last_media_id = media_id  # Track the last media ID
-                saved_filename = download_image(image_url, post_id, _image_counters[post_id], save_dir)
+                saved_filename = None
+                if download_media:
+                    saved_filename = download_image(image_url, post_id, _image_counters[post_id], save_dir)
                 if media_id:
                     seen_photo_ids.add(media_id)
                 seen_photo_urls.add(image_url)
@@ -457,7 +459,9 @@ def extract_media(node, post_id, save_dir="page_post"):
             if image_url and media_is_new and image_url not in seen_photo_urls:
                 _image_counters[post_id] += 1
                 last_media_id = media_id  # Track the last media ID
-                saved_filename = download_image(image_url, post_id, _image_counters[post_id], save_dir)
+                saved_filename = None
+                if download_media:
+                    saved_filename = download_image(image_url, post_id, _image_counters[post_id], save_dir)
                 if media_id:
                     seen_photo_ids.add(media_id)
                 seen_photo_urls.add(image_url)
@@ -476,7 +480,7 @@ def extract_media(node, post_id, save_dir="page_post"):
     
     # Fetch remaining images if we have exactly 5 photos (indicating there may be more)
     photo_count = sum(1 for m in media if m.get("type") == "photo")
-    if photo_count == 5 and last_media_id:
+    if download_media and photo_count == 5 and last_media_id:
         remaining_photos = fetch_remaining_images(
             last_media_id,
             post_id,
@@ -511,7 +515,7 @@ def _parse_iso_datetime(value):
         return None
 
 
-def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None, base_folder="page_post", last_24_hours_only=False):
+def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None, base_folder="page_post", last_24_hours_only=False, download_media=True):
     """Fetch posts from a Facebook timeline (page or user profile).
     
     Args:
@@ -521,6 +525,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
         on_batch_complete: Optional callback function(batch_posts, total_so_far, limit) called after each batch
         base_folder: Base output folder for saving posts/media (e.g. "page_post", "user_post")
         last_24_hours_only: Only include posts whose posted_at is within the last 24 hours.
+        download_media: Whether to download media files locally. Metadata is still extracted when False.
     """
     global PAGE_NAME
     all_posts = []
@@ -754,7 +759,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
             media_save_dir = os.path.join(base_folder, name_folder)
             
             # Extract media with correct save directory
-            post["media"] = extract_media(node, post_id, media_save_dir)
+            post["media"] = extract_media(node, post_id, media_save_dir, download_media=download_media)
             
             if WRITE_DEBUG_FILES:
                 # Save individual post to folder structure: {base_folder}/{page_name}/{post_id}/{post_id}.json
