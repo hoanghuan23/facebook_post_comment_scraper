@@ -794,20 +794,37 @@ def test_update_recent_post_metrics_only_refreshes_sources_with_recent_created_p
 
     calls = []
 
-    def fake_refresh_recent_post_metrics(_db, source, limit=20):
-        calls.append(source.id)
-        return {"fetched": 1, "updated": 1, "skipped": 0}
+    def fake_refresh_target_post_metrics(
+        _db,
+        source,
+        target_post_ids,
+        max_pages=20,
+        stop_when_all_found=True,
+        last_24_hours_only=True,
+        download_media=False,
+    ):
+        calls.append((source.id, target_post_ids))
+        return {
+            "fetched": 1,
+            "updated": 1,
+            "skipped": 0,
+            "matched_target_count": len(target_post_ids),
+            "target_posts_count": len(target_post_ids),
+            "pages_scanned": 1,
+            "stop_reason": "all_targets_found",
+        }
 
     monkeypatch.setattr(
-        "backend.scheduler.periodic_tasks.FacebookScraperService.refresh_recent_post_metrics",
-        fake_refresh_recent_post_metrics,
+        "backend.scheduler.periodic_tasks.FacebookScraperService.refresh_target_post_metrics",
+        fake_refresh_target_post_metrics,
     )
 
     import asyncio
     asyncio.run(update_recent_post_metrics())
 
-    assert recent_source_id in calls
-    assert old_source_id not in calls
+    called_source_ids = {source_id for source_id, _target_post_ids in calls}
+    assert recent_source_id in called_source_ids
+    assert old_source_id not in called_source_ids
 
 
 def test_periodic_scrape_new_posts_uses_latest_db_post_as_cutoff(monkeypatch):
@@ -956,13 +973,30 @@ def test_update_recent_post_metrics_logs_updated_post_list_capped(monkeypatch, c
     finally:
         db.close()
 
-    def fake_refresh_recent_post_metrics(_db, _source, limit=20):
+    def fake_refresh_target_post_metrics(
+        _db,
+        _source,
+        target_post_ids,
+        max_pages=20,
+        stop_when_all_found=True,
+        last_24_hours_only=True,
+        download_media=False,
+    ):
         refs = [f"post-{idx}" for idx in range(1, 13)]
-        return {"fetched": 20, "updated": 12, "skipped": 8, "updated_post_refs": refs}
+        return {
+            "fetched": 20,
+            "updated": 12,
+            "skipped": 8,
+            "matched_target_count": len(target_post_ids),
+            "target_posts_count": len(target_post_ids),
+            "pages_scanned": 7,
+            "stop_reason": "all_targets_found",
+            "updated_post_refs": refs,
+        }
 
     monkeypatch.setattr(
-        "backend.scheduler.periodic_tasks.FacebookScraperService.refresh_recent_post_metrics",
-        fake_refresh_recent_post_metrics,
+        "backend.scheduler.periodic_tasks.FacebookScraperService.refresh_target_post_metrics",
+        fake_refresh_target_post_metrics,
     )
 
     import asyncio
@@ -970,6 +1004,9 @@ def test_update_recent_post_metrics_logs_updated_post_list_capped(monkeypatch, c
         asyncio.run(update_recent_post_metrics())
 
     logs = caplog.text
+    assert "stop_reason=all_targets_found" in logs
+    assert "pages_scanned=7" in logs
+    assert "fetch_to_update_ratio=1.667" in logs
     assert "Bắt đầu cập nhật metric source" in logs
     assert f"Log Metrics Group (id={source_id})" in logs
     assert "Kết thúc cập nhật metric source" in logs
@@ -1088,6 +1125,156 @@ def test_refresh_recent_post_metrics_passes_download_media_flag_to_timeline_fetc
 
         assert calls
         assert calls[0]["download_media"] is False
+    finally:
+        db.close()
+
+
+def test_refresh_target_post_metrics_only_updates_target_posts(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="target-metrics", email="target-metrics@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-target-metrics",
+            facebook_url="https://www.facebook.com/groups/group-target-metrics",
+            source_name="Target Metrics Group",
+        )
+        target_post = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="target-1",
+            facebook_url="https://facebook.com/posts/target-1",
+            posted_at=datetime.utcnow(),
+            content="Target",
+            likes_count=1,
+            shares_count=0,
+            comments_count=0,
+        )
+        PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="other-1",
+            facebook_url="https://facebook.com/posts/other-1",
+            posted_at=datetime.utcnow(),
+            content="Other",
+            likes_count=2,
+            shares_count=0,
+            comments_count=0,
+        )
+
+        monkeypatch.setattr(
+            "backend.scraper.facebook_service.group_scraper.fetch_posts",
+            lambda limit=20, **kwargs: [
+                {"post_id": "other-1", "permalink": "https://facebook.com/posts/other-1", "message": "Other", "posted_at": datetime.utcnow(), "reaction_count": 5, "share_count": 0, "comment_count": 0, "photos": [], "videos": []},
+                {"post_id": "target-1", "permalink": "https://facebook.com/posts/target-1", "message": "Target", "posted_at": datetime.utcnow(), "reaction_count": 9, "share_count": 1, "comment_count": 2, "photos": [], "videos": []},
+            ],
+        )
+
+        result = FacebookScraperService.refresh_target_post_metrics(
+            db,
+            source,
+            target_post_ids=["target-1"],
+            max_pages=10,
+            stop_when_all_found=True,
+            last_24_hours_only=True,
+            download_media=False,
+        )
+        refreshed_target = PostCRUD.get_by_id(db, target_post.id)
+
+        assert result["updated"] == 1
+        assert result["matched_target_count"] == 1
+        assert result["target_posts_count"] == 1
+        assert refreshed_target.current_likes == 9
+    finally:
+        db.close()
+
+
+def test_refresh_target_post_metrics_stops_when_all_targets_found(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="target-stop", email="target-stop@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-target-stop",
+            facebook_url="https://www.facebook.com/groups/group-target-stop",
+            source_name="Target Stop Group",
+        )
+        PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="target-stop-1",
+            facebook_url="https://facebook.com/posts/target-stop-1",
+            posted_at=datetime.utcnow(),
+            content="Target stop",
+            likes_count=0,
+            shares_count=0,
+            comments_count=0,
+        )
+
+        monkeypatch.setattr(
+            "backend.scraper.facebook_service.group_scraper.fetch_posts",
+            lambda limit=20, **kwargs: [
+                {"post_id": "target-stop-1", "permalink": "https://facebook.com/posts/target-stop-1", "message": "Target stop", "posted_at": datetime.utcnow(), "reaction_count": 3, "share_count": 0, "comment_count": 0, "photos": [], "videos": []},
+                {"post_id": "not-needed", "permalink": "https://facebook.com/posts/not-needed", "message": "not needed", "posted_at": datetime.utcnow(), "reaction_count": 99, "share_count": 0, "comment_count": 0, "photos": [], "videos": []},
+            ],
+        )
+
+        result = FacebookScraperService.refresh_target_post_metrics(
+            db,
+            source,
+            target_post_ids=["target-stop-1"],
+            stop_when_all_found=True,
+        )
+
+        assert result["stop_reason"] == "all_targets_found"
+        assert result["fetched"] == 1
+    finally:
+        db.close()
+
+
+def test_refresh_target_post_metrics_returns_max_pages_stop_reason(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="target-max-pages", email="target-max-pages@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-target-max-pages",
+            facebook_url="https://www.facebook.com/groups/group-target-max-pages",
+            source_name="Target Max Pages Group",
+        )
+        PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="late-target",
+            facebook_url="https://facebook.com/posts/late-target",
+            posted_at=datetime.utcnow(),
+            content="Late target",
+            likes_count=0,
+            shares_count=0,
+            comments_count=0,
+        )
+
+        monkeypatch.setattr(
+            "backend.scraper.facebook_service.group_scraper.fetch_posts",
+            lambda limit=20, **kwargs: [{"post_id": f"other-{idx}", "permalink": f"https://facebook.com/posts/other-{idx}", "message": "Other", "posted_at": datetime.utcnow(), "reaction_count": idx, "share_count": 0, "comment_count": 0, "photos": [], "videos": []} for idx in range(1, 8)] + [{"post_id": "late-target", "permalink": "https://facebook.com/posts/late-target", "message": "Late target", "posted_at": datetime.utcnow(), "reaction_count": 7, "share_count": 0, "comment_count": 0, "photos": [], "videos": []}],
+        )
+
+        result = FacebookScraperService.refresh_target_post_metrics(
+            db,
+            source,
+            target_post_ids=["late-target"],
+            max_pages=2,
+            stop_when_all_found=True,
+        )
+
+        assert result["stop_reason"] == "max_pages_reached"
+        assert result["matched_target_count"] == 0
     finally:
         db.close()
 
@@ -1451,3 +1638,4 @@ def test_bootstrap_scrape_marks_failed_scrape_job_and_keeps_counters_default(mon
         assert job.finished_at is not None
     finally:
         verify_db.close()
+

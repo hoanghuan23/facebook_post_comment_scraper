@@ -78,6 +78,9 @@ class Settings(BaseSettings):
     SCRAPER_DOWNLOAD_MEDIA: bool = False
     SCRAPER_GROUP_PAGE_SIZE: int = 10
     SCRAPER_MAX_24H_PAGES: int = 100
+    METRIC_REFRESH_MAX_PAGES: int = 20
+    METRIC_REFRESH_USE_24H_WINDOW: bool = True
+    METRIC_REFRESH_DOWNLOAD_MEDIA: bool = False
     
     # Scheduler settings (APScheduler)
     SCHEDULER_ENABLED: bool = True

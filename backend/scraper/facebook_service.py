@@ -541,6 +541,111 @@ class FacebookScraperService:
         }
 
     @classmethod
+    def refresh_target_post_metrics(
+        cls,
+        db: Session,
+        source: Source,
+        target_post_ids: List[str],
+        max_pages: int = 20,
+        stop_when_all_found: bool = True,
+        last_24_hours_only: bool = True,
+        download_media: bool = False,
+    ) -> Dict[str, Any]:
+        cls._apply_source_auth_context(db, source)
+        target_set = {str(post_id) for post_id in target_post_ids if post_id}
+        if not target_set:
+            return {
+                "fetched": 0,
+                "updated": 0,
+                "skipped": 0,
+                "matched_target_count": 0,
+                "target_posts_count": 0,
+                "pages_scanned": 0,
+                "stop_reason": "empty_targets",
+                "updated_post_refs": [],
+            }
+
+        if source.source_type == SourceType.GROUP:
+            cls._apply_group_context(source)
+            fetched_posts = cls._fetch_group_posts_with_compat(
+                limit=None,
+                last_24_hours_only=last_24_hours_only,
+                group_id=source.facebook_id,
+                group_name=source.source_name,
+                download_media=download_media,
+            )
+            normalize_post = _normalize_group_post
+        elif source.source_type in {SourceType.PAGE, SourceType.USER}:
+            cls._apply_timeline_context(source)
+            base_folder = "page_post" if source.source_type == SourceType.PAGE else "user_post"
+            fetched_posts = cls._fetch_timeline_posts_with_compat(
+                limit=None,
+                base_folder=base_folder,
+                last_24_hours_only=last_24_hours_only,
+                download_media=download_media,
+            )
+            normalize_post = _normalize_timeline_post
+        else:
+            raise NotImplementedError(f"Facebook source type '{source.source_type.value}' is not implemented yet")
+
+        updated_posts = 0
+        skipped_posts = 0
+        updated_post_refs: List[str] = []
+        matched_targets = set()
+        scanned_count = 0
+        post_per_page = 3
+        max_scan_posts = max_pages * post_per_page if max_pages and max_pages > 0 else None
+        stop_reason = "completed"
+
+        for raw_post in fetched_posts:
+            scanned_count += 1
+            if max_scan_posts is not None and scanned_count > max_scan_posts:
+                stop_reason = "max_pages_reached"
+                break
+
+            facebook_post_id = raw_post.get("post_id")
+            if not facebook_post_id:
+                skipped_posts += 1
+                continue
+
+            facebook_post_id = str(facebook_post_id)
+            if facebook_post_id not in target_set:
+                skipped_posts += 1
+                continue
+
+            db_post = PostCRUD.get_by_source_and_facebook_post_id(db, source.id, facebook_post_id)
+            if not db_post:
+                skipped_posts += 1
+                continue
+
+            matched_targets.add(facebook_post_id)
+            normalized_post = normalize_post(raw_post)
+            if cls._save_metric_snapshot_if_changed(db, db_post, normalized_post):
+                updated_posts += 1
+                updated_post_refs.append(str(db_post.facebook_post_id or db_post.id))
+            if source.include_comments:
+                cls._sync_post_comments(db, source, db_post)
+
+            if stop_when_all_found and len(matched_targets) >= len(target_set):
+                stop_reason = "all_targets_found"
+                break
+        else:
+            if stop_reason == "completed":
+                stop_reason = "source_exhausted"
+
+        pages_scanned = (scanned_count + post_per_page - 1) // post_per_page if scanned_count > 0 else 0
+        return {
+            "fetched": scanned_count,
+            "updated": updated_posts,
+            "skipped": skipped_posts,
+            "matched_target_count": len(matched_targets),
+            "target_posts_count": len(target_set),
+            "pages_scanned": pages_scanned,
+            "stop_reason": stop_reason,
+            "updated_post_refs": updated_post_refs,
+        }
+
+    @classmethod
     def scrape_source(
         cls,
         db: Session,

@@ -277,6 +277,9 @@ async def update_recent_post_metrics():
         # recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=settings.SCRAPER_MAX_WORKERS * 50)
         recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=100) # giới hạn chạy 100 post gần đây
         source_ids = list({post.source_id for post in recent_posts})
+        target_posts_by_source = {}
+        for post in recent_posts:
+            target_posts_by_source.setdefault(post.source_id, []).append(str(post.facebook_post_id))
         logger.info(
             "Bắt đầu update_recent_post_metrics: recent_posts_count=%s candidate_source_count=%s",
             len(recent_posts),
@@ -320,33 +323,53 @@ async def update_recent_post_metrics():
                     )
                     return {"status": "skipped"}
 
+                target_post_ids = target_posts_by_source.get(source.id, [])
                 logger.info(
-                    "Bắt đầu cập nhật metric source: thread=%s source=%s progress=%s/%s",
+                    "Bắt đầu cập nhật metric source: thread=%s source=%s progress=%s/%s target_posts_count=%s max_pages=%s use_24h_window=%s",
                     thread_label,
                     source_label,
                     progress_index,
                     total_sources,
+                    len(target_post_ids),
+                    settings.METRIC_REFRESH_MAX_PAGES,
+                    settings.METRIC_REFRESH_USE_24H_WINDOW,
                 )
-                result = FacebookScraperService.refresh_recent_post_metrics(job_db, source, limit=None)
+                result = FacebookScraperService.refresh_target_post_metrics(
+                    job_db,
+                    source,
+                    target_post_ids=target_post_ids,
+                    max_pages=settings.METRIC_REFRESH_MAX_PAGES,
+                    stop_when_all_found=True,
+                    last_24_hours_only=settings.METRIC_REFRESH_USE_24H_WINDOW,
+                    download_media=settings.METRIC_REFRESH_DOWNLOAD_MEDIA,
+                )
                 updated_post_refs = result.get("updated_post_refs", [])
                 source_duration = round(time.time() - source_started_at, 3)
+                fetched = result["fetched"]
+                updated = result["updated"]
+                fetch_to_update_ratio = round((fetched / updated), 3) if updated > 0 else (float(fetched) if fetched > 0 else 0.0)
                 logger.info(
-                    "Kết thúc cập nhật metric source: thread=%s source=%s progress=%s/%s fetched=%s updated_count=%s skipped=%s updated_posts=[%s] duration_seconds=%s",
+                    "Kết thúc cập nhật metric source: thread=%s source=%s progress=%s/%s fetched=%s updated_count=%s skipped=%s target_posts_count=%s matched_target_count=%s pages_scanned=%s stop_reason=%s fetch_to_update_ratio=%s updated_posts=[%s] duration_seconds=%s",
                     thread_label,
                     source_label,
                     progress_index,
                     total_sources,
-                    result["fetched"],
-                    result["updated"],
+                    fetched,
+                    updated,
                     result["skipped"],
+                    result.get("target_posts_count", 0),
+                    result.get("matched_target_count", 0),
+                    result.get("pages_scanned", 0),
+                    result.get("stop_reason", "unknown"),
+                    fetch_to_update_ratio,
                     _format_post_update_list(updated_post_refs, max_items=10),
                     source_duration,
                 )
                 return {
                     "status": "refreshed",
                     "source_id": source.id,
-                    "updated": result["updated"],
-                    "fetched": result["fetched"],
+                    "updated": updated,
+                    "fetched": fetched,
                 }
             except Exception as exc:
                 logger.exception(
