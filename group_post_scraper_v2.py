@@ -163,11 +163,11 @@ def download_image(url, post_id, image_index=1, save_dir="group_post"):
         with open(filepath, 'wb') as f:
             f.write(response.content)
         
-        print(f"  ðŸ“¥ Downloaded image: {filename}")
+        print(f"Downloaded image: {filename}")
         return filename
     
     except Exception as e:
-        print(f"  âŒ Failed to download image: {str(e)}")
+        print(f"Failed to download image: {str(e)}")
         return None
 
 
@@ -192,7 +192,7 @@ def fetch_remaining_images(
     request_fb_dtsg = FB_DTSG if fb_dtsg is None else fb_dtsg
     request_proxies = PROXIES if proxies is None else proxies
     
-    print(f"  ðŸ”„ Fetching remaining images after image #{current_image_count}...")
+    print(f"Fetching remaining images after image #{current_image_count}...")
     
     DOC_ID_PHOTO = "26168653472729001"  # CometPhotoRootContentQuery
     HEADERS_PHOTO = {
@@ -619,7 +619,7 @@ def extract_post_data(node, group_name=None, group_id=None, cookies=None, fb_dts
         post_file = os.path.join(post_dir, f"{post_id}.json")
         with open(post_file, "w", encoding="utf-8") as f:
             json.dump(post_data, f, ensure_ascii=False, indent=2)
-        print(f"âœ“ Saved to {post_file}")
+        print(f"Saved to {post_file}")
     
     return post_data
 
@@ -684,13 +684,13 @@ def fetch_posts(
         page_size = 10
     
     if min_comments > 0:
-        print(f"ðŸ“Š Filtering posts with at least {min_comments} comments")
+        print(f"Filtering posts with at least {min_comments} comments")
     
     if cutoff_time:
         print(f"Chỉ lấy bài đăng trong 24h gần nhất (từ {cutoff_time.isoformat()})")
 
     if limit is not None and batch_size > 0 and batch_size < limit:
-        print(f"ðŸ“¦ Processing in batches of {batch_size} posts")
+        print(f"Processing in batches of {batch_size} posts")
     
     while limit is None or len(all_posts) < limit:
         if max_pages is not None and page_num > max_pages:
@@ -753,13 +753,13 @@ def fetch_posts(
             else:
                 empty_retry_count += 1
                 if empty_retry_count < max_empty_retries:
-                    print(f"  âš ï¸ Phan hoi rong, dang thu lai ({empty_retry_count}/{max_empty_retries})...")
+                    print(f"Phản hồi rỗng, đang thử lại ({empty_retry_count}/{max_empty_retries})...")
                     time.sleep(2)  # Wait before retry
                 else:
-                    print(f"  âŒ Phan hoi rong sau {max_empty_retries} lan thu, bo qua trang")
+                    print(f"Phản hồi rỗng sau {max_empty_retries} lần thử, bỏ qua trang")
         
         if not data or len(data) == 0:
-            print("âŒ Khong nhan duoc du lieu sau khi thu lai, dung phan trang")
+            print("Không nhận được dữ liệu sau khi thử lại, dừng phân trang")
             break
         
         # Save raw response for debugging
@@ -821,7 +821,7 @@ def fetch_posts(
 
                 if cutoff_time:
                     if not posted_dt:
-                        print(f"  Skipping post {temp_post_id} vi khong xac dinh duoc posted_at")
+                        print(f"  Skipping post {temp_post_id} vì không xác định được posted_at")
                         continue
                     if posted_dt < cutoff_time:
                         print(f"  Đã gặp post cũ hơn 24h: {temp_post_id} ({posted_at})")
@@ -831,7 +831,7 @@ def fetch_posts(
                 # Check comment count threshold
                 comment_count = extract_comment_count(story_node)
                 if min_comments > 0 and comment_count < min_comments:
-                    print(f"  â­ï¸  Bo qua post chi co {comment_count} binh luan (can {min_comments}+)")
+                    print(f"Bỏ qua post chỉ có {comment_count} bình luận (can {min_comments}+)")
                     continue
                 
                 # Extract group name from first post if not set
@@ -847,7 +847,7 @@ def fetch_posts(
                 if temp_group_name:
                     temp_name_folder = sanitize_group_folder_name(temp_group_name)
                     if post_already_exists(temp_post_id, "group_post", temp_name_folder):
-                        print(f"  â­ï¸  Bo qua post da scrape truoc do: {temp_post_id}")
+                        print(f"Bỏ qua post đã scrape trước đó: {temp_post_id}")
                         continue
                 
                 post_data = extract_post_data(
@@ -869,7 +869,7 @@ def fetch_posts(
                     # Check if we should process this batch
                     if batch_size > 0 and len(batch_posts) >= batch_size and on_batch_complete:
                         total_label = limit if limit is not None else "24h"
-                        print(f"\nðŸ“¦ Hoan tat lo: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
+                        print(f"\nðŸ“¦ Hoàn tất: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
                         on_batch_complete(batch_posts, len(all_posts), limit)
                         batch_posts = []  # Reset batch
                     
@@ -942,7 +942,7 @@ def fetch_posts(
     # Process any remaining posts in the final batch
     if batch_posts and on_batch_complete:
         total_label = limit if limit is not None else "24h"
-        print(f"\nðŸ“¦ Lo cuoi: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
+        print(f"\n“¦ Lô cuối: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
         on_batch_complete(batch_posts, len(all_posts), limit)
     
     return all_posts
@@ -971,7 +971,7 @@ if __name__ == "__main__":
     with open("group_posts.json", "w", encoding="utf-8") as f:
         json.dump(posts, f, ensure_ascii=False, indent=2)
     
-    print(f"\nâœ“ Saved {len(posts)} posts to group_posts.json")
+    print(f"\n“ Saved {len(posts)} posts to group_posts.json")
     
     # Print summary
     print("\nSummary:")
@@ -980,9 +980,9 @@ if __name__ == "__main__":
         videos = len(post['videos'])
         print(f"{i}. Post ID: {post['post_id']}")
         if photos:
-            print(f"   ðŸ“· {photos} photo(s)")
+            print(f"{photos} photo(s)")
         if videos:
-            print(f"   ðŸŽ¥ {videos} video(s)")
+            print(f"{videos} video(s)")
         if post['message']:
             preview = post['message'][:100] + '...' if len(post['message']) > 100 else post['message']
             print(f"   {preview}")

@@ -116,11 +116,11 @@ def download_image(url, post_id, image_index=1, save_dir="page_post"):
         with open(filepath, 'wb') as f:
             f.write(response.content)
         
-        print(f"  ðŸ“¥ Downloaded image: {filename}")
+        print(f"Downloaded image: {filename}")
         return filename
     
     except Exception as e:
-        print(f"  âŒ Failed to download image: {str(e)}")
+        print(f"Failed to download image: {str(e)}")
         return None
 
 
@@ -132,7 +132,7 @@ def fetch_remaining_images(last_media_id, post_id, current_image_count, save_dir
     seen_media_ids = set(seen_media_ids or [])
     seen_urls = set(seen_urls or [])
     
-    print(f"  ðŸ”„ Fetching remaining images after image #{current_image_count}...")
+    print(f"Fetching remaining images after image #{current_image_count}...")
     
     DOC_ID_PHOTO = "26168653472729001"  # CometPhotoRootContentQuery
     HEADERS_PHOTO = {
@@ -589,7 +589,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
                     print(f"  âš ï¸ Phan hoi rong, dang thu lai ({empty_retry_count}/{max_empty_retries})...")
                     time.sleep(2)  # Wait before retry
                 else:
-                    print(f"  âŒ Phan hoi rong sau {max_empty_retries} lan thu, bo qua trang")
+                    print(f"Phản hồi rỗng sau {max_empty_retries} lần thử, bỏ qua trang")
         
         # # Save cleaned data for verification
         # with open(f"cleaned_page_{page_num}.json", "w", encoding="utf-8") as f:
@@ -683,7 +683,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
 
             if cutoff_time:
                 if not posted_dt:
-                    print(f"  Skipping post {post_id} vi khong xac dinh duoc posted_at")
+                    print(f"  Skipping post {post_id} vì không xác định được posted_at")
                     continue
                 if posted_dt < cutoff_time:
                     print(f"  Đã gặp post cũ hơn 24h: {post_id} ({posted_at})")
@@ -693,7 +693,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
             # Check comment count threshold
             comment_count = extract_comment_count(node)
             if min_comments > 0 and comment_count < min_comments:
-                print(f"  â­ï¸  Bo qua post chi co {comment_count} binh luan (can {min_comments}+)")
+                print(f"Bỏ qua post chỉ có {comment_count} bình luận (cần {min_comments}+)")
                 continue
             
             # Extract share count
@@ -717,7 +717,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
             if temp_page_name:
                 temp_name_folder = sanitize_page_folder_name(temp_page_name)
                 if post_already_exists(post_id, base_folder, temp_name_folder):
-                    print(f"  â­ï¸  Bo qua post da scrape truoc do: {post_id}")
+                    print(f"Bỏ qua post đã scrape trước đó: {post_id}")
                     continue
                 
             feedback_id = node.get("feedback", {}).get("id")
@@ -776,7 +776,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
             # Check if we should process this batch
             if batch_size > 0 and len(batch_posts) >= batch_size and on_batch_complete:
                 total_label = limit if limit is not None else "24h"
-                print(f"\nðŸ“¦ Hoan tat lo: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
+                print(f"\n“¦ Hoàn tất: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
                 on_batch_complete(batch_posts, len(all_posts), limit)
                 batch_posts = []  # Reset batch
             
@@ -811,7 +811,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
     # Process any remaining posts in the final batch
     if batch_posts and on_batch_complete:
         total_label = limit if limit is not None else "24h"
-        print(f"\nðŸ“¦ Lo cuoi: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
+        print(f"\n“¦ Lô cuối: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
         on_batch_complete(batch_posts, len(all_posts), limit)
 
     return all_posts
