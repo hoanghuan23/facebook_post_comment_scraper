@@ -13,6 +13,8 @@ CREATE UNIQUE INDEX ix_users_username ON users (username);
 CREATE UNIQUE INDEX ix_users_email ON users (email);
 CREATE INDEX idx_user_username ON users (username);
 CREATE INDEX idx_user_email ON users (email);
+
+-- bảng task_logs lưu trữ lịch sử thực thi của các tác vụ định kỳ (scrape_posts, update_metrics, generate_analytics) để theo dõi hiệu suất và phát hiện lỗi
 CREATE TABLE task_logs (
         id INTEGER NOT NULL, 
         task_name VARCHAR(100) NOT NULL, 
@@ -27,6 +29,8 @@ CREATE TABLE task_logs (
         PRIMARY KEY (id)
 );
 CREATE INDEX idx_task_name_date ON task_logs (task_name, created_at);
+
+-- bảng facebook_sessions lưu trữ thông tin về các phiên đăng nhập Facebook của người dùng, bao gồm cookie, token và trạng thái phiên để quản lý việc truy cập dữ liệu từ Facebook một cách hiệu quả và an toàn
 CREATE TABLE facebook_sessions (
         id INTEGER NOT NULL, 
         user_id INTEGER NOT NULL, 
@@ -43,6 +47,8 @@ CREATE TABLE facebook_sessions (
         FOREIGN KEY(user_id) REFERENCES users (id)
 );
 CREATE INDEX idx_fb_sessions_user ON facebook_sessions (user_id, is_active);
+
+-- bảng sources lưu trữ thông tin về các nguồn dữ liệu Facebook mà người dùng theo dõi, bao gồm ID Facebook, URL, tên nguồn, mô tả, số lượng thành viên và người theo dõi, trạng thái quyền truy cập và các cài đặt liên quan đến việc thu thập dữ liệu để quản lý hiệu quả việc theo dõi và phân tích các trang Facebook được quan tâm
 CREATE TABLE sources (
         id INTEGER NOT NULL, 
         user_id INTEGER NOT NULL, 
@@ -75,6 +81,8 @@ CREATE INDEX idx_source_user_active ON sources (user_id, is_active);
 CREATE INDEX idx_source_accessible ON sources (is_accessible);
 CREATE INDEX idx_source_next_scrape ON sources (next_scrape);
 CREATE INDEX idx_source_permission ON sources (permission_status);
+
+-- bảng posts lưu trữ thông tin về các bài đăng trên Facebook của từng nguồn, bao gồm ID bài đăng, nội dung, số lượng media, trạng thái có hình ảnh/video, thời gian đăng, trạng thái theo dõi và các chỉ số tương tác để quản lý và phân tích hiệu suất của các bài đăng trên Facebook được theo dõi
 CREATE TABLE posts (
         id INTEGER NOT NULL, 
         source_id INTEGER NOT NULL, 
@@ -98,6 +106,8 @@ CREATE INDEX idx_post_source ON posts (source_id);
 CREATE INDEX idx_post_facebook_id ON posts (facebook_post_id);
 CREATE UNIQUE INDEX ix_posts_facebook_post_id ON posts (facebook_post_id);
 CREATE INDEX idx_post_posted_at ON posts (posted_at);
+
+-- bảng analytics_cache lưu trữ kết quả tổng hợp các chỉ số tương tác (likes, shares, comments, views) của từng source theo ngày để phục vụ cho việc phân tích hiệu suất và xu hướng của các trang Facebook được theo dõi
 CREATE TABLE analytics_cache (
         id INTEGER NOT NULL, 
         source_id INTEGER NOT NULL, 
@@ -117,19 +127,8 @@ CREATE TABLE analytics_cache (
         FOREIGN KEY(source_id) REFERENCES sources (id)
 );
 CREATE INDEX idx_analytics_source_date ON analytics_cache (source_id, date);
-CREATE TABLE scraper_logs (
-        id INTEGER NOT NULL, 
-        source_id INTEGER, 
-        log_level VARCHAR(20), 
-        message TEXT NOT NULL, 
-        error_type VARCHAR(100), 
-        error_details TEXT, 
-        created_at DATETIME, 
-        PRIMARY KEY (id), 
-        FOREIGN KEY(source_id) REFERENCES sources (id)
-);
-CREATE INDEX ix_scraper_logs_created_at ON scraper_logs (created_at);
-CREATE INDEX idx_log_level_date ON scraper_logs (log_level, created_at);
+
+-- tạo bảng post_metrics lưu lịch sử thay đổi của các chỉ số tương tác (likes, shares, comments, views) theo thời gian để có thể phân tích xu hướng và hiệu suất của bài đăng
 CREATE TABLE post_metrics (
         id INTEGER NOT NULL, 
         post_id INTEGER NOT NULL, 
@@ -143,6 +142,8 @@ CREATE TABLE post_metrics (
 );
 CREATE INDEX ix_post_metrics_recorded_at ON post_metrics (recorded_at);
 CREATE INDEX idx_metric_post_date ON post_metrics (post_id, recorded_at);
+
+-- bảng comments lưu trữ tất cả bình luận và phản hồi trên các bài đăng của Facebook, bao gồm cả thông tin về người bình luận, nội dung bình luận, số lượt thích và số lượng phản hồi để phục vụ cho việc phân tích tương tác chi tiết
 CREATE TABLE comments (
         id INTEGER NOT NULL, 
         post_id INTEGER NOT NULL, 
@@ -164,21 +165,51 @@ CREATE TABLE comments (
 );
 CREATE INDEX idx_comment_facebook_id ON comments (facebook_comment_id);
 CREATE INDEX idx_comment_post ON comments (post_id);
-CREATE TABLE scrape_jobs (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    source_id      INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-    session_id     INTEGER REFERENCES facebook_sessions(id) ON DELETE SET NULL,
-    status         VARCHAR(10) NOT NULL DEFAULT 'pending'
-                   CHECK (status IN ('pending', 'running', 'done', 'failed')),
-    posts_found    INTEGER NOT NULL DEFAULT 0,
-    posts_new      INTEGER NOT NULL DEFAULT 0,
-    error_message  TEXT,
-    started_at     DATETIME,
-    finished_at    DATETIME
+
+-- bảng pipeline_jobs theo dõi toàn bộ pipeline (scrape_24h, scraper_job, post_metric, analytics)
+DROP TABLE IF EXISTS pipeline_jobs;
+
+CREATE TABLE pipeline_jobs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_type        VARCHAR(20) NOT NULL DEFAULT 'scraper_job'
+                    CHECK (job_type IN ('scrape_24h', 'scraper_job', 'post_metric', 'analytics')),
+
+    source_id       INTEGER REFERENCES sources(id) ON DELETE SET NULL,
+    session_id      INTEGER REFERENCES facebook_sessions(id) ON DELETE SET NULL,
+
+    status          VARCHAR(10) NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending', 'running', 'done', 'failed')),
+
+    posts_found     INTEGER NOT NULL DEFAULT 0,
+    posts_new       INTEGER NOT NULL DEFAULT 0,
+    items_total     INTEGER NOT NULL DEFAULT 0,
+    items_updated   INTEGER NOT NULL DEFAULT 0,
+    items_failed    INTEGER NOT NULL DEFAULT 0,
+
+    error_message   TEXT,
+    started_at      DATETIME,
+    finished_at     DATETIME
 );
 
-CREATE INDEX idx_jobs_source_time
-    ON scrape_jobs(source_id, started_at DESC);
+CREATE INDEX idx_pipeline_jobs_source_time ON pipeline_jobs (source_id, started_at DESC);
+CREATE INDEX idx_pipeline_jobs_type_status ON pipeline_jobs (job_type, status, started_at DESC);
 
-CREATE INDEX idx_jobs_status
-    ON scrape_jobs(status, started_at DESC);
+-- bảng pipeline_logs lưu log chi tiết cho từng pipeline job để debug
+CREATE TABLE pipeline_logs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    -- Liên kết job (thêm mới, quan trọng)
+    job_id          INTEGER REFERENCES pipeline_jobs(id) ON DELETE SET NULL,
+
+    source_id       INTEGER REFERENCES sources(id),
+    log_level       VARCHAR(20),  -- 'INFO', 'WARNING', 'ERROR'
+    message         TEXT NOT NULL,
+    error_type      VARCHAR(100),
+    error_details   TEXT,
+
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_pipeline_logs_job     ON pipeline_logs (job_id, created_at);
+CREATE INDEX idx_pipeline_logs_source  ON pipeline_logs (source_id, created_at);
+CREATE INDEX idx_pipeline_logs_level   ON pipeline_logs (log_level, created_at);
