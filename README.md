@@ -52,7 +52,9 @@ Các bảng chính (xem `backend/database/models.py`):
 - **post_metrics**: lịch sử metrics theo thời gian
 - **comments**: bình luận (hỗ trợ reply qua `parent_comment_id`, `depth_level`)
 - **analytics_cache**: cache thống kê
-- **scraper_logs**, **task_logs**: log hệ thống
+- **pipeline_jobs**, **pipeline_logs**, **task_logs**: log hệ thống
+
+> Migration cũ -> mới: chạy `python -m backend.database.migrations` trước khi drop các bảng legacy `scrape_jobs`/`scraper_logs`.
 
 ---
 

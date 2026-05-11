@@ -23,10 +23,17 @@ def _ensure_sqlite_parent_dir(database_url: str) -> None:
 if "sqlite" in settings.DATABASE_URL:
     # SQLite (for development/testing)
     _ensure_sqlite_parent_dir(settings.DATABASE_URL)
+    is_in_memory_sqlite = ":memory:" in settings.DATABASE_URL
+    sqlite_engine_kwargs = {
+        "connect_args": {"check_same_thread": False},
+    }
+    # StaticPool is only safe/needed for in-memory SQLite.
+    # File-based SQLite should not share one connection across worker threads.
+    if is_in_memory_sqlite:
+        sqlite_engine_kwargs["poolclass"] = StaticPool
     engine = create_engine(
         settings.DATABASE_URL,
-        connect_args={"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {},
-        poolclass=StaticPool if "sqlite" in settings.DATABASE_URL else None,
+        **sqlite_engine_kwargs,
     )
 else:
     # PostgreSQL

@@ -331,43 +331,65 @@ class AnalyticsCache(Base):
     )
 
 
-class ScrapeJob(Base):
-    __tablename__ = "scrape_jobs"
+class PipelineJob(Base):
+    __tablename__ = "pipeline_jobs"
 
     id = Column(Integer, primary_key=True)
-    source_id = Column(Integer, ForeignKey("sources.id"), nullable=False)
-    session_id = Column(Integer, ForeignKey("facebook_sessions.id"), nullable=True)
+    job_type = Column(String(20), nullable=False, default="scraper_job")
+    source_id = Column(Integer, ForeignKey("sources.id", ondelete="SET NULL"), nullable=True)
+    session_id = Column(Integer, ForeignKey("facebook_sessions.id", ondelete="SET NULL"), nullable=True)
     status = Column(String(10), nullable=False, default="pending")
     posts_found = Column(Integer, nullable=False, default=0)
     posts_new = Column(Integer, nullable=False, default=0)
+    items_total = Column(Integer, nullable=False, default=0)
+    items_updated = Column(Integer, nullable=False, default=0)
+    items_failed = Column(Integer, nullable=False, default=0)
     error_message = Column(Text, nullable=True)
     started_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
 
+    source = relationship("Source")
+    session = relationship("FacebookSession")
+    logs = relationship("PipelineLog", back_populates="job")
+
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending', 'running', 'done', 'failed')",
-            name="ck_scrape_jobs_status",
+            "job_type IN ('scrape_24h', 'scraper_job', 'post_metric', 'analytics')",
+            name="ck_pipeline_jobs_type",
         ),
-        Index("idx_jobs_source_time", "source_id", "started_at"),
-        Index("idx_jobs_status", "status", "started_at"),
+        CheckConstraint(
+            "status IN ('pending', 'running', 'done', 'failed')",
+            name="ck_pipeline_jobs_status",
+        ),
+        Index("idx_pipeline_jobs_source_time", "source_id", "started_at"),
+        Index("idx_pipeline_jobs_type_status", "job_type", "status", "started_at"),
     )
 
 
-class ScraperLog(Base):
-    __tablename__ = "scraper_logs"
+class PipelineLog(Base):
+    __tablename__ = "pipeline_logs"
 
     id = Column(Integer, primary_key=True)
-    source_id = Column(Integer, ForeignKey("sources.id"), nullable=True)
+    job_id = Column(Integer, ForeignKey("pipeline_jobs.id", ondelete="SET NULL"), nullable=True)
+    source_id = Column(Integer, ForeignKey("sources.id", ondelete="SET NULL"), nullable=True)
     log_level = Column(String(20))
     message = Column(Text, nullable=False)
     error_type = Column(String(100), nullable=True)
     error_details = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
+    job = relationship("PipelineJob", back_populates="logs")
+    source = relationship("Source")
+
     __table_args__ = (
-        Index("idx_log_level_date", "log_level", "created_at"),
+        Index("idx_pipeline_logs_job", "job_id", "created_at"),
+        Index("idx_pipeline_logs_source", "source_id", "created_at"),
+        Index("idx_pipeline_logs_level", "log_level", "created_at"),
     )
+
+
+ScrapeJob = PipelineJob
+ScraperLog = PipelineLog
 
 
 class TaskLog(Base):

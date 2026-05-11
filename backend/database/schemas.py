@@ -99,6 +99,24 @@ class SourceResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True, use_enum_values=True)
 
 
+class CreateSourceError(BaseModel):
+    """Error item for create source batch/single response"""
+    index: int
+    facebook_url: Optional[str] = None
+    code: str
+    message: str
+
+
+class CreateSourceResult(BaseModel):
+    """Create source result for both single and batch payloads"""
+    mode: Literal["single", "batch"]
+    total: int
+    success_count: int
+    error_count: int
+    created: List[SourceResponse] = Field(default_factory=list)
+    errors: List[CreateSourceError] = Field(default_factory=list)
+
+
 class SourceDetail(SourceResponse):
     """Detailed source response"""
     post_count: Optional[int] = None

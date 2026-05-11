@@ -1,10 +1,11 @@
 # Source management routes
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Union
 import json
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from backend.api.auth import get_current_user
@@ -13,14 +14,22 @@ from backend.database.crud import (
     FacebookSessionCRUD,
     LogCRUD,
     PostCRUD,
-    ScrapeJobCRUD,
+    PipelineJobCRUD,
     SourceCRUD,
     duplicate_check_source,
     get_source_stats,
 )
 from backend.database.db import SessionLocal, get_db
 from backend.database.models import SourceType, User
-from backend.database.schemas import SourceCreate, SourceDetail, SourceResponse, SourceUpdate, PostResponse
+from backend.database.schemas import (
+    CreateSourceError,
+    CreateSourceResult,
+    SourceCreate,
+    SourceDetail,
+    SourceResponse,
+    SourceUpdate,
+    PostResponse,
+)
 from backend.scraper.facebook_service import FacebookScraperService
 from backend.utils.facebook_url_parser import FacebookURLParser, FacebookSourceType
 from backend.utils.permission_checker import FacebookPermissionChecker, SourceAccessValidator
@@ -37,7 +46,7 @@ def _bootstrap_scrape_source_last_24h(source_id: int):
     db = SessionLocal()
     started_at = datetime.utcnow()
     started_ts = datetime.utcnow().timestamp()
-    scrape_job_id = None
+    pipeline_job_id = None
     try:
         source = SourceCRUD.get_by_id(db, source_id)
         if not source:
@@ -59,22 +68,23 @@ def _bootstrap_scrape_source_last_24h(source_id: int):
             started_at.isoformat(),
         )
         active_session = FacebookSessionCRUD.get_active_by_user_id(db, source.user_id)
-        scrape_job = ScrapeJobCRUD.create_job(
+        pipeline_job = PipelineJobCRUD.create_job(
             db=db,
+            job_type="scrape_24h",
             source_id=source_id,
             session_id=active_session.id if active_session else None,
             status="running",
             started_at=started_at,
         )
-        scrape_job_id = scrape_job.id
+        pipeline_job_id = pipeline_job.id
         result = FacebookScraperService.scrape_source(
             db,
             source_id=source_id,
             last_24_hours_only=True,
         )
-        ScrapeJobCRUD.mark_done(
+        PipelineJobCRUD.mark_done(
             db=db,
-            job_id=scrape_job_id,
+            job_id=pipeline_job_id,
             posts_found=result.total_fetched,
             posts_new=result.created_posts,
             finished_at=datetime.utcnow(),
@@ -96,18 +106,19 @@ def _bootstrap_scrape_source_last_24h(source_id: int):
             next_scrape.isoformat(),
         )
     except Exception as exc:
-        if scrape_job_id is not None:
-            ScrapeJobCRUD.mark_failed(
+        if pipeline_job_id is not None:
+            PipelineJobCRUD.mark_failed(
                 db=db,
-                job_id=scrape_job_id,
+                job_id=pipeline_job_id,
                 error_message=str(exc),
                 finished_at=datetime.utcnow(),
             )
         logger.exception("Bootstrap scrape 24h thất bại: source_id=%s error=%s", source_id, exc)
-        LogCRUD.create_scraper_log(
+        LogCRUD.create_pipeline_log(
             db,
             message=f"Bootstrap scrape 24h thất bại cho source {source_id}",
             log_level="ERROR",
+            job_id=pipeline_job_id,
             source_id=source_id,
             error_type=type(exc).__name__,
             error_details=str(exc),
@@ -116,47 +127,44 @@ def _bootstrap_scrape_source_last_24h(source_id: int):
         db.close()
 
 
-@router.post("/", response_model=SourceResponse)
-async def create_source(
+def _create_single_source(
     source_data: SourceCreate,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    current_user: User,
+    db: Session,
 ):
-    """Create a new source (group/page/user) to track."""
-    
+    """Create a single source with existing validation rules."""
+
     # Parse Facebook URL
     parsed_url = FacebookURLParser.parse(source_data.facebook_url)
-    
+
     if not parsed_url['is_valid']:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid Facebook URL: {parsed_url['error']}",
         )
-    
+
     facebook_id = parsed_url['facebook_id']
-    detected_source_type = parsed_url['source_type'].value
-    
-    # Use provided source_type if valid, otherwise use detected
+
     if source_data.source_type not in ['group', 'page', 'user']:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid source type",
         )
-    
+
     # Check for duplicates
     if duplicate_check_source(db, current_user.id, facebook_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="This source is already being tracked",
         )
-    
+
     # Check access permissions if requested
     permission_status = None
     permission_message = None
     access_restrictions = None
     is_accessible = False
-    
+
     if source_data.check_access:
         # Validate access before saving
         is_valid, validation_error = SourceAccessValidator.validate_before_save(
@@ -187,7 +195,7 @@ async def create_source(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Access denied: {validation_error}",
             )
-    
+
     # Create source with permission information
     source = SourceCRUD.create(
         db=db,
@@ -204,11 +212,69 @@ async def create_source(
         is_accessible=is_accessible,
         permission_checked_at=datetime.utcnow() if source_data.check_access else None,
     )
-    
+
     background_tasks.add_task(_bootstrap_scrape_source_last_24h, source.id)
 
     logger.info(f"Source created: {facebook_id} by user {current_user.id}")
     return source
+
+
+@router.post("/", response_model=CreateSourceResult)
+async def create_source(
+    source_data: Union[SourceCreate, List[SourceCreate]],
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Create one or many sources (group/page/user) to track."""
+    is_batch = isinstance(source_data, list)
+    payload_items = source_data if is_batch else [source_data]
+    mode = "batch" if is_batch else "single"
+
+    created_sources = []
+    errors = []
+
+    for index, item in enumerate(payload_items):
+        try:
+            source = _create_single_source(
+                source_data=item,
+                background_tasks=background_tasks,
+                current_user=current_user,
+                db=db,
+            )
+            created_sources.append(source)
+        except HTTPException as exc:
+            error_code = "create_source_error"
+            if exc.status_code == status.HTTP_400_BAD_REQUEST:
+                error_code = "bad_request"
+            elif exc.status_code == status.HTTP_403_FORBIDDEN:
+                error_code = "access_denied"
+            errors.append(
+                CreateSourceError(
+                    index=index,
+                    facebook_url=item.facebook_url,
+                    code=error_code,
+                    message=str(exc.detail),
+                )
+            )
+
+    result = CreateSourceResult(
+        mode=mode,
+        total=len(payload_items),
+        success_count=len(created_sources),
+        error_count=len(errors),
+        created=[SourceResponse.model_validate(source) for source in created_sources],
+        errors=errors,
+    )
+
+    if result.error_count == 0:
+        return result
+
+    status_code = status.HTTP_207_MULTI_STATUS if result.success_count > 0 else status.HTTP_400_BAD_REQUEST
+    return JSONResponse(
+        status_code=status_code,
+        content=result.model_dump(mode="json"),
+    )
 
 
 @router.get("/", response_model=List[SourceResponse])

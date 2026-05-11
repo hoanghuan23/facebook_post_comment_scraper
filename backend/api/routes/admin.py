@@ -6,8 +6,8 @@ from datetime import datetime
 import asyncio
 
 from backend.database.db import get_db
-from backend.database.models import User, Source, Post, Comment, PostMetric, ScraperLog
-from backend.database.crud import UserCRUD, LogCRUD, SourceCRUD, get_user_stats
+from backend.database.models import User, Source, Post, Comment, PostMetric, PipelineJob, PipelineLog
+from backend.database.crud import PipelineJobCRUD, UserCRUD, LogCRUD, SourceCRUD, get_user_stats
 from backend.api.auth import get_current_admin_user
 
 router = APIRouter()
@@ -28,9 +28,9 @@ async def get_scraper_status(
     
     # Count errors from today
     today = datetime.utcnow().date()
-    errors_today = db.query(func.count(ScraperLog.id)).filter(
-        ScraperLog.log_level == "ERROR",
-        func.date(ScraperLog.created_at) == today
+    errors_today = db.query(func.count(PipelineLog.id)).filter(
+        PipelineLog.log_level == "ERROR",
+        func.date(PipelineLog.created_at) == today
     ).scalar()
     
     return {
@@ -95,10 +95,10 @@ async def get_logs(
 ):
     """Get application logs"""
 
-    query = db.query(ScraperLog).order_by(ScraperLog.created_at.desc())
+    query = db.query(PipelineLog).order_by(PipelineLog.created_at.desc())
     
     if log_level:
-        query = query.filter(ScraperLog.log_level == log_level)
+        query = query.filter(PipelineLog.log_level == log_level)
     
     logs = query.limit(limit).all()
     
@@ -111,6 +111,8 @@ async def get_logs(
                 "level": l.log_level,
                 "message": l.message,
                 "source_id": l.source_id,
+                "job_id": l.job_id,
+                "job_type": l.job.job_type if l.job else None,
             }
             for l in logs
         ]
@@ -225,27 +227,91 @@ async def run_task_manually(
                 raise HTTPException(status_code=404, detail="Source not found")
 
             if task_name == "scrape_posts":
-                result = FacebookScraperService.scrape_source(db, source_id, limit=20)
-                return {
-                    "status": "completed",
-                    "task": "scrape_posts",
-                    "source_id": source_id,
-                    "result": {
-                        "total_fetched": result.total_fetched,
-                        "created_posts": result.created_posts,
-                        "updated_posts": result.updated_posts,
-                        "skipped_posts": result.skipped_posts,
-                    },
-                }
+                pipeline_job = PipelineJobCRUD.create_job(
+                    db=db,
+                    job_type="scraper_job",
+                    source_id=source_id,
+                    status="running",
+                    started_at=datetime.utcnow(),
+                )
+                try:
+                    result = FacebookScraperService.scrape_source(db, source_id, limit=20)
+                    PipelineJobCRUD.mark_done(
+                        db=db,
+                        job_id=pipeline_job.id,
+                        posts_found=result.total_fetched,
+                        posts_new=result.created_posts,
+                        finished_at=datetime.utcnow(),
+                    )
+                    return {
+                        "status": "completed",
+                        "task": "scrape_posts",
+                        "source_id": source_id,
+                        "result": {
+                            "total_fetched": result.total_fetched,
+                            "created_posts": result.created_posts,
+                            "updated_posts": result.updated_posts,
+                            "skipped_posts": result.skipped_posts,
+                        },
+                    }
+                except Exception as exc:
+                    PipelineJobCRUD.mark_failed(
+                        db=db,
+                        job_id=pipeline_job.id,
+                        error_message=str(exc),
+                        finished_at=datetime.utcnow(),
+                    )
+                    LogCRUD.create_pipeline_log(
+                        db,
+                        message=f"Manual scrape_posts failed for source {source_id}",
+                        log_level="ERROR",
+                        job_id=pipeline_job.id,
+                        source_id=source_id,
+                        error_type=type(exc).__name__,
+                        error_details=str(exc),
+                    )
+                    raise
 
             if task_name == "update_metrics":
-                result = FacebookScraperService.refresh_recent_post_metrics(db, source, limit=20)
-                return {
-                    "status": "completed",
-                    "task": "update_metrics",
-                    "source_id": source_id,
-                    "result": result,
-                }
+                pipeline_job = PipelineJobCRUD.create_job(
+                    db=db,
+                    job_type="post_metric",
+                    source_id=source_id,
+                    status="running",
+                    started_at=datetime.utcnow(),
+                )
+                try:
+                    result = FacebookScraperService.refresh_recent_post_metrics(db, source, limit=20)
+                    PipelineJobCRUD.mark_done(
+                        db=db,
+                        job_id=pipeline_job.id,
+                        items_total=result.get("fetched", 0) if isinstance(result, dict) else 0,
+                        items_updated=result.get("updated", 0) if isinstance(result, dict) else 0,
+                        finished_at=datetime.utcnow(),
+                    )
+                    return {
+                        "status": "completed",
+                        "task": "update_metrics",
+                        "source_id": source_id,
+                        "result": result,
+                    }
+                except Exception as exc:
+                    PipelineJobCRUD.mark_failed(
+                        db=db,
+                        job_id=pipeline_job.id,
+                        error_message=str(exc),
+                        finished_at=datetime.utcnow(),
+                    )
+                    LogCRUD.create_pipeline_log(
+                        db,
+                        message=f"Manual update_metrics failed for source {source_id}",
+                        log_level="ERROR",
+                        job_id=pipeline_job.id,
+                        source_id=source_id,
+                        error_type=type(exc).__name__,
+                        error_details=str(exc),
+                    )
+                    raise
 
         if task_name == "scrape_posts":
             asyncio.create_task(periodic_tasks.periodic_scrape_new_posts())

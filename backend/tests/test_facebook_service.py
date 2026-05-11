@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+import json
 
 from fastapi import BackgroundTasks
 from backend.database.crud import CommentCRUD, FacebookSessionCRUD, PostCRUD, SourceCRUD, UserCRUD
@@ -1375,7 +1376,7 @@ def test_create_source_enqueues_background_bootstrap_scrape(monkeypatch):
 
         import asyncio
 
-        created_source = asyncio.run(
+        result = asyncio.run(
             create_source(
                 source_data=source_data,
                 background_tasks=background_tasks,
@@ -1384,6 +1385,12 @@ def test_create_source_enqueues_background_bootstrap_scrape(monkeypatch):
             )
         )
 
+        assert result.mode == "single"
+        assert result.total == 1
+        assert result.success_count == 1
+        assert result.error_count == 0
+        assert len(result.created) == 1
+        created_source = result.created[0]
         assert created_source.id is not None
         assert len(added_tasks) == 1
         task_func, task_args, task_kwargs = added_tasks[0]
@@ -1429,6 +1436,130 @@ def test_bootstrap_scrape_logs_error_without_crashing(monkeypatch):
         assert log.error_type == "RuntimeError"
     finally:
         verify_db.close()
+
+
+def test_create_source_batch_partial_success_returns_multi_status(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="batch-ivy", email="batch-ivy@example.com", password="secret123")
+
+        def fake_parse(url):
+            if "invalid" in url:
+                return {"is_valid": False, "error": "not facebook url"}
+            return {
+                "is_valid": True,
+                "facebook_id": url.split("/")[-1],
+                "source_type": SimpleNamespace(value="group"),
+            }
+
+        monkeypatch.setattr("backend.api.routes.sources.FacebookURLParser.parse", fake_parse)
+
+        source_data = [
+            SourceCreate(
+                source_type="group",
+                facebook_url="https://www.facebook.com/groups/batch-ok-1",
+                check_access=False,
+            ),
+            SourceCreate(
+                source_type="group",
+                facebook_url="https://www.facebook.com/groups/invalid",
+                check_access=False,
+            ),
+            SourceCreate(
+                source_type="group",
+                facebook_url="https://www.facebook.com/groups/batch-ok-2",
+                check_access=False,
+            ),
+        ]
+
+        background_tasks = BackgroundTasks()
+        added_tasks = []
+
+        def fake_add_task(func, *args, **kwargs):
+            added_tasks.append((func, args, kwargs))
+
+        monkeypatch.setattr(background_tasks, "add_task", fake_add_task)
+
+        import asyncio
+
+        response = asyncio.run(
+            create_source(
+                source_data=source_data,
+                background_tasks=background_tasks,
+                current_user=user,
+                db=db,
+            )
+        )
+
+        assert response.status_code == 207
+        payload = json.loads(response.body)
+        assert payload["mode"] == "batch"
+        assert payload["total"] == 3
+        assert payload["success_count"] == 2
+        assert payload["error_count"] == 1
+        assert len(payload["created"]) == 2
+        assert len(payload["errors"]) == 1
+        assert payload["errors"][0]["index"] == 1
+        assert len(added_tasks) == 2
+    finally:
+        db.close()
+
+
+def test_create_source_batch_all_success(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="batch-all-ok", email="batch-all-ok@example.com", password="secret123")
+
+        monkeypatch.setattr(
+            "backend.api.routes.sources.FacebookURLParser.parse",
+            lambda url: {
+                "is_valid": True,
+                "facebook_id": url.split("/")[-1],
+                "source_type": SimpleNamespace(value="group"),
+            },
+        )
+
+        source_data = [
+            SourceCreate(
+                source_type="group",
+                facebook_url="https://www.facebook.com/groups/batch-all-1",
+                check_access=False,
+            ),
+            SourceCreate(
+                source_type="group",
+                facebook_url="https://www.facebook.com/groups/batch-all-2",
+                check_access=False,
+            ),
+        ]
+
+        background_tasks = BackgroundTasks()
+        added_tasks = []
+
+        def fake_add_task(func, *args, **kwargs):
+            added_tasks.append((func, args, kwargs))
+
+        monkeypatch.setattr(background_tasks, "add_task", fake_add_task)
+
+        import asyncio
+
+        result = asyncio.run(
+            create_source(
+                source_data=source_data,
+                background_tasks=background_tasks,
+                current_user=user,
+                db=db,
+            )
+        )
+
+        assert result.mode == "batch"
+        assert result.total == 2
+        assert result.success_count == 2
+        assert result.error_count == 0
+        assert len(result.created) == 2
+        assert len(result.errors) == 0
+        assert len(added_tasks) == 2
+    finally:
+        db.close()
 
 
 def test_periodic_scrape_new_posts_creates_done_scrape_job_without_session(monkeypatch):

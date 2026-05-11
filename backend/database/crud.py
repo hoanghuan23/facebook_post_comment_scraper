@@ -148,19 +148,21 @@ class FacebookSessionCRUD:
         return session
 
 
-class ScrapeJobCRUD:
-    """CRUD operations for ScrapeJob model."""
+class PipelineJobCRUD:
+    """CRUD operations for PipelineJob model."""
 
     @staticmethod
     def create_job(
         db: Session,
-        source_id: int,
+        job_type: str,
+        source_id: Optional[int] = None,
         session_id: Optional[int] = None,
         status: str = "running",
         started_at: Optional[datetime] = None,
-    ) -> models.ScrapeJob:
-        """Create a scrape job row before scraping starts."""
-        db_job = models.ScrapeJob(
+    ) -> models.PipelineJob:
+        """Create a pipeline job row before execution starts."""
+        db_job = models.PipelineJob(
+            job_type=job_type,
             source_id=source_id,
             session_id=session_id,
             status=status,
@@ -175,18 +177,25 @@ class ScrapeJobCRUD:
     def mark_done(
         db: Session,
         job_id: int,
-        posts_found: int,
-        posts_new: int,
+        posts_found: int = 0,
+        posts_new: int = 0,
         finished_at: Optional[datetime] = None,
-    ) -> Optional[models.ScrapeJob]:
-        """Mark scrape job as done and update counters."""
-        job = db.query(models.ScrapeJob).filter(models.ScrapeJob.id == job_id).first()
+        **kwargs,
+    ) -> Optional[models.PipelineJob]:
+        """Mark pipeline job as done and update counters."""
+        job = db.query(models.PipelineJob).filter(models.PipelineJob.id == job_id).first()
         if not job:
             return None
 
         job.status = "done"
         job.posts_found = posts_found
         job.posts_new = posts_new
+        if kwargs.get("items_total") is not None:
+            job.items_total = kwargs["items_total"]
+        if kwargs.get("items_updated") is not None:
+            job.items_updated = kwargs["items_updated"]
+        if kwargs.get("items_failed") is not None:
+            job.items_failed = kwargs["items_failed"]
         job.finished_at = finished_at or datetime.utcnow()
         db.commit()
         db.refresh(job)
@@ -198,9 +207,9 @@ class ScrapeJobCRUD:
         job_id: int,
         error_message: str,
         finished_at: Optional[datetime] = None,
-    ) -> Optional[models.ScrapeJob]:
-        """Mark scrape job as failed and store error message."""
-        job = db.query(models.ScrapeJob).filter(models.ScrapeJob.id == job_id).first()
+    ) -> Optional[models.PipelineJob]:
+        """Mark pipeline job as failed and store error message."""
+        job = db.query(models.PipelineJob).filter(models.PipelineJob.id == job_id).first()
         if not job:
             return None
 
@@ -210,6 +219,9 @@ class ScrapeJobCRUD:
         db.commit()
         db.refresh(job)
         return job
+
+
+ScrapeJobCRUD = PipelineJobCRUD
 
 
 # ==================== SOURCE OPERATIONS ====================
@@ -857,11 +869,18 @@ class LogCRUD:
     """CRUD operations for Logs"""
     
     @staticmethod
-    def create_scraper_log(db: Session, message: str, log_level: str = "INFO",
-                          source_id: int = None, error_type: str = None,
-                          error_details: str = None) -> models.ScraperLog:
-        """Create scraper log entry"""
-        db_log = models.ScraperLog(
+    def create_pipeline_log(
+        db: Session,
+        message: str,
+        log_level: str = "INFO",
+        job_id: int = None,
+        source_id: int = None,
+        error_type: str = None,
+        error_details: str = None,
+    ) -> models.PipelineLog:
+        """Create pipeline log entry"""
+        db_log = models.PipelineLog(
+            job_id=job_id,
             source_id=source_id,
             log_level=log_level,
             message=message,
@@ -872,6 +891,27 @@ class LogCRUD:
         db.commit()
         db.refresh(db_log)
         return db_log
+
+    @staticmethod
+    def create_scraper_log(
+        db: Session,
+        message: str,
+        log_level: str = "INFO",
+        source_id: int = None,
+        error_type: str = None,
+        error_details: str = None,
+        job_id: int = None,
+    ) -> models.PipelineLog:
+        """Compatibility wrapper for the old scraper log API."""
+        return LogCRUD.create_pipeline_log(
+            db,
+            message=message,
+            log_level=log_level,
+            job_id=job_id,
+            source_id=source_id,
+            error_type=error_type,
+            error_details=error_details,
+        )
     
     @staticmethod
     def create_task_log(db: Session, task_name: str, status: str = "PENDING",
@@ -913,14 +953,29 @@ class LogCRUD:
         return log
     
     @staticmethod
-    def get_logs(db: Session, log_level: str = None, limit: int = 100) -> List[models.ScraperLog]:
-        """Get scraper logs"""
-        query = db.query(models.ScraperLog)
+    def get_pipeline_logs(
+        db: Session,
+        log_level: str = None,
+        job_type: str = None,
+        source_id: int = None,
+        limit: int = 100,
+    ) -> List[models.PipelineLog]:
+        """Get pipeline logs"""
+        query = db.query(models.PipelineLog).outerjoin(models.PipelineJob, models.PipelineLog.job_id == models.PipelineJob.id)
         
         if log_level:
-            query = query.filter(models.ScraperLog.log_level == log_level)
+            query = query.filter(models.PipelineLog.log_level == log_level)
+        if job_type:
+            query = query.filter(models.PipelineJob.job_type == job_type)
+        if source_id is not None:
+            query = query.filter(models.PipelineLog.source_id == source_id)
         
-        return query.order_by(desc(models.ScraperLog.created_at)).limit(limit).all()
+        return query.order_by(desc(models.PipelineLog.created_at)).limit(limit).all()
+
+    @staticmethod
+    def get_logs(db: Session, log_level: str = None, limit: int = 100) -> List[models.PipelineLog]:
+        """Compatibility wrapper for the old log API."""
+        return LogCRUD.get_pipeline_logs(db, log_level=log_level, limit=limit)
     
     @staticmethod
     def get_task_logs(db: Session, task_name: str = None, limit: int = 100) -> List[models.TaskLog]:
@@ -933,17 +988,25 @@ class LogCRUD:
         return query.order_by(desc(models.TaskLog.created_at)).limit(limit).all()
     
     @staticmethod
-    def delete_old_logs(db: Session, keep_days: int = 30) -> Tuple[int, int]:
+    def delete_old_logs(db: Session, keep_days: int = 30) -> Tuple[int, int, int]:
         """Delete logs older than N days"""
         cutoff_time = datetime.utcnow() - timedelta(days=keep_days)
         
-        # Delete scraper logs
-        old_scraper_logs = db.query(models.ScraperLog).filter(
-            models.ScraperLog.created_at < cutoff_time
+        # Delete pipeline logs
+        old_pipeline_logs = db.query(models.PipelineLog).filter(
+            models.PipelineLog.created_at < cutoff_time
         ).all()
-        scraper_count = len(old_scraper_logs)
-        for log in old_scraper_logs:
+        pipeline_log_count = len(old_pipeline_logs)
+        for log in old_pipeline_logs:
             db.delete(log)
+
+        # Delete pipeline jobs
+        old_pipeline_jobs = db.query(models.PipelineJob).filter(
+            func.coalesce(models.PipelineJob.finished_at, models.PipelineJob.started_at) < cutoff_time
+        ).all()
+        pipeline_job_count = len(old_pipeline_jobs)
+        for job in old_pipeline_jobs:
+            db.delete(job)
         
         # Delete task logs
         old_task_logs = db.query(models.TaskLog).filter(
@@ -954,7 +1017,7 @@ class LogCRUD:
             db.delete(log)
         
         db.commit()
-        return scraper_count, task_count
+        return pipeline_log_count, pipeline_job_count, task_count
 
 
 # ==================== HELPER FUNCTIONS ====================

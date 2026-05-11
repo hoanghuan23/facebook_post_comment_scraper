@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func
 
 from backend.config import settings
-from backend.database.crud import AnalyticsCRUD, FacebookSessionCRUD, LogCRUD, PostCRUD, ScrapeJobCRUD, SourceCRUD
+from backend.database.crud import AnalyticsCRUD, FacebookSessionCRUD, LogCRUD, PipelineJobCRUD, PostCRUD, SourceCRUD
 from backend.database.db import SessionLocal
 from backend.database.models import AnalyticsCache, Comment, Post, Source, SourceType
 from backend.scraper.facebook_service import FacebookScraperService
@@ -79,7 +79,7 @@ async def periodic_scrape_new_posts():
 
     try:
         # due_sources = SourceCRUD.get_due_for_scraping(db, limit=settings.SCRAPER_MAX_WORKERS * 5)
-        due_sources = SourceCRUD.get_due_for_scraping(db, limit=100) # giới hạn chạy 100 nguồn
+        due_sources = SourceCRUD.get_due_for_scraping(db, limit=150) # giới hạn chạy 100 nguồn
         total_due_sources = len(due_sources)
         logger.info("Bắt đầu periodic_scrape_new_posts: total_due_sources=%s", total_due_sources)
         if not due_sources:
@@ -103,7 +103,7 @@ async def periodic_scrape_new_posts():
         def _scrape_source_job(job: dict):
             job_db = SessionLocal()
             source_id = job["id"]
-            scrape_job_id = None
+            pipeline_job_id = None
             progress_index = source_index_map.get(source_id, 0)
             source_label = _format_source_label(source_id, job.get("source_name"))
             thread_label = _current_thread_label()
@@ -140,14 +140,15 @@ async def periodic_scrape_new_posts():
                     if source
                     else None
                 )
-                scrape_job = ScrapeJobCRUD.create_job(
+                pipeline_job = PipelineJobCRUD.create_job(
                     db=job_db,
+                    job_type="scraper_job",
                     source_id=source_id,
                     session_id=active_session.id if active_session else None,
                     status="running",
                     started_at=datetime.utcnow(),
                 )
-                scrape_job_id = scrape_job.id
+                pipeline_job_id = pipeline_job.id
                 logger.info(
                     "Bắt đầu scrape source: thread=%s source=%s progress=%s/%s latest_cutoff=%s",
                     thread_label,
@@ -162,9 +163,9 @@ async def periodic_scrape_new_posts():
                     limit=10,
                     min_posted_at=latest_posted_at,
                 )
-                ScrapeJobCRUD.mark_done(
+                PipelineJobCRUD.mark_done(
                     db=job_db,
-                    job_id=scrape_job_id,
+                    job_id=pipeline_job_id,
                     posts_found=result.total_fetched,
                     posts_new=result.created_posts,
                     finished_at=datetime.utcnow(),
@@ -172,14 +173,13 @@ async def periodic_scrape_new_posts():
                 SourceCRUD.update_scrape_info(job_db, source_id, next_scrape=next_scrape)
                 source_duration = round(time.time() - source_started_at, 3)
                 logger.info(
-                    "Kết thúc scrape source: thread=%s source=%s progress=%s/%s fetched=%s created_posts=%s updated_posts=%s skipped_posts=%s filtered_by_cutoff=%s duration_seconds=%s",
+                    "Kết thúc scrape source: thread=%s source=%s progress=%s/%s fetched=%s created_posts=%s skipped_posts=%s filtered_by_cutoff=%s duration_seconds=%s",
                     thread_label,
                     source_label,
                     progress_index,
                     total_due_sources,
                     result.total_fetched,
                     result.created_posts,
-                    result.updated_posts,
                     result.skipped_posts,
                     result.filtered_by_cutoff,
                     source_duration,
@@ -191,10 +191,10 @@ async def periodic_scrape_new_posts():
                     "fetched_posts": result.total_fetched,
                 }
             except Exception as exc:
-                if scrape_job_id is not None:
-                    ScrapeJobCRUD.mark_failed(
+                if pipeline_job_id is not None:
+                    PipelineJobCRUD.mark_failed(
                         db=job_db,
-                        job_id=scrape_job_id,
+                        job_id=pipeline_job_id,
                         error_message=str(exc),
                         finished_at=datetime.utcnow(),
                     )
@@ -207,10 +207,11 @@ async def periodic_scrape_new_posts():
                     exc,
                 )
                 SourceCRUD.update_scrape_info(job_db, source_id, next_scrape=next_scrape)
-                LogCRUD.create_scraper_log(
+                LogCRUD.create_pipeline_log(
                     job_db,
                     message=f"Failed scraping source {source_id}",
                     log_level="ERROR",
+                    job_id=pipeline_job_id,
                     source_id=source_id,
                     error_type=type(exc).__name__,
                     error_details=str(exc),
@@ -275,7 +276,7 @@ async def update_recent_post_metrics():
 
     try:
         # recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=settings.SCRAPER_MAX_WORKERS * 50)
-        recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=100) # giới hạn chạy 100 post gần đây
+        recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=1500) # giới hạn chạy 1000 post gần đây
         source_ids = list({post.source_id for post in recent_posts})
         target_posts_by_source = {}
         for post in recent_posts:
@@ -296,6 +297,7 @@ async def update_recent_post_metrics():
         def _refresh_metrics_job(source_id: int):
             job_db = SessionLocal()
             source_started_at = time.time()
+            pipeline_job_id = None
             try:
                 source = SourceCRUD.get_by_id(job_db, source_id)
                 if not source or not source.is_active:
@@ -324,6 +326,14 @@ async def update_recent_post_metrics():
                     return {"status": "skipped"}
 
                 target_post_ids = target_posts_by_source.get(source.id, [])
+                pipeline_job = PipelineJobCRUD.create_job(
+                    db=job_db,
+                    job_type="post_metric",
+                    source_id=source.id,
+                    status="running",
+                    started_at=datetime.utcnow(),
+                )
+                pipeline_job_id = pipeline_job.id
                 logger.info(
                     "Bắt đầu cập nhật metric source: thread=%s source=%s progress=%s/%s target_posts_count=%s max_pages=%s use_24h_window=%s",
                     thread_label,
@@ -348,6 +358,16 @@ async def update_recent_post_metrics():
                 fetched = result["fetched"]
                 updated = result["updated"]
                 fetch_to_update_ratio = round((fetched / updated), 3) if updated > 0 else (float(fetched) if fetched > 0 else 0.0)
+                PipelineJobCRUD.mark_done(
+                    db=job_db,
+                    job_id=pipeline_job_id,
+                    posts_found=fetched,
+                    posts_new=updated,
+                    items_total=fetched,
+                    items_updated=updated,
+                    items_failed=result.get("failed", 0),
+                    finished_at=datetime.utcnow(),
+                )
                 logger.info(
                     "Kết thúc cập nhật metric source: thread=%s source=%s progress=%s/%s fetched=%s updated_count=%s skipped=%s target_posts_count=%s matched_target_count=%s pages_scanned=%s stop_reason=%s fetch_to_update_ratio=%s updated_posts=[%s] duration_seconds=%s",
                     thread_label,
@@ -372,6 +392,13 @@ async def update_recent_post_metrics():
                     "fetched": fetched,
                 }
             except Exception as exc:
+                if pipeline_job_id is not None:
+                    PipelineJobCRUD.mark_failed(
+                        db=job_db,
+                        job_id=pipeline_job_id,
+                        error_message=str(exc),
+                        finished_at=datetime.utcnow(),
+                    )
                 logger.exception(
                     "Lỗi update_recent_post_metrics: thread=%s source_id=%s progress=%s/%s error=%s",
                     _current_thread_label(),
@@ -380,10 +407,11 @@ async def update_recent_post_metrics():
                     total_sources,
                     exc,
                 )
-                LogCRUD.create_scraper_log(
+                LogCRUD.create_pipeline_log(
                     job_db,
                     message=f"Failed refreshing metrics for source {source_id}",
                     log_level="ERROR",
+                    job_id=pipeline_job_id,
                     source_id=source_id,
                     error_type=type(exc).__name__,
                     error_details=str(exc),
@@ -452,16 +480,27 @@ async def cleanup_old_data():
             db.delete(post)
             deleted_posts += 1
 
-        scraper_logs_deleted, task_logs_deleted = LogCRUD.delete_old_logs(db, keep_days=settings.KEEP_DELETED_POSTS_DAYS)
+        pipeline_logs_deleted, pipeline_jobs_deleted, task_logs_deleted = LogCRUD.delete_old_logs(
+            db,
+            keep_days=settings.KEEP_DELETED_POSTS_DAYS,
+        )
         db.commit()
 
-        items_processed = deleted_posts + deleted_metrics + deleted_comments + scraper_logs_deleted + task_logs_deleted
+        items_processed = (
+            deleted_posts
+            + deleted_metrics
+            + deleted_comments
+            + pipeline_logs_deleted
+            + pipeline_jobs_deleted
+            + task_logs_deleted
+        )
         logger.info(
-            "Cleanup finished: posts=%s metrics=%s comments=%s scraper_logs=%s task_logs=%s",
+            "Cleanup finished: posts=%s metrics=%s comments=%s pipeline_logs=%s pipeline_jobs=%s task_logs=%s",
             deleted_posts,
             deleted_metrics,
             deleted_comments,
-            scraper_logs_deleted,
+            pipeline_logs_deleted,
+            pipeline_jobs_deleted,
             task_logs_deleted,
         )
         _finish_task_log(db, task_log, items_processed, started_at_ts)
@@ -487,6 +526,13 @@ async def generate_analytics_cache():
     db = SessionLocal()
     started_at_ts = time.time()
     task_log = _start_task_log(db, "generate_analytics_cache")
+    pipeline_job = PipelineJobCRUD.create_job(
+        db=db,
+        job_type="analytics",
+        source_id=None,
+        status="running",
+        started_at=datetime.utcnow(),
+    )
 
     try:
         cache_date = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -542,9 +588,22 @@ async def generate_analytics_cache():
             processed_sources += 1
 
         logger.info("Generated analytics cache for %s sources", processed_sources)
+        PipelineJobCRUD.mark_done(
+            db=db,
+            job_id=pipeline_job.id,
+            items_total=processed_sources,
+            items_updated=processed_sources,
+            finished_at=datetime.utcnow(),
+        )
         _finish_task_log(db, task_log, processed_sources, started_at_ts)
     except Exception as exc:
         logger.exception("generate_analytics_cache failed: %s", exc)
+        PipelineJobCRUD.mark_failed(
+            db=db,
+            job_id=pipeline_job.id,
+            error_message=str(exc),
+            finished_at=datetime.utcnow(),
+        )
         _finish_task_log(
             db,
             task_log,
