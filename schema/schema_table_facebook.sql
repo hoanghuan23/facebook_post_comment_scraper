@@ -167,10 +167,9 @@ CREATE INDEX idx_comment_facebook_id ON comments (facebook_comment_id);
 CREATE INDEX idx_comment_post ON comments (post_id);
 
 -- bảng pipeline_jobs theo dõi toàn bộ pipeline (scrape_24h, scraper_job, post_metric, analytics)
-DROP TABLE IF EXISTS pipeline_jobs;
 
 CREATE TABLE pipeline_jobs (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    id              INTEGER NOT NULL,
     job_type        VARCHAR(20) NOT NULL DEFAULT 'scraper_job'
                     CHECK (job_type IN ('scrape_24h', 'scraper_job', 'post_metric', 'analytics')),
 
@@ -196,7 +195,7 @@ CREATE INDEX idx_pipeline_jobs_type_status ON pipeline_jobs (job_type, status, s
 
 -- bảng pipeline_logs lưu log chi tiết cho từng pipeline job để debug
 CREATE TABLE pipeline_logs (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    id              INTEGER NOT NULL,
 
     -- Liên kết job (thêm mới, quan trọng)
     job_id          INTEGER REFERENCES pipeline_jobs(id) ON DELETE SET NULL,
