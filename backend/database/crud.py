@@ -125,6 +125,7 @@ class FacebookSessionCRUD:
         fb_cookies: Optional[str] = None,
         fb_dtsg: Optional[str] = None,
         fb_user_agent: Optional[str] = None,
+        fb_user_id: Optional[str] = None,
     ) -> models.FacebookSession:
         """Create or update a user's active Facebook session."""
         session = FacebookSessionCRUD.get_active_by_user_id(db, user_id)
@@ -142,10 +143,41 @@ class FacebookSessionCRUD:
             session.fb_dtsg = fb_dtsg
         if fb_user_agent is not None:
             session.fb_user_agent = fb_user_agent
+        if fb_user_id is not None:
+            session.fb_user_id = fb_user_id
 
         db.commit()
         db.refresh(session)
         return session
+
+    @staticmethod
+    def upsert_from_login_extraction(
+        db: Session,
+        user_id: int,
+        fb_cookies: Optional[str] = None,
+        fb_dtsg: Optional[str] = None,
+        fb_user_agent: Optional[str] = None,
+    ) -> models.FacebookSession:
+        """Persist an extracted login session and infer `fb_user_id` from cookies."""
+        fb_user_id = None
+        if fb_cookies:
+            for cookie_part in str(fb_cookies).split(";"):
+                cookie_part = cookie_part.strip()
+                if not cookie_part or "=" not in cookie_part:
+                    continue
+                key, value = cookie_part.split("=", 1)
+                if key.strip() == "c_user":
+                    fb_user_id = value.strip() or None
+                    break
+
+        return FacebookSessionCRUD.upsert_active_for_user(
+            db=db,
+            user_id=user_id,
+            fb_cookies=fb_cookies,
+            fb_dtsg=fb_dtsg,
+            fb_user_agent=fb_user_agent,
+            fb_user_id=fb_user_id,
+        )
 
 
 class PipelineJobCRUD:

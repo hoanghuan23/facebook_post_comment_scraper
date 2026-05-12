@@ -28,6 +28,63 @@ def teardown_function():
     Base.metadata.drop_all(bind=engine)
 
 
+def test_facebook_session_upsert_active_for_user_persists_fb_user_id_and_updates_fields():
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="session_u1", email="session_u1@example.com", password="secret123")
+        created = FacebookSessionCRUD.upsert_active_for_user(
+            db=db,
+            user_id=user.id,
+            fb_cookies='{"c_user":"111"}',
+            fb_dtsg="token-1",
+            fb_user_agent="ua-1",
+            fb_user_id="111",
+        )
+
+        assert created.user_id == user.id
+        assert created.fb_user_id == "111"
+        assert created.fb_cookies == '{"c_user":"111"}'
+        assert created.fb_dtsg == "token-1"
+        assert created.fb_user_agent == "ua-1"
+
+        updated = FacebookSessionCRUD.upsert_active_for_user(
+            db=db,
+            user_id=user.id,
+            fb_cookies='{"c_user":"222"}',
+            fb_dtsg="token-2",
+            fb_user_agent="ua-2",
+            fb_user_id="222",
+        )
+
+        assert updated.id == created.id
+        assert updated.fb_user_id == "222"
+        assert updated.fb_cookies == '{"c_user":"222"}'
+        assert updated.fb_dtsg == "token-2"
+        assert updated.fb_user_agent == "ua-2"
+    finally:
+        db.close()
+
+
+def test_facebook_session_upsert_from_login_extraction_parses_c_user():
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="session_u2", email="session_u2@example.com", password="secret123")
+        session = FacebookSessionCRUD.upsert_from_login_extraction(
+            db=db,
+            user_id=user.id,
+            fb_cookies="datr=abc; c_user=123456789; xs=xyz",
+            fb_dtsg="token-login",
+            fb_user_agent="ua-login",
+        )
+
+        assert session.user_id == user.id
+        assert session.fb_user_id == "123456789"
+        assert session.fb_dtsg == "token-login"
+        assert session.fb_user_agent == "ua-login"
+    finally:
+        db.close()
+
+
 def test_normalize_group_post_maps_metrics_and_media_flags():
     normalized = _normalize_group_post(
         {

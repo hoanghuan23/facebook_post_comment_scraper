@@ -24,6 +24,8 @@ import group_post_scraper_v2
 import single_post_image
 import comment_scraper
 from proxy_utils import select_proxy
+from backend.database.crud import FacebookSessionCRUD
+from backend.database.db import SessionLocal
 
 
 # Cookie Management
@@ -53,6 +55,7 @@ class CookieDialog(QDialog):
         
         self.cookies_str = current_cookies
         self.dtsg_str = current_dtsg
+        self.selected_user_id = None
         
         layout = QVBoxLayout()
         self.setLayout(layout)
@@ -94,6 +97,15 @@ class CookieDialog(QDialog):
         """)
         self.launch_btn.clicked.connect(self.launch_chrome_login)
         layout.addWidget(self.launch_btn)
+
+        user_layout = QHBoxLayout()
+        user_layout.addWidget(QLabel("App User ID (required to save session):"))
+        self.user_id_input = QLineEdit()
+        self.user_id_input.setPlaceholderText("e.g. 1")
+        self.user_id_input.setMinimumWidth(140)
+        user_layout.addWidget(self.user_id_input)
+        user_layout.addStretch()
+        layout.addLayout(user_layout)
 
         # Divider
         divider = QFrame()
@@ -170,7 +182,16 @@ class CookieDialog(QDialog):
         """Launch Chrome with seleniumbase for automated login"""
         try:
             from seleniumbase import SB
-            
+            raw_user_id = self.user_id_input.text().strip()
+            if not raw_user_id.isdigit():
+                QMessageBox.warning(
+                    self,
+                    "Missing User ID",
+                    "Please enter a valid numeric App User ID before launching Chrome.",
+                )
+                return
+            self.selected_user_id = int(raw_user_id)
+
             self.status_label.setText("🌐 Opening Chrome browser...")
             self.status_label.setStyleSheet("padding: 10px; font-size: 12px; color: #2196F3;")
             self.launch_btn.setEnabled(False)
@@ -229,6 +250,7 @@ class CookieDialog(QDialog):
                 
                 # Get cookies
                 cookies = sb.get_cookies()
+                user_agent = sb.driver.execute_script("return navigator.userAgent") or None
                 
                 # Convert cookies to semicolon-separated format
                 cookie_parts = []
@@ -246,6 +268,28 @@ class CookieDialog(QDialog):
                 
                 self.cookies_str = ";".join(cookie_parts)
                 self.dtsg_str = fb_dtsg if fb_dtsg else ""
+
+                save_warning = None
+                try:
+                    db = SessionLocal()
+                    try:
+                        FacebookSessionCRUD.upsert_from_login_extraction(
+                            db=db,
+                            user_id=self.selected_user_id,
+                            fb_cookies=self.cookies_str or None,
+                            fb_dtsg=self.dtsg_str or None,
+                            fb_user_agent=user_agent,
+                        )
+                    finally:
+                        db.close()
+                except Exception as db_exc:
+                    save_warning = str(db_exc)
+                if save_warning:
+                    QMessageBox.warning(
+                        self,
+                        "DB Save Warning",
+                        f"Extraction succeeded but failed to save facebook_sessions:\n{save_warning}",
+                    )
                 
                 # Display results
                 total_cookies = len(cookies) + len(static_cookies)
