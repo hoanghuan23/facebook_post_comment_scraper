@@ -1,4 +1,4 @@
-import base64
+﻿import base64
 import json
 import os
 import time
@@ -13,7 +13,7 @@ from backend.utils.facebook_url_parser import FacebookURLParser, FacebookSourceT
 load_dotenv()
 
 # Import scraper modules
-from comment_scraper import fetch_comments, fetch_replies, fb_json, GRAPHQL, PROXIES
+from comment_scraper import fetch_comments, fb_json, GRAPHQL, PROXIES
 from post_scraper import fetch_posts as fetch_page_posts, extract_media as extract_page_media, parse_fb_response as parse_page_response
 from group_post_scraper_v2 import fetch_posts as fetch_group_posts
 from single_post_image import fetch_all_images
@@ -33,7 +33,7 @@ def extract_user_id_from_url(url, cookies=None):
         match = re.search(pattern, url)
         if match:
             user_id = match.group(1)
-            print(f"  ✅ Found User ID in URL: {user_id}")
+            print(f"  âœ… Found User ID in URL: {user_id}")
             return user_id
     
     # If no ID in URL, fetch the page and search in HTML
@@ -59,14 +59,14 @@ def extract_user_id_from_url(url, cookies=None):
             match = re.search(pattern, html)
             if match:
                 user_id = match.group(1)
-                print(f"  ✅ Found User ID: {user_id}")
+                print(f"  âœ… Found User ID: {user_id}")
                 return user_id
         
-        print("  ❌ User ID not found (trang cá nhân có thể bị khóa hoặc cần đăng nhập)")
+        print("User ID not found (trang cÃ¡ nhÃ¢n cÃ³ thá»ƒ bá»‹ khÃ³a hoáº·c cáº§n Ä‘Äƒng nháº­p)")
         return None
     
     except Exception as e:
-        print(f"  ❌ Error fetching URL: {e}")
+        print(f"Error fetching URL: {e}")
         return None
 
 
@@ -83,7 +83,7 @@ def extract_group_id_from_url(url, cookies=None):
         match = re.search(pattern, url)
         if match:
             group_id = match.group(1)
-            print(f"  ✅ Found Group ID in URL: {group_id}")
+            print(f"  âœ… Found Group ID in URL: {group_id}")
             return group_id
     
     # If no ID in URL, fetch the page and search in HTML
@@ -109,14 +109,14 @@ def extract_group_id_from_url(url, cookies=None):
             match = re.search(pattern, html)
             if match:
                 group_id = match.group(1)
-                print(f"  ✅ Found Group ID: {group_id}")
+                print(f"  âœ… Found Group ID: {group_id}")
                 return group_id
         
-        print("  ❌ Group ID not found (group may be private or login wall)")
+        print("  âŒ Group ID not found (group may be private or login wall)")
         return None
     
     except Exception as e:
-        print(f"  ❌ Error fetching URL: {e}")
+        print(f"  âŒ Error fetching URL: {e}")
         return None
 
 
@@ -133,7 +133,7 @@ def extract_post_id_from_url(url, cookies=None):
         match = re.search(pattern, url)
         if match:
             post_id = match.group(1)
-            print(f"  ✅ Found Post ID in URL: {post_id}")
+            print(f"  âœ… Found Post ID in URL: {post_id}")
             return post_id
     
     # If no direct pattern match, fetch the page and extract from HTML
@@ -157,17 +157,17 @@ def extract_post_id_from_url(url, cookies=None):
                 try:
                     # Decode base64 storyID
                     story_id_decoded = base64.b64decode(story_id_encoded).decode('utf-8')
-                    print(f"  📝 Decoded storyID: {story_id_decoded}")
+                    print(f"Decoded storyID: {story_id_decoded}")
                     
                     # Extract post ID (last segment after splitting by ':')
                     # Format: S:_USER_ID:POST_ID:POST_ID or similar
                     parts = story_id_decoded.split(':')
                     if len(parts) >= 2:
                         post_id = parts[-1]  # Last part is the post ID
-                        print(f"  ✅ Found Post ID from storyID: {post_id}")
+                        print(f"Found Post ID from storyID: {post_id}")
                         return post_id
                 except Exception as e:
-                    print(f"  ⚠️ Could not decode storyID: {e}")
+                    print(f"Could not decode storyID: {e}")
         
         # Method 2: Extract og:url meta tag (fallback for unauthenticated or if storyID fails)
         og_url_match = re.search(
@@ -189,14 +189,14 @@ def extract_post_id_from_url(url, cookies=None):
                 post_id = m.group(1)
         
         if post_id:
-            print(f"  ✅ Found Post ID from og:url: {post_id}")
+            print(f"Found Post ID from og:url: {post_id}")
             return post_id
         
-        print("  ❌ Post ID not found in URL")
+        print("Post ID not found in URL")
         return None
     
     except Exception as e:
-        print(f"  ❌ Error fetching URL: {e}")
+        print(f"Error fetching URL: {e}")
         return None
 
 
@@ -207,11 +207,11 @@ def convert_post_id_to_feedback_id(post_id):
 
 
 def fetch_comments_for_post(post_id, cookies=None, fb_dtsg=None, proxies=None):
-    """Fetch all comments and replies for a given post_id"""
+    """Fetch top-level comments for a given post_id (replies excluded)."""
     feedback_id = convert_post_id_to_feedback_id(post_id)
     print(f"  Fetching comments for post {post_id}...")
     print(f"  Using feedback_id: {feedback_id}")
-    
+
     all_data = []
     comments, post_info = fetch_comments(
         feedback_id,
@@ -219,45 +219,21 @@ def fetch_comments_for_post(post_id, cookies=None, fb_dtsg=None, proxies=None):
         fb_dtsg=fb_dtsg,
         proxies=proxies,
     )
-    
+
     for c in comments:
-        print(f"    🗨️ {c.get('text', '')[:50]}...")
-        try:
-            c["replies"] = fetch_replies(
-                c,
-                cookies=cookies,
-                fb_dtsg=fb_dtsg,
-                proxies=proxies,
-            )
-        except Exception as e:
-            print(f"    ⚠️ Error fetching replies for comment {c.get('comment_id')}: {e}")
-            c["replies"] = []
-        
-        for r in c["replies"]:
-            print(f"       ↳ {r.get('text', '')[:50]}...")
-        
-        # Remove internal fields before appending
-        c_clean = {k: v for k, v in c.items() if not k.startswith('_')}
+        print(f"    Comment: {c.get('text', '')[:50]}...")
 
-        cleaned_replies = []
-        for reply in c_clean.get("replies", []):
-            if not isinstance(reply, dict):
-                continue
-            cleaned_replies.append({
-                "comment_id": reply.get("comment_id"),
-                "author_name": reply.get("author_name"),
-                "author_url": reply.get("author_url"),
-                "author_id": reply.get("author_id"),
-                "text": reply.get("text", ""),
-                "reaction_count": str(reply.get("reaction_count", "0"))
-            })
-
+        # Remove internal fields and reply-related fields before appending
+        c_clean = {
+            k: v
+            for k, v in c.items()
+            if not k.startswith('_') and k not in ("replies", "reply_count")
+        }
         c_clean["text"] = c_clean.get("text", "")
         c_clean["reaction_count"] = str(c_clean.get("reaction_count", "0"))
-        c_clean["replies"] = cleaned_replies
         all_data.append(c_clean)
-    
-    print(f"  ✓ Found {len(all_data)} comments")
+
+    print(f"  Found {len(all_data)} comments")
     return all_data, post_info
 
 
@@ -304,7 +280,7 @@ def save_post_data(post_type, post_id, post_data, comments_data):
             print(f"  Saved to DB: {db_result['db_path']} (post_id={db_result['post_id']})")
     except Exception as e:
         print(f"  Failed to save DB: {e}")
-    print(f"  💾 Saved to {output_file}")
+    print(f"Saved to {output_file}")
 
 
 def resolve_timeline_output_folder(post_data):
@@ -316,7 +292,7 @@ def resolve_timeline_output_folder(post_data):
 def display_menu():
     """Display the main menu"""
     print("\n" + "="*60)
-    print("   📘 FACEBOOK SCRAPER")
+    print("FACEBOOK SCRAPER")
     print("="*60)
     print("\nChoose what to scrape:")
     print("  1. Simple Post (just comments from a single post)")
@@ -340,23 +316,23 @@ def scrape_simple_post():
     if input_choice == "1":
         post_url = input("Enter Post URL: ").strip()
         if not post_url:
-            print("❌ Invalid URL")
+            print("Invalid URL")
             return
         
         # Extract post ID from URL
         post_id = extract_post_id_from_url(post_url)
         if not post_id:
-            print("❌ Could not extract Post ID from URL")
+            print("Could not extract Post ID from URL")
             return
     
     elif input_choice == "2":
         post_id = input("Enter Post ID: ").strip()
         if not post_id:
-            print("❌ Invalid post ID")
+            print("Invalid post ID")
             return
     
     else:
-        print("❌ Invalid choice")
+        print("Invalid choice")
         return
     
     print(f"\nFetching comments for post {post_id}...")
@@ -395,7 +371,7 @@ def scrape_simple_post():
     # Fetch images if media_id is available
     if post_info and post_info.get("media_id"):
         media_id = post_info["media_id"]
-        print(f"\n📸 Fetching images for media_id: {media_id}")
+        print(f"Fetching images for media_id: {media_id}")
         
         # Images will be saved directly in post folder
         image_folder = os.path.join("simple_post", post_id)
@@ -412,7 +388,7 @@ def scrape_simple_post():
                 image_count = 0
                 
                 while current_node and current_node not in visited:
-                    print(f"\n➡ Fetching node: {current_node}")
+                    print(f"Fetching node: {current_node}")
                     visited.add(current_node)
                     
                     payload = single_post_image.build_payload(current_node, p_id)
@@ -439,9 +415,9 @@ def scrape_simple_post():
                             r_img.raise_for_status()
                             with open(filepath, "wb") as f:
                                 f.write(r_img.content)
-                            print(f"📥 Saved {filename}")
+                            print(f"Saved {filename}")
                         except Exception as e:
-                            print(f"❌ Failed to download: {e}")
+                            print(f"Failed to download: {e}")
                     
                     # Get next node
                     next_node = None
@@ -455,17 +431,17 @@ def scrape_simple_post():
                     if next_node:
                         current_node = next_node
                     else:
-                        print("✅ No more images.")
+                        print("No more images.")
                         break
             
             custom_fetch(media_id, post_id)
-            print(f"  ✅ Images saved to {image_folder}")
+            print(f"Images saved to {image_folder}")
         except Exception as e:
-            print(f"  ⚠️ Error fetching images: {e}")
+            print(f"Error fetching images: {e}")
     else:
-        print("  ℹ️ No media_id found, skipping image download")
+        print("No media_id found, skipping image download")
     
-    print(f"\n✅ Done! Saved to simple_post/{post_id}/")
+    print(f"Done! Saved to simple_post/{post_id}/")
 
 
 def scrape_page_posts():
@@ -483,7 +459,7 @@ def scrape_page_posts():
     if input_choice == "1":
         page_url = input("Enter Page URL: ").strip()
         if not page_url:
-            print("❌ Invalid URL")
+            print("Invalid URL")
             return
 
         detected_source_type = FacebookURLParser.detect_source_type(page_url)
@@ -495,13 +471,13 @@ def scrape_page_posts():
         # Extract user ID from URL
         page_id = extract_user_id_from_url(page_url)
         if not page_id:
-            print("❌ Could not extract User ID from URL")
+            print("Could not extract User ID from URL")
             return
     
     elif input_choice == "2":
         page_id = input("Enter Page/User ID: ").strip()
         if not page_id:
-            print("❌ Invalid page ID")
+            print("Invalid page ID")
             return
 
         source_choice = input("Is this a Page or User? (p/u): ").strip().lower()
@@ -510,17 +486,17 @@ def scrape_page_posts():
         elif source_choice == "u":
             timeline_output_folder = "user_post"
         else:
-            print("❌ Invalid choice. Enter 'p' for Page or 'u' for User.")
+            print("Invalid choice. Enter 'p' for Page or 'u' for User.")
             return
     
     else:
-        print("❌ Invalid choice")
+        print("Invalid choice")
         return
     
     try:
         count = int(input("How many posts to fetch? ").strip())
     except ValueError:
-        print("❌ Invalid number")
+        print("Invalid number")
         return
     
     # Update the USER_ID in post_scraper
@@ -538,13 +514,13 @@ def scrape_page_posts():
     if posts:
         timeline_output_folder = resolve_timeline_output_folder(posts[0])
     
-    print(f"\n✓ Found {len(posts)} posts. Now fetching comments...")
+    print(f"Found {len(posts)} posts. Now fetching comments...")
     
     # Fetch comments for each post
     for i, post in enumerate(posts, 1):
         post_id = post.get("post_id")
         if not post_id:
-            print(f"\n[{i}/{len(posts)}] ⚠️ Skipping post with no ID")
+            print(f"\n[{i}/{len(posts)}] Skipping post with no ID")
             continue
         
         print(f"\n[{i}/{len(posts)}] Processing post {post_id}...")
@@ -555,12 +531,12 @@ def scrape_page_posts():
             save_post_data(output_folder, post_id, post, comments)
             time.sleep(1)  # Be nice to the server
         except Exception as e:
-            print(f"  ❌ Error fetching comments: {e}")
+            print(f"  âŒ Error fetching comments: {e}")
             # Save post data even if comments fail
             output_folder = resolve_timeline_output_folder(post)
             save_post_data(output_folder, post_id, post, [])
     
-    print(f"\n✅ Done! Saved {len(posts)} posts to {timeline_output_folder}/")
+    print(f"Done! Saved {len(posts)} posts to {timeline_output_folder}/")
 
 
 def scrape_group_posts():
@@ -577,29 +553,29 @@ def scrape_group_posts():
     if input_choice == "1":
         group_url = input("Enter Group URL: ").strip()
         if not group_url:
-            print("❌ Invalid URL")
+            print("Invalid URL")
             return
         
         # Extract group ID from URL
         group_id = extract_group_id_from_url(group_url)
         if not group_id:
-            print("❌ Could not extract Group ID from URL")
+            print("Could not extract Group ID from URL")
             return
     
     elif input_choice == "2":
         group_id = input("Enter Group ID: ").strip()
         if not group_id:
-            print("❌ Invalid group ID")
+            print("Invalid group ID")
             return
     
     else:
-        print("❌ Invalid choice")
+        print("Invalid choice")
         return
     
     try:
         count = int(input("How many posts to fetch? ").strip())
     except ValueError:
-        print("❌ Invalid number")
+        print("Invalid number")
         return
     
     # Update the GROUP_ID in group_post_scraper_v2
@@ -611,13 +587,13 @@ def scrape_group_posts():
     print(f"\nFetching {count} posts from group {group_id}...")
     posts = fetch_group_posts(count)
     
-    print(f"\n✓ Found {len(posts)} posts. Now fetching comments...")
+    print(f"Found {len(posts)} posts. Now fetching comments...")
     
     # Fetch comments for each post
     for i, post in enumerate(posts, 1):
         post_id = post.get("post_id")
         if not post_id:
-            print(f"\n[{i}/{len(posts)}] ⚠️ Skipping post with no ID")
+            print(f"\n[{i}/{len(posts)}] Skipping post with no ID")
             continue
         
         print(f"\n[{i}/{len(posts)}] Processing post {post_id}...")
@@ -627,11 +603,11 @@ def scrape_group_posts():
             save_post_data("group_post", post_id, post, comments)
             time.sleep(1)  # Be nice to the server
         except Exception as e:
-            print(f"  ❌ Error fetching comments: {e}")
+            print(f"Error fetching comments: {e}")
             # Save post data even if comments fail
             save_post_data("group_post", post_id, post, [])
     
-    print(f"\n✅ Done! Saved {len(posts)} posts to group_post/")
+    print(f"Done! Saved {len(posts)} posts to group_post/")
 
 
 def main():
@@ -648,19 +624,20 @@ def main():
         elif choice == "3":
             scrape_group_posts()
         elif choice == "4":
-            print("\n👋 Goodbye!")
+            print("Goodbye!")
             break
         else:
-            print("\n❌ Invalid choice. Please enter 1, 2, 3, or 4.")
+            print("Invalid choice. Please enter 1, 2, 3, or 4.")
         
         # Ask if user wants to continue
         if choice in ["1", "2", "3"]:
             continue_choice = input("\nPress Enter to return to menu (or 'q' to quit): ").strip().lower()
             if continue_choice == 'q':
-                print("\n👋 Goodbye!")
+                print("Goodbye!")
                 break
 
 
 if __name__ == "__main__":
     main()
 1
+
