@@ -369,7 +369,7 @@ async def update_recent_post_metrics():
                     finished_at=datetime.utcnow(),
                 )
                 logger.info(
-                    "Kết thúc cập nhật metric source: thread=%s source=%s progress=%s/%s fetched=%s updated_count=%s skipped=%s target_posts_count=%s matched_target_count=%s pages_scanned=%s stop_reason=%s fetch_to_update_ratio=%s updated_posts=[%s] duration_seconds=%s",
+                    "Kết thúc cập nhật metric source: thread=%s source=%s progress=%s/%s fetched=%s updated_count=%s skipped=%s target_posts_count=%s matched_target_count=%s pages_scanned=%s stop_reason=%s fetch_to_update_ratio=%s duration_seconds=%s",
                     thread_label,
                     source_label,
                     progress_index,
@@ -382,7 +382,6 @@ async def update_recent_post_metrics():
                     result.get("pages_scanned", 0),
                     result.get("stop_reason", "unknown"),
                     fetch_to_update_ratio,
-                    _format_post_update_list(updated_post_refs, max_items=10),
                     source_duration,
                 )
                 return {

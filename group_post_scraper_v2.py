@@ -90,45 +90,41 @@ def retry_request(url, headers, data, proxies, cookies=None, max_retries=5):
     for attempt in range(1, max_retries + 1):
         try:
             r = requests.post(url, headers=headers, data=data, proxies=proxies, cookies=request_cookies, timeout=30)
-            # dá»¯ liá»‡u group tráº£ vá»
-            # with open(f"group_response_attempt_{attempt}.json", "w", encoding="utf-8") as f:
-            #     f.write(r.text)
-            #     print(f"lÆ°u thÃ nh cÃ´ng dá»¯ liá»‡u group")
             if r.status_code == 200:
                 return r
             if is_proxy_infra_error(status_code=r.status_code):
-                print(f"  ðŸš« Attempt {attempt}/{max_retries}: Proxy auth failed (HTTP {r.status_code}) â€” rotating static proxy...")
+                print(f"Attempt {attempt}/{max_retries}: Proxy auth failed (HTTP {r.status_code}) â€” rotating static proxy...")
                 new_p = rotate_static_proxy()
                 if new_p:
                     proxies = new_p
                     PROXIES = new_p
             elif is_ip_blocked(status_code=r.status_code, response_text=r.text):
-                print(f"  ðŸ›½ Attempt {attempt}/{max_retries}: Facebook blocked this IP (HTTP {r.status_code}) â€” rotating static proxy...")
+                print(f"Attempt {attempt}/{max_retries}: Facebook blocked this IP (HTTP {r.status_code}) â€” rotating static proxy...")
                 new_p = rotate_static_proxy()
                 if new_p:
                     proxies = new_p
                     PROXIES = new_p
             else:
-                print(f"  âš ï¸ Attempt {attempt}/{max_retries}: Status {r.status_code}")
+                print(f"Attempt {attempt}/{max_retries}: Status {r.status_code}")
         except requests.exceptions.ProxyError as e:
-            print(f"  ðŸš« Attempt {attempt}/{max_retries}: Proxy unreachable â€” rotating static proxy...")
+            print(f"Attempt {attempt}/{max_retries}: Proxy unreachable â€” rotating static proxy...")
             new_p = rotate_static_proxy()
             if new_p:
                 proxies = new_p
                 PROXIES = new_p
         except Exception as e:
             if is_proxy_infra_error(exc=e):
-                print(f"  ðŸš« Attempt {attempt}/{max_retries}: Proxy connection error â€” rotating static proxy...")
+                print(f"Attempt {attempt}/{max_retries}: Proxy connection error â€” rotating static proxy...")
                 new_p = rotate_static_proxy()
                 if new_p:
                     proxies = new_p
                     PROXIES = new_p
             else:
-                print(f"  âš ï¸ Attempt {attempt}/{max_retries}: {str(e)}")
+                print(f"Attempt {attempt}/{max_retries}: {str(e)}")
 
         if attempt < max_retries:
             wait_time = attempt * 2
-            print(f"  â³ Retrying in {wait_time} seconds...")
+            print(f"Retrying in {wait_time} seconds...")
             time.sleep(wait_time)
 
     raise Exception(f"Failed after {max_retries} attempts")
@@ -290,11 +286,11 @@ def fetch_remaining_images(
                 break  # No more images
                 
         except Exception as e:
-            print(f"  âš ï¸ Error fetching next image: {e}")
+            print(f"Error fetching next image: {e}")
             break
     
     if remaining_photos:
-        print(f"  âœ… Fetched {len(remaining_photos)} additional images")
+        print(f"Fetched {len(remaining_photos)} additional images")
     
     return remaining_photos
 

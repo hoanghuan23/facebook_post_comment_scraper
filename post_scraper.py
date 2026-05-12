@@ -50,38 +50,38 @@ def retry_request(url, headers, data, proxies, max_retries=5):
             if r.status_code == 200:
                 return r
             if is_proxy_infra_error(status_code=r.status_code):
-                print(f"  ðŸš« Attempt {attempt}/{max_retries}: Proxy auth failed (HTTP {r.status_code}) â€” rotating static proxy...")
+                print(f"Attempt {attempt}/{max_retries}: Proxy auth failed (HTTP {r.status_code}) â€” rotating static proxy...")
                 new_p = rotate_static_proxy()
                 if new_p:
                     proxies = new_p
                     PROXIES = new_p
             elif is_ip_blocked(status_code=r.status_code, response_text=r.text):
-                print(f"  ðŸ›½ Attempt {attempt}/{max_retries}: Facebook blocked this IP (HTTP {r.status_code}) â€” rotating static proxy...")
+                print(f"Attempt {attempt}/{max_retries}: Facebook blocked this IP (HTTP {r.status_code}) â€” rotating static proxy...")
                 new_p = rotate_static_proxy()
                 if new_p:
                     proxies = new_p
                     PROXIES = new_p
             else:
-                print(f"  âš ï¸ Attempt {attempt}/{max_retries}: Status {r.status_code}")
+                print(f"Attempt {attempt}/{max_retries}: Status {r.status_code}")
         except requests.exceptions.ProxyError as e:
-            print(f"  ðŸš« Attempt {attempt}/{max_retries}: Proxy unreachable â€” rotating static proxy...")
+            print(f"Attempt {attempt}/{max_retries}: Proxy unreachable â€” rotating static proxy...")
             new_p = rotate_static_proxy()
             if new_p:
                 proxies = new_p
                 PROXIES = new_p
         except Exception as e:
             if is_proxy_infra_error(exc=e):
-                print(f"  ðŸš« Attempt {attempt}/{max_retries}: Proxy connection error â€” rotating static proxy...")
+                print(f"Attempt {attempt}/{max_retries}: Proxy connection error â€” rotating static proxy...")
                 new_p = rotate_static_proxy()
                 if new_p:
                     proxies = new_p
                     PROXIES = new_p
             else:
-                print(f"  âš ï¸ Attempt {attempt}/{max_retries}: {str(e)}")
+                print(f"Attempt {attempt}/{max_retries}: {str(e)}")
 
         if attempt < max_retries:
             wait_time = attempt * 2
-            print(f"  â³ Retrying in {wait_time} seconds...")
+            print(f"Retrying in {wait_time} seconds...")
             time.sleep(wait_time)
 
     raise Exception(f"Failed after {max_retries} attempts")
@@ -224,11 +224,11 @@ def fetch_remaining_images(last_media_id, post_id, current_image_count, save_dir
                 break  # No more images
                 
         except Exception as e:
-            print(f"  âš ï¸ Error fetching next image: {e}")
+            print(f"Error fetching next image: {e}")
             break
     
     if remaining_photos:
-        print(f"  âœ… Fetched {len(remaining_photos)} additional images")
+        print(f"Fetched {len(remaining_photos)} additional images")
     
     return remaining_photos
 
@@ -586,7 +586,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
             else:
                 empty_retry_count += 1
                 if empty_retry_count < max_empty_retries:
-                    print(f"  âš ï¸ Phan hoi rong, dang thu lai ({empty_retry_count}/{max_empty_retries})...")
+                    print(f"Phản hồi rỗng, đang thử lại ({empty_retry_count}/{max_empty_retries})...")
                     time.sleep(2)  # Wait before retry
                 else:
                     print(f"Phản hồi rỗng sau {max_empty_retries} lần thử, bỏ qua trang")
@@ -598,7 +598,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
         
         # If still empty after retries, stop pagination (can't get next cursor from empty response)
         if not cleaned_data or len(cleaned_data) == 0:
-            print("  âŒ Khong nhan duoc du lieu sau khi thu lai, dung phan trang")
+            print("Không nhận được dữ liệu sau khi thử lại, dừng phân trang")
             break
         
         # Collect all Story nodes from the response
@@ -768,7 +768,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
                 post_file = os.path.join(post_dir, f"{post_id}.json")
                 with open(post_file, "w", encoding="utf-8") as f:
                     json.dump(post, f, ensure_ascii=False, indent=2)
-                print(f"âœ“ Da luu vao {post_file}")
+                print(f"Đã lưu vào {post_file}")
 
             batch_posts.append(post)
             all_posts.append(post)
@@ -818,7 +818,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
 
 
 if __name__ == "__main__":
-    count = int(input("Nhap so post can lay? "))
+    count = int(input("Nhập số post cần lấy "))
 
     posts = fetch_posts(count)
 
