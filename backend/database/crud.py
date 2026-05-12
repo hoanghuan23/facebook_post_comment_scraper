@@ -2,6 +2,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, desc, func
 from datetime import datetime, timedelta
+import json
 from typing import List, Optional, Tuple
 
 from backend.database import models
@@ -161,14 +162,36 @@ class FacebookSessionCRUD:
         """Persist an extracted login session and infer `fb_user_id` from cookies."""
         fb_user_id = None
         if fb_cookies:
-            for cookie_part in str(fb_cookies).split(";"):
-                cookie_part = cookie_part.strip()
-                if not cookie_part or "=" not in cookie_part:
-                    continue
-                key, value = cookie_part.split("=", 1)
-                if key.strip() == "c_user":
-                    fb_user_id = value.strip() or None
-                    break
+            raw_cookies = str(fb_cookies).strip()
+            parsed = None
+            if raw_cookies.startswith("{") or raw_cookies.startswith("["):
+                try:
+                    parsed = json.loads(raw_cookies)
+                except json.JSONDecodeError:
+                    parsed = None
+
+            if isinstance(parsed, dict):
+                c_user_value = parsed.get("c_user")
+                fb_user_id = str(c_user_value).strip() if c_user_value is not None else None
+            elif isinstance(parsed, list):
+                for item in parsed:
+                    if isinstance(item, dict) and "c_user" in item:
+                        c_user_value = item.get("c_user")
+                        fb_user_id = str(c_user_value).strip() if c_user_value is not None else None
+                        break
+                    if isinstance(item, dict) and item.get("name") == "c_user":
+                        c_user_value = item.get("value")
+                        fb_user_id = str(c_user_value).strip() if c_user_value is not None else None
+                        break
+            else:
+                for cookie_part in raw_cookies.split(";"):
+                    cookie_part = cookie_part.strip()
+                    if not cookie_part or "=" not in cookie_part:
+                        continue
+                    key, value = cookie_part.split("=", 1)
+                    if key.strip() == "c_user":
+                        fb_user_id = value.strip() or None
+                        break
 
         return FacebookSessionCRUD.upsert_active_for_user(
             db=db,

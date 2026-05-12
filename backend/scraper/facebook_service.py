@@ -36,7 +36,13 @@ def _load_json_dict(raw_value: Optional[str]) -> Dict[str, Any]:
         return {}
     if isinstance(raw_value, dict):
         return raw_value
-    return json.loads(raw_value)
+    try:
+        parsed = json.loads(raw_value)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    if isinstance(parsed, dict):
+        return parsed
+    return {}
 
 
 def _coerce_datetime(value: Any) -> Optional[datetime]:

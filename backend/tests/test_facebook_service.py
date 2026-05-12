@@ -10,6 +10,7 @@ from backend.database.schemas import SourceCreate
 from backend.api.routes.sources import _bootstrap_scrape_source_last_24h, create_source
 from backend.scraper.facebook_service import (
     FacebookScraperService,
+    _load_json_dict,
     _coerce_datetime,
     _normalize_group_post,
     _normalize_timeline_post,
@@ -81,6 +82,26 @@ def test_facebook_session_upsert_from_login_extraction_parses_c_user():
         assert session.fb_user_id == "123456789"
         assert session.fb_dtsg == "token-login"
         assert session.fb_user_agent == "ua-login"
+    finally:
+        db.close()
+
+
+def test_facebook_session_upsert_from_login_extraction_parses_c_user_from_json_dict():
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="session_u3", email="session_u3@example.com", password="secret123")
+        session = FacebookSessionCRUD.upsert_from_login_extraction(
+            db=db,
+            user_id=user.id,
+            fb_cookies='{"datr":"abc","c_user":"987654321","xs":"xyz"}',
+            fb_dtsg="token-json",
+            fb_user_agent="ua-json",
+        )
+
+        assert session.user_id == user.id
+        assert session.fb_user_id == "987654321"
+        assert session.fb_dtsg == "token-json"
+        assert session.fb_user_agent == "ua-json"
     finally:
         db.close()
 
@@ -157,6 +178,18 @@ def test_coerce_datetime_parses_unix_timestamp():
 def test_coerce_datetime_returns_none_for_invalid_value():
     parsed = _coerce_datetime("not-a-date")
     assert parsed is None
+
+
+def test_load_json_dict_rejects_cookie_list_name_value():
+    cookies = _load_json_dict(
+        '[{"name":"c_user","value":"123"},{"name":"xs","value":"abc"}]'
+    )
+    assert cookies == {}
+
+
+def test_load_json_dict_rejects_cookie_list_key_value_strings():
+    cookies = _load_json_dict('["c_user=123", "xs=abc"]')
+    assert cookies == {}
 
 
 def test_normalize_group_post_falls_back_when_invalid_posted_at():

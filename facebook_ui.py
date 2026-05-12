@@ -252,10 +252,15 @@ class CookieDialog(QDialog):
                 cookies = sb.get_cookies()
                 user_agent = sb.driver.execute_script("return navigator.userAgent") or None
                 
-                # Convert cookies to semicolon-separated format
+                # Convert cookies to semicolon-separated format (for preview/debug)
                 cookie_parts = []
+                cookies_dict = {}
                 for cookie in cookies:
-                    cookie_parts.append(f"{cookie['name']}={cookie['value']}")
+                    cookie_name = str(cookie.get("name", "")).strip()
+                    cookie_value = str(cookie.get("value", ""))
+                    if cookie_name:
+                        cookies_dict[cookie_name] = cookie_value
+                        cookie_parts.append(f"{cookie_name}={cookie_value}")
                 
                 # Add hardcoded static cookies that are always the same
                 static_cookies = [
@@ -265,8 +270,14 @@ class CookieDialog(QDialog):
                     "ar_debug=1"
                 ]
                 cookie_parts.extend(static_cookies)
+                for item in static_cookies:
+                    if "=" not in item:
+                        continue
+                    key, value = item.split("=", 1)
+                    cookies_dict[key.strip()] = value.strip()
                 
                 self.cookies_str = ";".join(cookie_parts)
+                self.cookies_json = json.dumps(cookies_dict, ensure_ascii=False)
                 self.dtsg_str = fb_dtsg if fb_dtsg else ""
 
                 save_warning = None
@@ -276,7 +287,7 @@ class CookieDialog(QDialog):
                         FacebookSessionCRUD.upsert_from_login_extraction(
                             db=db,
                             user_id=self.selected_user_id,
-                            fb_cookies=self.cookies_str or None,
+                            fb_cookies=self.cookies_json or None,
                             fb_dtsg=self.dtsg_str or None,
                             fb_user_agent=user_agent,
                         )
