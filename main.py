@@ -109,14 +109,14 @@ def extract_group_id_from_url(url, cookies=None):
             match = re.search(pattern, html)
             if match:
                 group_id = match.group(1)
-                print(f"  âœ… Found Group ID: {group_id}")
+                print(f"Found Group ID: {group_id}")
                 return group_id
         
-        print("  âŒ Group ID not found (group may be private or login wall)")
+        print("Group ID not found (group may be private or login wall)")
         return None
     
     except Exception as e:
-        print(f"  âŒ Error fetching URL: {e}")
+        print(f"Error fetching URL: {e}")
         return None
 
 

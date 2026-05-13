@@ -473,6 +473,7 @@ class ScraperThread(QThread):
         urls = self.params["urls"]  # List of URLs
         count = self.params.get("count")
         last_24_hours_only = self.params.get("last_24_hours_only", False)
+        download_media = self.params.get("download_media", False)
 
         total_users = len(urls)
         all_posts_count = 0
@@ -538,6 +539,7 @@ class ScraperThread(QThread):
                     on_batch_complete=process_batch,
                     base_folder="user_post",
                     last_24_hours_only=last_24_hours_only,
+                    download_media=download_media,
                 )
 
                 self.log(f"  ✓ Completed: {len(posts)} posts processed")
@@ -554,6 +556,7 @@ class ScraperThread(QThread):
         urls = self.params['urls']  # List of URLs
         count = self.params.get('count')
         last_24_hours_only = self.params.get("last_24_hours_only", False)
+        download_media = self.params.get("download_media", False)
         
         total_pages = len(urls)
         all_posts_count = 0
@@ -624,6 +627,7 @@ class ScraperThread(QThread):
                     on_batch_complete=process_batch,
                     base_folder="page_post",
                     last_24_hours_only=last_24_hours_only,
+                    download_media=download_media,
                 )
                 
                 self.log(f"  ✓ Completed: {len(posts)} posts processed")
@@ -641,6 +645,7 @@ class ScraperThread(QThread):
         urls = self.params['urls']  # List of URLs
         count = self.params.get('count')
         last_24_hours_only = self.params.get("last_24_hours_only", False)
+        download_media = self.params.get("download_media", False)
         
         total_groups = len(urls)
         all_posts_count = 0
@@ -710,6 +715,7 @@ class ScraperThread(QThread):
                     batch_size=batch_size,
                     on_batch_complete=process_batch,
                     last_24_hours_only=last_24_hours_only,
+                    download_media=download_media,
                 )
                 
                 self.log(f"  ✓ Completed: {len(posts)} posts processed")
@@ -727,6 +733,7 @@ class ScraperThread(QThread):
         urls = self.params["urls"]
         count = self.params.get("count")
         last_24_hours_only = self.params.get("last_24_hours_only", False)
+        download_media = self.params.get("download_media", False)
         max_workers = max(1, min(int(self.params.get("max_workers", 3) or 3), 10))
         min_comments = self.params.get("min_comments", 0)
         batch_size = 2
@@ -795,6 +802,7 @@ class ScraperThread(QThread):
                     cookies=self.cookies or {},
                     fb_dtsg=self.fb_dtsg or "",
                     proxies=self.proxies,
+                    download_media=download_media,
                 )
                 self.log(f"{prefix} Completed: {len(posts)} posts processed")
                 return {"ok": True, "posts": len(posts), "error": None}
@@ -938,6 +946,14 @@ class FacebookScraperUI(QMainWindow):
         time_layout.addStretch()
         input_layout.addLayout(time_layout)
 
+        media_layout = QHBoxLayout()
+        self.user_download_media_check = QCheckBox("Download images locally")
+        self.user_download_media_check.setChecked(False)
+        self.user_download_media_check.setToolTip("When disabled, image metadata is still scraped but image files are not saved locally.")
+        media_layout.addWidget(self.user_download_media_check)
+        media_layout.addStretch()
+        input_layout.addLayout(media_layout)
+
         # Comment threshold
         comment_layout = QHBoxLayout()
         comment_layout.addWidget(QLabel("Min comments (0 = all posts):"))
@@ -1005,6 +1021,14 @@ class FacebookScraperUI(QMainWindow):
         time_layout.addStretch()
         input_layout.addLayout(time_layout)
 
+        media_layout = QHBoxLayout()
+        self.page_download_media_check = QCheckBox("Download images locally")
+        self.page_download_media_check.setChecked(False)
+        self.page_download_media_check.setToolTip("When disabled, image metadata is still scraped but image files are not saved locally.")
+        media_layout.addWidget(self.page_download_media_check)
+        media_layout.addStretch()
+        input_layout.addLayout(media_layout)
+
         # Comment threshold
         comment_layout = QHBoxLayout()
         comment_layout.addWidget(QLabel("Min comments (0 = all posts):"))
@@ -1066,10 +1090,18 @@ class FacebookScraperUI(QMainWindow):
 
         time_layout = QHBoxLayout()
         self.group_time_filter_check = QCheckBox("Last 24 hours only")
-        self.group_time_filter_check.setChecked(True)
+        self.group_time_filter_check.setChecked(True) # set mặc định là chỉ lấy bài viết trong 24 giờ qua
         time_layout.addWidget(self.group_time_filter_check)
         time_layout.addStretch()
         input_layout.addLayout(time_layout)
+
+        media_layout = QHBoxLayout()
+        self.group_download_media_check = QCheckBox("Download images locally")
+        self.group_download_media_check.setChecked(False) # set trạng thái mặc định là không tải ảnh về
+        self.group_download_media_check.setToolTip("When disabled, image metadata is still scraped but image files are not saved locally.")
+        media_layout.addWidget(self.group_download_media_check)
+        media_layout.addStretch()
+        input_layout.addLayout(media_layout)
         
         # Comment threshold
         comment_layout = QHBoxLayout()
@@ -1110,6 +1142,7 @@ class FacebookScraperUI(QMainWindow):
         """Start scraping posts from user profile URLs"""
         urls_text = self.user_profile_urls.toPlainText().strip()
         last_24_hours_only = self.user_time_filter_check.isChecked()
+        download_media = self.user_download_media_check.isChecked()
         count = None if last_24_hours_only else 10
         min_comments = self.user_min_comments.value()
         
@@ -1127,14 +1160,22 @@ class FacebookScraperUI(QMainWindow):
         # Start scraping in background thread
         comment_filter_msg = f" with min {min_comments} comments" if min_comments > 0 else ""
         fetch_label = "posts from last 24 hours" if last_24_hours_only else f"{count} posts"
-        self.log(f"Starting user posts scraper for {len(urls)} profile(s) (fetching {fetch_label} each{comment_filter_msg})...")
-        params = {"urls": urls, "count": count, "min_comments": min_comments, "last_24_hours_only": last_24_hours_only}
+        media_mode = "on" if download_media else "off"
+        self.log(f"Starting user posts scraper for {len(urls)} profile(s) (fetching {fetch_label} each{comment_filter_msg}, image download: {media_mode})...")
+        params = {
+            "urls": urls,
+            "count": count,
+            "min_comments": min_comments,
+            "last_24_hours_only": last_24_hours_only,
+            "download_media": download_media,
+        }
         self.start_scraping("user_posts", params)
     
     def scrape_page_posts(self):
         """Start scraping posts from page URLs"""
         urls_text = self.page_urls.toPlainText().strip()
         last_24_hours_only = self.page_time_filter_check.isChecked()
+        download_media = self.page_download_media_check.isChecked()
         count = None if last_24_hours_only else 10
         min_comments = self.page_min_comments.value()
         
@@ -1152,14 +1193,22 @@ class FacebookScraperUI(QMainWindow):
         # Start scraping in background thread
         comment_filter_msg = f" with min {min_comments} comments" if min_comments > 0 else ""
         fetch_label = "posts from last 24 hours" if last_24_hours_only else f"{count} posts"
-        self.log(f"Starting page posts scraper for {len(urls)} page(s) (fetching {fetch_label} each{comment_filter_msg})...")
-        params = {'urls': urls, 'count': count, 'min_comments': min_comments, "last_24_hours_only": last_24_hours_only}
+        media_mode = "on" if download_media else "off"
+        self.log(f"Starting page posts scraper for {len(urls)} page(s) (fetching {fetch_label} each{comment_filter_msg}, image download: {media_mode})...")
+        params = {
+            'urls': urls,
+            'count': count,
+            'min_comments': min_comments,
+            "last_24_hours_only": last_24_hours_only,
+            "download_media": download_media,
+        }
         self.start_scraping("page_posts", params)
     
     def scrape_group_posts(self):
         """Start scraping posts from group URLs"""
         urls_text = self.group_urls.toPlainText().strip()
         last_24_hours_only = self.group_time_filter_check.isChecked()
+        download_media = self.group_download_media_check.isChecked()
         count = None if last_24_hours_only else 10
         min_comments = self.group_min_comments.value()
         max_workers = self.group_max_workers.value()
@@ -1178,13 +1227,15 @@ class FacebookScraperUI(QMainWindow):
         # Start scraping in background thread
         comment_filter_msg = f" with min {min_comments} comments" if min_comments > 0 else ""
         fetch_label = "posts from last 24 hours" if last_24_hours_only else f"{count} posts"
-        self.log(f"Starting group posts scraper for {len(urls)} group(s) with {max_workers} worker(s) (fetching {fetch_label} each{comment_filter_msg})...")
+        media_mode = "on" if download_media else "off"
+        self.log(f"Starting group posts scraper for {len(urls)} group(s) with {max_workers} worker(s) (fetching {fetch_label} each{comment_filter_msg}, image download: {media_mode})...")
         params = {
             'urls': urls,
             'count': count,
             'min_comments': min_comments,
             "last_24_hours_only": last_24_hours_only,
             "max_workers": max_workers,
+            "download_media": download_media,
         }
         self.start_scraping("group_posts", params)
     

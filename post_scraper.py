@@ -537,13 +537,13 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
     max_pages = int(os.getenv("SCRAPER_MAX_24H_PAGES", "100")) if last_24_hours_only else None
     
     if min_comments > 0:
-        print(f"ðŸ“Š Filtering posts with at least {min_comments} comments")
+        print(f"Filtering posts with at least {min_comments} comments")
     
     if cutoff_time:
         print(f"Chỉ lấy bài đăng trong 24h gần nhất (từ {cutoff_time.isoformat()})")
 
     if limit is not None and batch_size > 0 and batch_size < limit:
-        print(f"ðŸ“¦ Xu ly theo lo {batch_size} posts")
+        print(f"Xu ly theo lo {batch_size} posts")
 
     while limit is None or len(all_posts) < limit:
         if max_pages is not None and page_num > max_pages:
@@ -811,7 +811,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
     # Process any remaining posts in the final batch
     if batch_posts and on_batch_complete:
         total_label = limit if limit is not None else "24h"
-        print(f"\n“¦ Lô cuối: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
+        print(f"Lô cuối: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
         on_batch_complete(batch_posts, len(all_posts), limit)
 
     return all_posts

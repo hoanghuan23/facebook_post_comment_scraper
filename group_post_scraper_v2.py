@@ -865,7 +865,7 @@ def fetch_posts(
                     # Check if we should process this batch
                     if batch_size > 0 and len(batch_posts) >= batch_size and on_batch_complete:
                         total_label = limit if limit is not None else "24h"
-                        print(f"\nðŸ“¦ Hoàn tất: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
+                        print(f"Hoàn tất: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
                         on_batch_complete(batch_posts, len(all_posts), limit)
                         batch_posts = []  # Reset batch
                     
@@ -938,7 +938,7 @@ def fetch_posts(
     # Process any remaining posts in the final batch
     if batch_posts and on_batch_complete:
         total_label = limit if limit is not None else "24h"
-        print(f"\n“¦ Lô cuối: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
+        print(f"Lô cuối: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
         on_batch_complete(batch_posts, len(all_posts), limit)
     
     return all_posts
