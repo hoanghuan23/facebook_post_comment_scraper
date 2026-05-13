@@ -515,7 +515,7 @@ def _parse_iso_datetime(value):
         return None
 
 
-def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None, base_folder="page_post", last_24_hours_only=False, download_media=True):
+def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None, base_folder="page_post", last_24_hours_only=False, download_media=True, skip_existing_posts=True):
     """Fetch posts from a Facebook timeline (page or user profile).
     
     Args:
@@ -714,7 +714,7 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
             
             # Check if post already exists
             temp_page_name = PAGE_NAME or extract_page_name(node)
-            if temp_page_name:
+            if skip_existing_posts and temp_page_name:
                 temp_name_folder = sanitize_page_folder_name(temp_page_name)
                 if post_already_exists(post_id, base_folder, temp_name_folder):
                     print(f"Bỏ qua post đã scrape trước đó: {post_id}")

@@ -1370,6 +1370,64 @@ def test_refresh_target_post_metrics_returns_max_pages_stop_reason(monkeypatch):
         db.close()
 
 
+def test_refresh_target_post_metrics_disables_skip_existing_posts(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="target-skip-existing", email="target-skip-existing@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-target-skip-existing",
+            facebook_url="https://www.facebook.com/groups/group-target-skip-existing",
+            source_name="Target Skip Existing Group",
+        )
+        PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="target-existing-1",
+            facebook_url="https://facebook.com/posts/target-existing-1",
+            posted_at=datetime.utcnow(),
+            content="Target existing",
+            likes_count=0,
+            shares_count=0,
+            comments_count=0,
+        )
+
+        calls = []
+
+        def fake_fetch_posts(limit=20, **kwargs):
+            calls.append({"limit": limit, **kwargs})
+            return [
+                {
+                    "post_id": "target-existing-1",
+                    "permalink": "https://facebook.com/posts/target-existing-1",
+                    "message": "Target existing",
+                    "posted_at": datetime.utcnow(),
+                    "reaction_count": 4,
+                    "share_count": 0,
+                    "comment_count": 0,
+                    "photos": [],
+                    "videos": [],
+                }
+            ]
+
+        monkeypatch.setattr("backend.scraper.facebook_service.group_scraper.fetch_posts", fake_fetch_posts)
+
+        result = FacebookScraperService.refresh_target_post_metrics(
+            db,
+            source,
+            target_post_ids=["target-existing-1"],
+            stop_when_all_found=True,
+        )
+
+        assert result["matched_target_count"] == 1
+        assert calls
+        assert calls[0]["skip_existing_posts"] is False
+    finally:
+        db.close()
+
+
 def test_post_extract_media_skips_download_when_flag_disabled(monkeypatch):
     called = {"download": False}
 

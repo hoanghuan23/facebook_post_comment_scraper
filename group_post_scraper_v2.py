@@ -645,6 +645,7 @@ def fetch_posts(
     headers=None,
     proxies=None,
     download_media=True,
+    skip_existing_posts=True,
 ):
     """Fetch posts from Facebook group
     
@@ -657,6 +658,7 @@ def fetch_posts(
         group_id/group_name/cookies/fb_dtsg/headers/proxies: Optional per-run context.
             When omitted, module globals are used for backwards compatibility.
         download_media: Whether to download media files locally. Metadata is still extracted when False.
+        skip_existing_posts: When True, skip posts already persisted on disk. Disable for metric refresh.
     """
     global GROUP_NAME
     use_global_group_name = group_id is None and group_name is None
@@ -840,7 +842,7 @@ def fetch_posts(
                 
                 # Check if post already exists
                 temp_group_name = request_group_name or extract_group_name(story_node)
-                if temp_group_name:
+                if skip_existing_posts and temp_group_name:
                     temp_name_folder = sanitize_group_folder_name(temp_group_name)
                     if post_already_exists(temp_post_id, "group_post", temp_name_folder):
                         print(f"Bỏ qua post đã scrape trước đó: {temp_post_id}")

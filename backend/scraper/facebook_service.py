@@ -165,6 +165,7 @@ class FacebookScraperService:
         group_id: str,
         group_name: Optional[str],
         download_media: bool,
+        skip_existing_posts: bool = True,
     ) -> List[Dict[str, Any]]:
         """Call group scraper with new args, fallback to legacy signature for compatibility."""
         try:
@@ -176,6 +177,7 @@ class FacebookScraperService:
                 cookies=group_scraper.COOKIES,
                 fb_dtsg=group_scraper.FB_DTSG,
                 download_media=download_media,
+                skip_existing_posts=skip_existing_posts,
             )
         except TypeError:
             # Legacy tests/mocks may patch fetch_posts(limit=...) only.
@@ -190,6 +192,7 @@ class FacebookScraperService:
         base_folder: str,
         last_24_hours_only: bool,
         download_media: bool,
+        skip_existing_posts: bool = True,
     ) -> List[Dict[str, Any]]:
         try:
             if last_24_hours_only:
@@ -198,11 +201,13 @@ class FacebookScraperService:
                     base_folder=base_folder,
                     last_24_hours_only=True,
                     download_media=download_media,
+                    skip_existing_posts=skip_existing_posts,
                 )
             return timeline_scraper.fetch_posts(
                 limit=limit,
                 base_folder=base_folder,
                 download_media=download_media,
+                skip_existing_posts=skip_existing_posts,
             )
         except TypeError:
             if last_24_hours_only:
@@ -325,6 +330,7 @@ class FacebookScraperService:
             group_id=source.facebook_id,
             group_name=source.source_name,
             download_media=settings.SCRAPER_DOWNLOAD_MEDIA,
+            skip_existing_posts=True,
         )
         created_posts = 0
         updated_posts = 0
@@ -416,6 +422,7 @@ class FacebookScraperService:
             base_folder=base_folder,
             last_24_hours_only=last_24_hours_only,
             download_media=settings.SCRAPER_DOWNLOAD_MEDIA,
+            skip_existing_posts=True,
         )
         created_posts = 0
         updated_posts = 0
@@ -579,6 +586,7 @@ class FacebookScraperService:
                 group_id=source.facebook_id,
                 group_name=source.source_name,
                 download_media=download_media,
+                skip_existing_posts=False,
             )
             normalize_post = _normalize_group_post
         elif source.source_type in {SourceType.PAGE, SourceType.USER}:
@@ -589,6 +597,7 @@ class FacebookScraperService:
                 base_folder=base_folder,
                 last_24_hours_only=last_24_hours_only,
                 download_media=download_media,
+                skip_existing_posts=False,
             )
             normalize_post = _normalize_timeline_post
         else:
