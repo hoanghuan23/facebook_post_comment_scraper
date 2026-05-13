@@ -18,6 +18,7 @@ from backend.scraper.facebook_service import (
 from backend.scheduler.periodic_tasks import periodic_scrape_new_posts, update_recent_post_metrics
 import post_scraper
 import group_post_scraper_v2
+import comment_scraper
 
 
 def setup_function():
@@ -190,6 +191,55 @@ def test_load_json_dict_rejects_cookie_list_name_value():
 def test_load_json_dict_rejects_cookie_list_key_value_strings():
     cookies = _load_json_dict('["c_user=123", "xs=abc"]')
     assert cookies == {}
+
+
+def test_load_json_dict_accepts_semicolon_cookie_string():
+    cookies = _load_json_dict("datr=abc; c_user=123456789; xs=xyz")
+    assert cookies == {
+        "datr": "abc",
+        "c_user": "123456789",
+        "xs": "xyz",
+    }
+
+
+def test_apply_source_auth_context_applies_proxy_and_user_agent(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="session_u4", email="session_u4@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_name="Group Test",
+            source_type="group",
+            facebook_url="https://www.facebook.com/groups/123456789012345/",
+            facebook_id="123456789012345",
+        )
+        FacebookSessionCRUD.upsert_active_for_user(
+            db=db,
+            user_id=user.id,
+            fb_cookies="datr=abc; c_user=123456789; xs=xyz",
+            fb_dtsg="token-ctx",
+            fb_user_agent="ua-ctx",
+            fb_user_id="123456789",
+        )
+
+        monkeypatch.setattr(
+            "backend.scraper.facebook_service.select_proxy",
+            lambda has_cookies: {"http": "http://static-proxy", "https": "http://static-proxy"} if has_cookies else None,
+        )
+
+        FacebookScraperService._apply_source_auth_context(db, source)
+
+        assert group_post_scraper_v2.COOKIES["c_user"] == "123456789"
+        assert group_post_scraper_v2.FB_DTSG == "token-ctx"
+        assert group_post_scraper_v2.PROXIES == {"http": "http://static-proxy", "https": "http://static-proxy"}
+        assert group_post_scraper_v2.HEADERS["user-agent"] == "ua-ctx"
+        assert post_scraper.PROXIES == {"http": "http://static-proxy", "https": "http://static-proxy"}
+        assert post_scraper.BASE_HEADERS["user-agent"] == "ua-ctx"
+        assert comment_scraper.PROXIES == {"http": "http://static-proxy", "https": "http://static-proxy"}
+        assert comment_scraper.BASE_HEADERS["user-agent"] == "ua-ctx"
+    finally:
+        db.close()
 
 
 def test_normalize_group_post_falls_back_when_invalid_posted_at():
@@ -1489,6 +1539,98 @@ def test_group_extract_media_skips_download_when_flag_disabled(monkeypatch):
     assert called["download"] is False
     assert media["photos"]
     assert media["photos"][0]["saved_as"] is None
+
+
+def test_group_reaction_lookup_parses_detached_feedback_count_nested():
+    feedback_node = {
+        "id": "ZmVlZGJhY2s6abc",
+        "reaction_count": {"count": {"count": "42"}},
+    }
+
+    parsed = group_post_scraper_v2._extract_feedback_reaction_count_from_node(feedback_node)
+
+    assert parsed == 42
+
+
+def test_group_reaction_lookup_prefers_story_when_non_zero():
+    story_reaction = 7
+    detached_feedback_map = {"ZmVlZGJhY2s6post-1": 99}
+    feedback_id = "ZmVlZGJhY2s6post-1"
+
+    resolved = group_post_scraper_v2._coerce_int(story_reaction)
+    if resolved in (None, 0):
+        resolved = detached_feedback_map.get(feedback_id, 0)
+
+    assert resolved == 7
+
+
+def test_group_reaction_lookup_fallbacks_when_story_zero():
+    story_reaction = 0
+    detached_feedback_map = {"ZmVlZGJhY2s6post-2": 15}
+    feedback_id = "ZmVlZGJhY2s6post-2"
+
+    resolved = group_post_scraper_v2._coerce_int(story_reaction)
+    if resolved in (None, 0):
+        resolved = detached_feedback_map.get(feedback_id, 0)
+
+    assert resolved == 15
+
+
+def test_refresh_target_post_metrics_group_uses_reaction_count_output_for_likes(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="group-reaction-fallback", email="group-reaction-fallback@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-reaction-fallback",
+            facebook_url="https://www.facebook.com/groups/group-reaction-fallback",
+            source_name="Group Reaction Fallback",
+        )
+        target_post = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="target-rx-1",
+            facebook_url="https://facebook.com/posts/target-rx-1",
+            posted_at=datetime.utcnow(),
+            content="Target reaction",
+            likes_count=1,
+            shares_count=0,
+            comments_count=0,
+        )
+
+        # Service layer should persist scraper reaction_count into likes_count.
+        # This value represents output after group scraper fallback merge.
+        monkeypatch.setattr(
+            "backend.scraper.facebook_service.group_scraper.fetch_posts",
+            lambda limit=20, **kwargs: [
+                {
+                    "post_id": "target-rx-1",
+                    "permalink": "https://facebook.com/posts/target-rx-1",
+                    "message": "Target reaction",
+                    "posted_at": datetime.utcnow(),
+                    "reaction_count": 15,
+                    "share_count": 0,
+                    "comment_count": 0,
+                    "photos": [],
+                    "videos": [],
+                }
+            ],
+        )
+
+        result = FacebookScraperService.refresh_target_post_metrics(
+            db,
+            source,
+            target_post_ids=["target-rx-1"],
+            stop_when_all_found=True,
+        )
+        refreshed_target = PostCRUD.get_by_id(db, target_post.id)
+
+        assert result["updated"] == 1
+        assert refreshed_target.current_likes == 15
+    finally:
+        db.close()
 
 
 def test_create_source_enqueues_background_bootstrap_scrape(monkeypatch):

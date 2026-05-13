@@ -15,6 +15,7 @@ from backend.database.models import Source, SourceType
 import comment_scraper
 import group_post_scraper_v2 as group_scraper
 import post_scraper as timeline_scraper
+from proxy_utils import select_proxy
 
 logger = logging.getLogger("facebook_scraper")
 
@@ -36,6 +37,20 @@ def _load_json_dict(raw_value: Optional[str]) -> Dict[str, Any]:
         return {}
     if isinstance(raw_value, dict):
         return raw_value
+    if isinstance(raw_value, str):
+        stripped = raw_value.strip()
+        if stripped and not (stripped.startswith("{") or stripped.startswith("[")):
+            cookies: Dict[str, Any] = {}
+            for part in stripped.split(";"):
+                item = part.strip()
+                if not item or "=" not in item:
+                    continue
+                key, value = item.split("=", 1)
+                key = key.strip()
+                value = value.strip()
+                if key:
+                    cookies[key] = value
+            return cookies
     try:
         parsed = json.loads(raw_value)
     except (TypeError, json.JSONDecodeError):
@@ -120,8 +135,37 @@ class FacebookScraperService:
     def _apply_source_auth_context(db: Session, source: Source) -> None:
         session = FacebookSessionCRUD.get_active_by_user_id(db, source.user_id)
         cookies = _load_json_dict(session.fb_cookies) if session else {}
+        user_agent = session.fb_user_agent if session and session.fb_user_agent else None
+        proxies = select_proxy(bool(cookies))
+
         group_scraper.COOKIES = cookies
         group_scraper.FB_DTSG = session.fb_dtsg if session and session.fb_dtsg else ""
+        group_scraper.PROXIES = proxies
+        timeline_scraper.COOKIES = cookies
+        timeline_scraper.FB_DTSG = group_scraper.FB_DTSG
+        timeline_scraper.PROXIES = proxies
+        comment_scraper.FB_DTSG = group_scraper.FB_DTSG
+        comment_scraper.PROXIES = proxies
+
+        if user_agent:
+            group_scraper.HEADERS["user-agent"] = user_agent
+            timeline_scraper.BASE_HEADERS["user-agent"] = user_agent
+            comment_scraper.BASE_HEADERS["user-agent"] = user_agent
+
+        actual_proxy_mode = "none"
+        if proxies:
+            actual_proxy_mode = "static" if cookies else "rotating"
+
+        logger.info(
+            "Applied Facebook auth context for source_id=%s user_id=%s has_cookies=%s c_user=%s has_fb_dtsg=%s has_user_agent=%s proxy_mode=%s",
+            source.id,
+            source.user_id,
+            bool(cookies),
+            bool(cookies.get("c_user")),
+            bool(group_scraper.FB_DTSG),
+            bool(user_agent),
+            actual_proxy_mode,
+        )
 
     @staticmethod
     def _apply_group_context(source: Source) -> None:

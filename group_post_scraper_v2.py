@@ -376,6 +376,73 @@ def parse_fb_response(text):
     return cleaned
 
 
+def _summarize_group_response(data):
+    """Build a compact diagnostic summary for unexpected empty group responses."""
+    summary = {
+        "total_blocks": 0,
+        "top_level_keys": {},
+        "node_typenames": {},
+        "group_nodes": 0,
+        "group_feed_edges": 0,
+        "timeline_edges": 0,
+        "story_nodes": 0,
+        "page_info_blocks": 0,
+        "errors": [],
+    }
+
+    def _bump(bucket, key):
+        if not key:
+            key = "<empty>"
+        bucket[key] = bucket.get(key, 0) + 1
+
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        summary["total_blocks"] += 1
+        for key in item.keys():
+            _bump(summary["top_level_keys"], str(key))
+
+        if item.get("error") is not None or item.get("errorSummary") or item.get("errorDescription"):
+            summary["errors"].append(
+                {
+                    "error": item.get("error"),
+                    "errorSummary": item.get("errorSummary"),
+                    "errorDescription": item.get("errorDescription"),
+                    "isNotCritical": item.get("isNotCritical"),
+                }
+            )
+
+        node = item.get("node")
+        if not isinstance(node, dict):
+            if isinstance(item.get("page_info"), dict):
+                summary["page_info_blocks"] += 1
+            continue
+
+        node_typename = node.get("__typename") or "<missing>"
+        _bump(summary["node_typenames"], node_typename)
+
+        if node_typename == "Story":
+            summary["story_nodes"] += 1
+
+        if node_typename == "Group":
+            summary["group_nodes"] += 1
+            group_feed = node.get("group_feed") or {}
+            edges = group_feed.get("edges") or []
+            if isinstance(edges, list):
+                summary["group_feed_edges"] += len(edges)
+            if isinstance(group_feed.get("page_info"), dict):
+                summary["page_info_blocks"] += 1
+
+        timeline = node.get("timeline_list_feed_units") or {}
+        tl_edges = timeline.get("edges") or []
+        if isinstance(tl_edges, list):
+            summary["timeline_edges"] += len(tl_edges)
+        if isinstance(timeline.get("page_info"), dict):
+            summary["page_info_blocks"] += 1
+
+    return summary
+
+
 def sanitize_group_folder_name(group_name):
     """Convert group name to a safe folder name."""
     if group_name:
@@ -536,7 +603,16 @@ def build_group_link(group_id=None, permalink=None):
     return f"https://www.facebook.com/groups/{resolved_group_id}/"
 
 
-def extract_post_data(node, group_name=None, group_id=None, cookies=None, fb_dtsg=None, proxies=None, download_media=True):
+def extract_post_data(
+    node,
+    group_name=None,
+    group_id=None,
+    cookies=None,
+    fb_dtsg=None,
+    proxies=None,
+    download_media=True,
+    reaction_count_override=None,
+):
     """Extract relevant data from a post node"""
     if not node or node.get('__typename') != 'Story':
         return None
@@ -562,6 +638,8 @@ def extract_post_data(node, group_name=None, group_id=None, cookies=None, fb_dts
     
     # Extract reaction count
     reaction_count = extract_reaction_count(node)
+    if reaction_count_override is not None:
+        reaction_count = reaction_count_override
     
     # Extract share count
     share_count = extract_share_count(node)
@@ -630,6 +708,59 @@ def _parse_iso_datetime(value):
         return dt.astimezone(timezone.utc)
     except Exception:
         return None
+
+
+def _unwrap_count_value(value):
+    while isinstance(value, dict):
+        value = value.get("count")
+    return value
+
+
+def _coerce_int(value):
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        cleaned = "".join(ch for ch in raw if ch.isdigit() or ch == "-")
+        if not cleaned or cleaned == "-":
+            return None
+        try:
+            return int(cleaned)
+        except Exception:
+            return None
+    return None
+
+
+def _extract_feedback_reaction_count_from_node(node):
+    if not isinstance(node, dict):
+        return None
+
+    reaction_count = node.get("reaction_count")
+    if isinstance(reaction_count, dict):
+        parsed = _coerce_int(_unwrap_count_value(reaction_count))
+        if parsed is not None:
+            return parsed
+    else:
+        parsed = _coerce_int(reaction_count)
+        if parsed is not None:
+            return parsed
+
+    reactors = node.get("reactors")
+    if isinstance(reactors, dict):
+        parsed = _coerce_int(_unwrap_count_value(reactors.get("count_reduced")))
+        if parsed is not None:
+            return parsed
+        parsed = _coerce_int(_unwrap_count_value(reactors.get("count")))
+        if parsed is not None:
+            return parsed
+
+    return None
 
 
 def fetch_posts(
@@ -765,10 +896,27 @@ def fetch_posts(
         #     json.dump(data, f, ensure_ascii=False, indent=2)
         # print(f"Saved group_raw_page_{page_num}.json")
         
+        # Build reaction lookup by feedback id. Some group responses return
+        # metrics in detached feedback blocks instead of Story nodes.
+        feedback_reaction_count_by_id = {}
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            node = item.get("node", item)
+            if not isinstance(node, dict):
+                continue
+            feedback_id = node.get("id")
+            if not (isinstance(feedback_id, str) and feedback_id.startswith("ZmVlZGJhY2s6")):
+                continue
+            count = _extract_feedback_reaction_count_from_node(node)
+            if count is not None:
+                feedback_reaction_count_by_id[feedback_id] = count
+
         # Extract posts from the response array
         posts_found = 0
         next_cursor = None
         has_next_page = False
+        response_summary = _summarize_group_response(data)
         
         for item in data:
             if not isinstance(item, dict):
@@ -848,6 +996,15 @@ def fetch_posts(
                         print(f"Bỏ qua post đã scrape trước đó: {temp_post_id}")
                         continue
                 
+                # Prefer reaction count from Story node; fallback to detached feedback block.
+                reaction_count = _coerce_int(extract_reaction_count(story_node))
+                if reaction_count in (None, 0):
+                    feedback_id = (story_node.get("feedback") or {}).get("id")
+                    if feedback_id and feedback_id in feedback_reaction_count_by_id:
+                        reaction_count = feedback_reaction_count_by_id[feedback_id]
+                if reaction_count is None:
+                    reaction_count = 0
+
                 post_data = extract_post_data(
                     story_node,
                     request_group_name,
@@ -856,6 +1013,7 @@ def fetch_posts(
                     fb_dtsg=request_fb_dtsg,
                     proxies=request_proxies,
                     download_media=download_media,
+                    reaction_count_override=reaction_count,
                 )
                 if post_data:
                     post_data["group_id"] = request_group_id
@@ -917,6 +1075,51 @@ def fetch_posts(
             f"Tìm thấy {posts_found} post trong trang này"
             f"(has_next_page={has_next_page}, next_cursor={'yes' if next_cursor else 'no'})"
         )
+
+        if posts_found == 0:
+            print(
+                "Chan doan response:"
+                f" blocks={response_summary['total_blocks']},"
+                f" group_nodes={response_summary['group_nodes']},"
+                f" group_feed_edges={response_summary['group_feed_edges']},"
+                f" timeline_edges={response_summary['timeline_edges']},"
+                f" story_nodes={response_summary['story_nodes']},"
+                f" page_info_blocks={response_summary['page_info_blocks']}"
+            )
+            if response_summary["node_typenames"]:
+                print(f"  node typenames: {response_summary['node_typenames']}")
+            if response_summary["top_level_keys"]:
+                print(f"  top-level keys: {response_summary['top_level_keys']}")
+            if response_summary["errors"]:
+                for idx, err in enumerate(response_summary["errors"], start=1):
+                    print(
+                        f"  GraphQL error #{idx}: code={err.get('error')},"
+                        f" summary={err.get('errorSummary')},"
+                        f" description={err.get('errorDescription')},"
+                        f" isNotCritical={err.get('isNotCritical')}"
+                    )
+            if response_summary["group_nodes"] > 0 and response_summary["group_feed_edges"] == 0 and response_summary["story_nodes"] == 0:
+                print(
+                    "  Nghi ngo: response co Group node nhung khong co feed edges."
+                    " Thuong do session khong xem duoc noi dung group,"
+                    " user khong con la member, hoac Facebook da doi schema query."
+                )
+            elif response_summary["group_nodes"] == 0 and response_summary["story_nodes"] == 0:
+                print(
+                    "  Nghi ngo: response khong chua Group/Story node."
+                    " Kha nang cao la payload/doc_id/schema khong con khop."
+                )
+
+            if WRITE_DEBUG_FILES:
+                debug_dir = "logs"
+                os.makedirs(debug_dir, exist_ok=True)
+                raw_path = os.path.join(debug_dir, f"group_debug_page_{page_num}.txt")
+                parsed_path = os.path.join(debug_dir, f"group_debug_page_{page_num}.json")
+                with open(raw_path, "w", encoding="utf-8") as f:
+                    f.write(r.text)
+                with open(parsed_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                print(f"  Da luu debug: {raw_path}, {parsed_path}")
 
         if stop_due_to_time:
             print("Đã gặp post cũ hơn 24h. Dừng phân trang.")
