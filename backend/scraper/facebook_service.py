@@ -284,7 +284,6 @@ class FacebookScraperService:
             return 0
 
         # Replies are intentionally disabled at runtime to reduce scrape scope.
-        # Keep `include_replies` in source settings for backward compatibility only.
         cls._apply_comment_context()
         feedback_id = cls._build_feedback_id(db_post.facebook_post_id)
         try:

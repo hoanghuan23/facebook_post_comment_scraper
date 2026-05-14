@@ -1,7 +1,6 @@
 # Source management routes
 from datetime import datetime, timedelta
 from typing import List, Union
-import json
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -161,8 +160,6 @@ def _create_single_source(
 
     # Check access permissions if requested
     permission_status = None
-    permission_message = None
-    access_restrictions = None
     is_accessible = False
 
     if source_data.check_access:
@@ -183,11 +180,7 @@ def _create_single_source(
             user_cookies=None
         )
         permission_status = permission_result['status'].value
-        permission_message = permission_result['message']
         is_accessible = permission_result['accessible']
-        
-        if permission_result.get('restrictions'):
-            access_restrictions = json.dumps(permission_result['restrictions'])
         
         # If access is denied, raise error
         if not is_valid and permission_result['status'].value == 'denied':
@@ -204,11 +197,8 @@ def _create_single_source(
         facebook_id=facebook_id,
         facebook_url=source_data.facebook_url,
         include_comments=source_data.include_comments,
-        include_replies=source_data.include_replies,
         max_days_old=source_data.max_days_old,
         permission_status=permission_status,
-        permission_message=permission_message,
-        access_restrictions=access_restrictions,
         is_accessible=is_accessible,
         permission_checked_at=datetime.utcnow() if source_data.check_access else None,
     )
@@ -306,13 +296,6 @@ async def get_source(
     detail = SourceDetail.model_validate(source)
     detail.post_count = stats["posts_count"]
     
-    # Parse restrictions if available
-    if source.access_restrictions:
-        try:
-            detail.access_restrictions = json.loads(source.access_restrictions)
-        except:
-            pass
-    
     return detail
 
 
@@ -390,13 +373,9 @@ async def check_source_access(
     # Update source with new permission info
     update_data = {
         'permission_status': permission_result['status'].value,
-        'permission_message': permission_result['message'],
         'is_accessible': permission_result['accessible'],
         'permission_checked_at': datetime.utcnow(),
     }
-    
-    if permission_result.get('restrictions'):
-        update_data['access_restrictions'] = json.dumps(permission_result['restrictions'])
     
     # Use raw SQL update for permission fields
     for key, value in update_data.items():

@@ -98,12 +98,9 @@ class Source(Base):
     facebook_url = Column(String(255), nullable=False)
     source_name = Column(String(255), nullable=True)
     description = Column(Text, nullable=True)
-    cover_image_url = Column(String(500), nullable=True)
     member_count = Column(Integer, nullable=True)
-    follower_count = Column(Integer, nullable=True)
     is_active = Column(Boolean, default=True)
     include_comments = Column(Boolean, default=True)
-    include_replies = Column(Boolean, default=True)
     max_days_old = Column(Integer, default=30)
     permission_status = Column(
         Enum(
@@ -114,8 +111,6 @@ class Source(Base):
         ),
         default=PermissionStatus.NOT_CHECKED,
     )
-    permission_message = Column(Text, nullable=True)
-    access_restrictions = Column(Text, nullable=True)
     permission_checked_at = Column(DateTime, nullable=True)
     is_accessible = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
