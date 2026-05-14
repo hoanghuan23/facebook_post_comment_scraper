@@ -77,6 +77,12 @@ CREATE INDEX idx_source_accessible ON sources (is_accessible);
 CREATE INDEX idx_source_next_scrape ON sources (next_scrape);
 CREATE INDEX idx_source_permission ON sources (permission_status);
 
+-- thêm cột schedule_tier là chiều hệ thống => DB. Thông qua tính toán dựa tần suất , số lượng đăng của từng source để phân loại tier (1 - 4). null = chưa tính
+ALTER TABLE sources ADD COLUMN schedule_tier INTEGER DEFAULT NULL;
+
+-- thêm cột schedule_override_min. User tự set tần suất (phút). Null = auto . Khi có giá trị sẽ bỏ qua tier
+ALTER TABLE sources ADD COLUMN schedule_override_minutes INTEGER DEFAULT NULL;
+
 -- bảng posts lưu trữ thông tin về các bài đăng trên Facebook của từng nguồn, bao gồm ID bài đăng, nội dung, số lượng media, trạng thái có hình ảnh/video, thời gian đăng, trạng thái theo dõi và các chỉ số tương tác để quản lý và phân tích hiệu suất của các bài đăng trên Facebook được theo dõi
 CREATE TABLE posts (
         id INTEGER NOT NULL, 
