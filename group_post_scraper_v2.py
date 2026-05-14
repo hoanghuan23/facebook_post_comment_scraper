@@ -2,6 +2,7 @@
 import json
 import time
 import os
+import re
 import uuid
 from urllib.parse import urlparse
 from dotenv import load_dotenv
@@ -745,6 +746,18 @@ def _coerce_int(value):
         raw = value.strip()
         if not raw:
             return None
+
+        compact = raw.replace(" ", "")
+        suffix_match = re.fullmatch(r"([+-]?(?:\d+(?:[\.,]\d+)?|[\.,]\d+))([kKmMbB])", compact)
+        if suffix_match:
+            number_text, suffix = suffix_match.groups()
+            try:
+                number = float(number_text.replace(",", "."))
+            except Exception:
+                return None
+            multiplier = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}[suffix.lower()]
+            return int(number * multiplier)
+
         cleaned = "".join(ch for ch in raw if ch.isdigit() or ch == "-")
         if not cleaned or cleaned == "-":
             return None
@@ -787,6 +800,155 @@ def _extract_feedback_reaction_count_from_node(node):
             return parsed
 
     return None
+
+
+def _iter_dicts(obj, seen=None):
+    if seen is None:
+        seen = set()
+
+    if isinstance(obj, dict):
+        obj_id = id(obj)
+        if obj_id in seen:
+            return
+        seen.add(obj_id)
+        yield obj
+        for value in obj.values():
+            yield from _iter_dicts(value, seen)
+    elif isinstance(obj, list):
+        for item in obj:
+            yield from _iter_dicts(item, seen)
+
+
+def _is_feedback_id(value):
+    return isinstance(value, str) and value.startswith("ZmVlZGJhY2s6")
+
+
+def _build_feedback_metric_lookups(data):
+    reaction_by_id = {}
+    share_by_id = {}
+
+    for node in _iter_dicts(data):
+        feedback_ids = [
+            value for value in (node.get("id"), node.get("__id"))
+            if _is_feedback_id(value)
+        ]
+        if not feedback_ids:
+            continue
+
+        count = _extract_feedback_reaction_count_from_node(node)
+        if count is not None:
+            for feedback_id in feedback_ids:
+                reaction_by_id[feedback_id] = count
+
+        count = _extract_feedback_share_count_from_node(node)
+        if count is not None:
+            for feedback_id in feedback_ids:
+                share_by_id[feedback_id] = count
+
+    return reaction_by_id, share_by_id
+
+
+def _extract_story_feedback_ids(story_node):
+    if not isinstance(story_node, dict):
+        return []
+
+    ids = []
+    seen = set()
+
+    def add(value):
+        if _is_feedback_id(value) and value not in seen:
+            seen.add(value)
+            ids.append(value)
+
+    add((story_node.get("feedback") or {}).get("id"))
+
+    for node in _iter_dicts(story_node):
+        add(node.get("__id"))
+        add(node.get("id"))
+
+        feedback = node.get("feedback")
+        if isinstance(feedback, dict):
+            add(feedback.get("__id"))
+            add(feedback.get("id"))
+
+        target = node.get("feedback_target_with_context")
+        if isinstance(target, dict):
+            add(target.get("__id"))
+            add(target.get("id"))
+
+        renderer_feedback = (
+            node.get("comet_ufi_summary_and_actions_renderer", {})
+            .get("feedback")
+        )
+        if isinstance(renderer_feedback, dict):
+            add(renderer_feedback.get("__id"))
+            add(renderer_feedback.get("id"))
+
+    return ids
+
+
+def _extract_reaction_count_from_story_feedback_tree(story_node):
+    for node in _iter_dicts(story_node):
+        parsed = _extract_feedback_reaction_count_from_node(node)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _extract_share_count_from_story_feedback_tree(story_node):
+    for node in _iter_dicts(story_node):
+        parsed = _extract_feedback_share_count_from_node(node)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _resolve_story_reaction_count(story_node, feedback_reaction_count_by_id):
+    reaction_count = _coerce_int(extract_reaction_count(story_node))
+    feedback_ids = _extract_story_feedback_ids(story_node)
+    used_detached_lookup = False
+
+    if reaction_count in (None, 0):
+        for feedback_id in feedback_ids:
+            if feedback_id in feedback_reaction_count_by_id:
+                reaction_count = feedback_reaction_count_by_id[feedback_id]
+                used_detached_lookup = True
+                break
+
+    if reaction_count in (None, 0):
+        fallback_count = _extract_reaction_count_from_story_feedback_tree(story_node)
+        if fallback_count is not None:
+            reaction_count = fallback_count
+
+    if reaction_count is None:
+        reaction_count = 0
+
+    if reaction_count == 0 and WRITE_DEBUG_FILES:
+        print(
+            "  Debug reaction_count=0:"
+            f" post_id={story_node.get('post_id')},"
+            f" feedback_ids={len(feedback_ids)},"
+            f" detached_lookup={'yes' if used_detached_lookup else 'no'}"
+        )
+
+    return reaction_count
+
+
+def _resolve_story_share_count(story_node, feedback_share_count_by_id):
+    share_count = _coerce_int(extract_share_count(story_node))
+
+    if share_count in (None, 0):
+        for feedback_id in _extract_story_feedback_ids(story_node):
+            if feedback_id in feedback_share_count_by_id:
+                share_count = feedback_share_count_by_id[feedback_id]
+                break
+
+    if share_count in (None, 0):
+        fallback_count = _extract_share_count_from_story_feedback_tree(story_node)
+        if fallback_count is not None:
+            share_count = fallback_count
+
+    return 0 if share_count is None else share_count
 
 
 def _extract_feedback_share_count_from_node(node):
@@ -989,23 +1151,7 @@ def fetch_posts(
         
         # Build metric lookups by feedback id. Authenticated group responses
         # often return UFI counts in detached feedback blocks instead of Story nodes.
-        feedback_reaction_count_by_id = {}
-        feedback_share_count_by_id = {}
-        for item in data:
-            if not isinstance(item, dict):
-                continue
-            node = item.get("node", item)
-            if not isinstance(node, dict):
-                continue
-            feedback_id = node.get("id")
-            if not (isinstance(feedback_id, str) and feedback_id.startswith("ZmVlZGJhY2s6")):
-                continue
-            count = _extract_feedback_reaction_count_from_node(node)
-            if count is not None:
-                feedback_reaction_count_by_id[feedback_id] = count
-            count = _extract_feedback_share_count_from_node(node)
-            if count is not None:
-                feedback_share_count_by_id[feedback_id] = count
+        feedback_reaction_count_by_id, feedback_share_count_by_id = _build_feedback_metric_lookups(data)
 
         # Extract posts from the response array
         posts_found = 0
@@ -1091,22 +1237,9 @@ def fetch_posts(
                         print(f"Bỏ qua post đã scrape trước đó: {temp_post_id}")
                         continue
                 
-                # Prefer reaction count from Story node; fallback to detached feedback block.
-                reaction_count = _coerce_int(extract_reaction_count(story_node))
-                if reaction_count in (None, 0):
-                    feedback_id = (story_node.get("feedback") or {}).get("id")
-                    if feedback_id and feedback_id in feedback_reaction_count_by_id:
-                        reaction_count = feedback_reaction_count_by_id[feedback_id]
-                if reaction_count is None:
-                    reaction_count = 0
-
-                share_count = _coerce_int(extract_share_count(story_node))
-                if share_count in (None, 0):
-                    feedback_id = (story_node.get("feedback") or {}).get("id")
-                    if feedback_id and feedback_id in feedback_share_count_by_id:
-                        share_count = feedback_share_count_by_id[feedback_id]
-                if share_count is None:
-                    share_count = 0
+                # Prefer Story metrics; fallback to detached/nested feedback blocks.
+                reaction_count = _resolve_story_reaction_count(story_node, feedback_reaction_count_by_id)
+                share_count = _resolve_story_share_count(story_node, feedback_share_count_by_id)
 
                 post_data = extract_post_data(
                     story_node,

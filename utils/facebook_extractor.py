@@ -338,6 +338,46 @@ def make_scraped_at() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _unwrap_count_value(value: Any) -> Any:
+    while isinstance(value, dict):
+        value = value.get("count")
+    return value
+
+
+def _coerce_count_int(value: Any) -> Optional[int]:
+    value = _unwrap_count_value(value)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+
+        compact = raw.replace(" ", "")
+        suffix_match = re.fullmatch(r"([+-]?(?:\d+(?:[\.,]\d+)?|[\.,]\d+))([kKmMbB])", compact)
+        if suffix_match:
+            number_text, suffix = suffix_match.groups()
+            try:
+                number = float(number_text.replace(",", "."))
+            except Exception:
+                return None
+            multiplier = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}[suffix.lower()]
+            return int(number * multiplier)
+
+        cleaned = "".join(ch for ch in raw if ch.isdigit() or ch == "-")
+        if not cleaned or cleaned == "-":
+            return None
+        try:
+            return int(cleaned)
+        except Exception:
+            return None
+    return None
+
+
 def extract_comment_count(node):
     """Extract comment count from post node"""
     try:
@@ -405,18 +445,23 @@ def extract_reaction_count(node):
             # New structure: reaction_count.count.count
             reaction_count = feedback.get("reaction_count", {})
             if isinstance(reaction_count, dict):
-                value = reaction_count.get("count")
-                while isinstance(value, dict):
-                    value = value.get("count")
-                if value is not None:
-                    return value
+                parsed = _coerce_count_int(reaction_count)
+                if parsed is not None:
+                    return parsed
+            elif reaction_count is not None:
+                parsed = _coerce_count_int(reaction_count)
+                if parsed is not None:
+                    return parsed
 
             # Fallback old structure: reactors.count_reduced
             reactors = feedback.get("reactors", {})
             if isinstance(reactors, dict):
-                value = reactors.get("count_reduced")
-                if value is not None:
-                    return value
+                parsed = _coerce_count_int(reactors.get("count_reduced"))
+                if parsed is not None:
+                    return parsed
+                parsed = _coerce_count_int(reactors.get("count"))
+                if parsed is not None:
+                    return parsed
 
             return None
 
@@ -449,14 +494,14 @@ def extract_reaction_count(node):
             ufi_feedback = comet_ufi.get("feedback", {})
             reactors = ufi_feedback.get("reactors", {})
             if reactors:
-                count = reactors.get("count_reduced")
+                count = _coerce_count_int(reactors.get("count_reduced"))
                 if count is not None:
                     return count
         
         # Path 2: feedback_target_with_context.reactors.count_reduced (direct)
         reactors = feedback_target.get("reactors", {})
         if reactors:
-            count = reactors.get("count_reduced")
+            count = _coerce_count_int(reactors.get("count_reduced"))
             if count is not None:
                 return count
         
@@ -468,7 +513,7 @@ def extract_reaction_count(node):
         feedback_target = feedback_context.get("feedback_target_with_context", {})
         reactors = feedback_target.get("reactors", {})
         if reactors:
-            count = reactors.get("count_reduced")
+            count = _coerce_count_int(reactors.get("count_reduced"))
             if count is not None:
                 return count
         
@@ -481,14 +526,14 @@ def extract_reaction_count(node):
             ufi_feedback = comet_ufi.get("feedback", {})
             reactors = ufi_feedback.get("reactors", {})
             if reactors:
-                count = reactors.get("count_reduced")
+                count = _coerce_count_int(reactors.get("count_reduced"))
                 if count is not None:
                     return count
         
         # Path 5: feedback.reactors.count_reduced (fallback)
         reactors = node.get("feedback", {}).get("reactors", {})
         if reactors:
-            count = reactors.get("count_reduced")
+            count = _coerce_count_int(reactors.get("count_reduced"))
             if count is not None:
                 return count
         
@@ -497,7 +542,7 @@ def extract_reaction_count(node):
         if isinstance(feedback, dict):
             reactors = feedback.get("reactors", {})
             if isinstance(reactors, dict) and "count_reduced" in reactors:
-                return reactors.get("count_reduced", 0)
+                return _coerce_count_int(reactors.get("count_reduced")) or 0
         
         return 0
     except Exception as e:
@@ -513,25 +558,15 @@ def extract_share_count(node):
 
             # Newer structures can return nested objects: share_count.count.count...
             share_count = feedback.get("share_count")
-            if isinstance(share_count, dict):
-                value = share_count.get("count")
-                while isinstance(value, dict):
-                    value = value.get("count")
-                if value is not None:
-                    return value
-            elif share_count is not None:
-                return share_count
+            parsed = _coerce_count_int(share_count)
+            if parsed is not None:
+                return parsed
 
             # Sometimes share count lives under share_count_reduced
             share_count_reduced = feedback.get("share_count_reduced")
-            if isinstance(share_count_reduced, dict):
-                value = share_count_reduced.get("count")
-                while isinstance(value, dict):
-                    value = value.get("count")
-                if value is not None:
-                    return value
-            elif share_count_reduced is not None:
-                return share_count_reduced
+            parsed = _coerce_count_int(share_count_reduced)
+            if parsed is not None:
+                return parsed
 
             return None
 

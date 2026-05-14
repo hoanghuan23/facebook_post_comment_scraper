@@ -1203,6 +1203,9 @@ def test_scrape_source_last_24_hours_uses_unbounded_recent_fetch(monkeypatch):
 
         assert result.total_fetched == 1
         assert created_post is not None
+        assert created_post.current_likes == 1
+        assert len(created_post.metrics_history) == 1
+        assert created_post.metrics_history[0].likes_count == 1
         assert calls
         assert calls[0]["limit"] is None
         assert calls[0]["last_24_hours_only"] is True
@@ -1550,6 +1553,72 @@ def test_group_reaction_lookup_parses_detached_feedback_count_nested():
     parsed = group_post_scraper_v2._extract_feedback_reaction_count_from_node(feedback_node)
 
     assert parsed == 42
+
+
+def test_group_coerce_int_parses_reduced_count_strings():
+    assert group_post_scraper_v2._coerce_int(42) == 42
+    assert group_post_scraper_v2._coerce_int("42") == 42
+    assert group_post_scraper_v2._coerce_int("1,234") == 1234
+    assert group_post_scraper_v2._coerce_int("1.2K") == 1200
+    assert group_post_scraper_v2._coerce_int("3K") == 3000
+    assert group_post_scraper_v2._coerce_int("1.5M") == 1500000
+
+
+def test_group_feedback_metric_lookup_scans_nested_detached_feedback():
+    data = [
+        {
+            "node": {
+                "__typename": "Group",
+                "group_feed": {
+                    "edges": [
+                        {
+                            "node": {
+                                "__typename": "Story",
+                                "post_id": "post-nested",
+                            }
+                        }
+                    ]
+                },
+                "detached": {
+                    "feedback": {
+                        "id": "ZmVlZGJhY2s6nested",
+                        "reaction_count": {"count": {"count": "1.2K"}},
+                    }
+                },
+            }
+        }
+    ]
+
+    reaction_by_id, _ = group_post_scraper_v2._build_feedback_metric_lookups(data)
+
+    assert reaction_by_id["ZmVlZGJhY2s6nested"] == 1200
+
+
+def test_group_reaction_lookup_uses_nested_story_feedback_id():
+    story_node = {
+        "__typename": "Story",
+        "post_id": "post-with-nested-feedback-id",
+        "comet_sections": {
+            "feedback": {
+                "story": {
+                    "story_ufi_container": {
+                        "story": {
+                            "feedback_context": {
+                                "feedback_target_with_context": {
+                                    "id": "ZmVlZGJhY2s6story-nested",
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    }
+    detached_feedback_map = {"ZmVlZGJhY2s6story-nested": 27}
+
+    resolved = group_post_scraper_v2._resolve_story_reaction_count(story_node, detached_feedback_map)
+
+    assert resolved == 27
 
 
 def test_group_reaction_lookup_prefers_story_when_non_zero():
