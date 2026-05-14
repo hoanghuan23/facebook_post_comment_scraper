@@ -478,14 +478,14 @@ class PostCRUD:
     
     @staticmethod
     def get_recent_posts(db: Session, hours: int = 24, limit: int = 100) -> List[models.Post]:
-        """Get tracked posts created in last N hours (recent by created_at)."""
+        """Get tracked posts created in last N hours (recent by posted_at)."""
         cutoff_time = datetime.utcnow() - timedelta(hours=hours)
         return db.query(models.Post).filter(
             and_(
-                models.Post.created_at >= cutoff_time,
+                models.Post.posted_at >= cutoff_time,
                 models.Post.is_tracked == True
             )
-        ).order_by(desc(models.Post.created_at)).limit(limit).all()
+        ).order_by(desc(models.Post.posted_at)).limit(limit).all()
     
     @staticmethod
     def get_old_posts(db: Session, days: int = 30) -> List[models.Post]:

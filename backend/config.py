@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     # Proxy settings
     PROXY_ENABLED: bool = True
     PROXY_URL: Optional[str] = None
+    PROXY: Optional[str] = None
+    STATIC_PROXY: Optional[str] = None
+    ROTATING_PROXY: Optional[str] = None
     PROXY_ROTATION_ENABLED: bool = True
     PROXY_ROTATION_INTERVAL: int = 5  # xoay sau 5 requests tránh bị block IP
     

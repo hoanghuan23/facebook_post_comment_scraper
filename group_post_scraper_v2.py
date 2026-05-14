@@ -27,13 +27,26 @@ WRITE_DEBUG_FILES = os.getenv("SCRAPER_WRITE_DEBUG_FILES", "true").lower() == "t
 # ========= CONFIG (FILL THESE) =========
 GROUP_ID = "361726451351144"  # group id
 GROUP_NAME = None  # Will be extracted automatically
-DOC_ID = "25716860671307636"  # GroupsCometFeedRegularStoriesPaginationQuery
+GROUP_FEED_FRIENDLY_NAME = "GroupsCometFeedRegularStoriesPaginationQuery"
+DOC_ID = "26849346238033346"  # GroupsCometFeedRegularStoriesPaginationQuery
 
 HEADERS = {
-    "user-agent": "Mozilla/5.0",
+    "accept": "*/*",
+    "accept-language": "en-US,en;q=0.9",
     "content-type": "application/x-www-form-urlencoded",
     "origin": "https://www.facebook.com",
-    "referer": f"https://www.facebook.com/groups/{GROUP_ID}/",
+    "priority": "u=1, i",
+    "referer": f"https://www.facebook.com/groups/{GROUP_ID}",
+    "sec-ch-prefers-color-scheme": "light",
+    "sec-ch-ua": '"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-origin",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+    "x-asbd-id": "359341",
+    "x-fb-friendly-name": GROUP_FEED_FRIENDLY_NAME,
 }
 
 # Get proxy configuration
@@ -44,7 +57,9 @@ PROXIES = {'http': PROXY, 'https': PROXY} if PROXY else None
 COOKIES = {}
 
 # FB_DTSG token (set by UI when provided)
-FB_DTSG = ""
+FB_DTSG = os.getenv("FB_DTSG", "")
+LSD = os.getenv("FB_LSD", "pSvNTcwAmHL0yEdKD5oy1Y")
+JAZOEST = os.getenv("FB_JAZOEST", "25401")
 
 if PROXY:
     print(f"Using proxy: {PROXY}")
@@ -349,7 +364,7 @@ def clean_data_blocks(blocks):
 
 def parse_fb_response(text):
     """Parse Facebook response using the same logic as post_scraper"""
-    text = text.replace("for (;;);", "").strip()
+    text = text.replace("for (;;);", "").replace("for(;;);", "").strip()
 
     # Prefer line-by-line JSON parsing first because Facebook often streams
     # multiple JSON lines, including useful blocks without a top-level "data".
@@ -612,6 +627,7 @@ def extract_post_data(
     proxies=None,
     download_media=True,
     reaction_count_override=None,
+    share_count_override=None,
 ):
     """Extract relevant data from a post node"""
     if not node or node.get('__typename') != 'Story':
@@ -643,6 +659,8 @@ def extract_post_data(
     
     # Extract share count
     share_count = extract_share_count(node)
+    if share_count_override is not None:
+        share_count = share_count_override
     
     # Extract group name if not provided
     if not group_name:
@@ -741,6 +759,14 @@ def _extract_feedback_reaction_count_from_node(node):
     if not isinstance(node, dict):
         return None
 
+    renderer_feedback = (
+        node.get("comet_ufi_summary_and_actions_renderer", {})
+        .get("feedback")
+    )
+    parsed = _extract_feedback_reaction_count_from_node(renderer_feedback)
+    if parsed is not None:
+        return parsed
+
     reaction_count = node.get("reaction_count")
     if isinstance(reaction_count, dict):
         parsed = _coerce_int(_unwrap_count_value(reaction_count))
@@ -757,6 +783,26 @@ def _extract_feedback_reaction_count_from_node(node):
         if parsed is not None:
             return parsed
         parsed = _coerce_int(_unwrap_count_value(reactors.get("count")))
+        if parsed is not None:
+            return parsed
+
+    return None
+
+
+def _extract_feedback_share_count_from_node(node):
+    if not isinstance(node, dict):
+        return None
+
+    renderer_feedback = (
+        node.get("comet_ufi_summary_and_actions_renderer", {})
+        .get("feedback")
+    )
+    parsed = _extract_feedback_share_count_from_node(renderer_feedback)
+    if parsed is not None:
+        return parsed
+
+    for key in ("share_count", "share_count_reduced"):
+        parsed = _coerce_int(_unwrap_count_value(node.get(key)))
         if parsed is not None:
             return parsed
 
@@ -797,9 +843,16 @@ def fetch_posts(
     request_group_name = GROUP_NAME if group_name is None else group_name
     request_cookies = COOKIES if cookies is None else cookies
     request_fb_dtsg = FB_DTSG if fb_dtsg is None else fb_dtsg
+    request_lsd = (headers or {}).get("x-fb-lsd") or HEADERS.get("x-fb-lsd") or LSD
+    request_jazoest = JAZOEST
     request_proxies = PROXIES if proxies is None else proxies
-    request_headers = dict(HEADERS if headers is None else headers)
-    request_headers["referer"] = f"https://www.facebook.com/groups/{request_group_id}/"
+    request_headers = dict(HEADERS)
+    if headers:
+        request_headers.update(headers)
+    request_headers["referer"] = f"https://www.facebook.com/groups/{request_group_id}"
+    request_headers["x-fb-friendly-name"] = GROUP_FEED_FRIENDLY_NAME
+    if request_lsd:
+        request_headers["x-fb-lsd"] = request_lsd
 
     all_posts = []
     batch_posts = []
@@ -808,9 +861,9 @@ def fetch_posts(
     cutoff_time = datetime.now(timezone.utc) - timedelta(hours=24) if last_24_hours_only else None
     stop_due_to_time = False
     max_pages = int(os.getenv("SCRAPER_MAX_24H_PAGES", "100")) if last_24_hours_only else None
-    page_size = int(os.getenv("SCRAPER_GROUP_PAGE_SIZE", "10"))
+    page_size = int(os.getenv("SCRAPER_GROUP_PAGE_SIZE", "3"))
     if page_size <= 0:
-        page_size = 10
+        page_size = 3
     
     if min_comments > 0:
         print(f"Filtering posts with at least {min_comments} comments")
@@ -832,24 +885,62 @@ def fetch_posts(
             "cursor": cursor,
             "feedLocation": "GROUP",
             "feedType": "DISCUSSION",
-            "sortingSetting": "CHRONOLOGICAL",
             "feedbackSource": 0,
             "filterTopicId": None,
             "focusCommentID": None,
             "privacySelectorRenderLocation": "COMET_STREAM",
+            "referringStoryRenderLocation": None,
             "renderLocation": "group",
-            "scale": 2,
-            #"sortingSetting": "TOP_POSTS",
+            "scale": 1,
+            "sortingSetting": "CHRONOLOGICAL",
             "stream_initial_count": 1,
             "useDefaultActor": False,
+            "groupID": request_group_id,
             "id": request_group_id,
+            "__relay_internal__pv__GHLShouldChangeAdIdFieldNamerelayprovider": True,
+            "__relay_internal__pv__GHLShouldChangeSponsoredDataFieldNamerelayprovider": True,
+            "__relay_internal__pv__CometFeedStory_enable_reactor_facepilerelayprovider": False,
+            "__relay_internal__pv__CometFeedStory_enable_post_permalink_white_space_clickrelayprovider": False,
+            "__relay_internal__pv__CometUFICommentActionLinksRewriteEnabledrelayprovider": False,
+            "__relay_internal__pv__CometUFICommentAvatarStickerAnimatedImagerelayprovider": False,
+            "__relay_internal__pv__IsWorkUserrelayprovider": False,
+            "__relay_internal__pv__TestPilotShouldIncludeDemoAdUseCaserelayprovider": False,
+            "__relay_internal__pv__FBReels_deprecate_short_form_video_context_gkrelayprovider": True,
+            "__relay_internal__pv__FBReels_enable_view_dubbed_audio_type_gkrelayprovider": True,
+            "__relay_internal__pv__CometFeedShareMedia_shouldPrefetchShareImagerelayprovider": False,
+            "__relay_internal__pv__CometImmersivePhotoCanUserDisable3DMotionrelayprovider": False,
+            "__relay_internal__pv__WorkCometIsEmployeeGKProviderrelayprovider": False,
+            "__relay_internal__pv__IsMergQAPollsrelayprovider": False,
+            "__relay_internal__pv__FBReelsMediaFooter_comet_enable_reels_ads_gkrelayprovider": True,
+            "__relay_internal__pv__CometUFIReactionsEnableShortNamerelayprovider": False,
+            "__relay_internal__pv__CometUFICommentAutoTranslationTyperelayprovider": "AUTO_TRANSLATE",
+            "__relay_internal__pv__CometUFIShareActionMigrationrelayprovider": True,
+            "__relay_internal__pv__CometUFISingleLineUFIrelayprovider": True,
+            "__relay_internal__pv__relay_provider_comet_ufi_ssr_seo_deferrelayprovider": True,
+            "__relay_internal__pv__CometUFI_dedicated_comment_routable_dialog_gkrelayprovider": True,
+            "__relay_internal__pv__ReelsIFUCard_reelsIFULikeCountrelayprovider": False,
+            "__relay_internal__pv__FBReelsIFUTileContent_reelsIFUPlayOnHoverrelayprovider": True,
+            "__relay_internal__pv__GroupsCometGYSJFeedItemHeightrelayprovider": 206,
+            "__relay_internal__pv__ShouldEnableBakedInTextStoriesrelayprovider": False,
+            "__relay_internal__pv__StoriesShouldIncludeFbNotesrelayprovider": True,
         }
         
         payload = {
             "av": request_cookies.get("c_user", "0"),
+            "__aaid": "0",
             "__user": request_cookies.get("c_user", "0"),
             "__a": "1",
+            "__req": "1i",
+            "__comet_req": "15",
+            "dpr": "1",
+            "__ccg": "EXCELLENT",
             "fb_dtsg": request_fb_dtsg if request_fb_dtsg else "",
+            "jazoest": request_jazoest,
+            "lsd": request_lsd,
+            "__crn": "comet.fbweb.CometGroupDiscussionRoute",
+            "fb_api_caller_class": "RelayModern",
+            "fb_api_req_friendly_name": GROUP_FEED_FRIENDLY_NAME,
+            "server_timestamps": "true",
             "doc_id": DOC_ID,
             "variables": json.dumps(variables),
         }
@@ -896,9 +987,10 @@ def fetch_posts(
         #     json.dump(data, f, ensure_ascii=False, indent=2)
         # print(f"Saved group_raw_page_{page_num}.json")
         
-        # Build reaction lookup by feedback id. Some group responses return
-        # metrics in detached feedback blocks instead of Story nodes.
+        # Build metric lookups by feedback id. Authenticated group responses
+        # often return UFI counts in detached feedback blocks instead of Story nodes.
         feedback_reaction_count_by_id = {}
+        feedback_share_count_by_id = {}
         for item in data:
             if not isinstance(item, dict):
                 continue
@@ -911,6 +1003,9 @@ def fetch_posts(
             count = _extract_feedback_reaction_count_from_node(node)
             if count is not None:
                 feedback_reaction_count_by_id[feedback_id] = count
+            count = _extract_feedback_share_count_from_node(node)
+            if count is not None:
+                feedback_share_count_by_id[feedback_id] = count
 
         # Extract posts from the response array
         posts_found = 0
@@ -1005,6 +1100,14 @@ def fetch_posts(
                 if reaction_count is None:
                     reaction_count = 0
 
+                share_count = _coerce_int(extract_share_count(story_node))
+                if share_count in (None, 0):
+                    feedback_id = (story_node.get("feedback") or {}).get("id")
+                    if feedback_id and feedback_id in feedback_share_count_by_id:
+                        share_count = feedback_share_count_by_id[feedback_id]
+                if share_count is None:
+                    share_count = 0
+
                 post_data = extract_post_data(
                     story_node,
                     request_group_name,
@@ -1014,6 +1117,7 @@ def fetch_posts(
                     proxies=request_proxies,
                     download_media=download_media,
                     reaction_count_override=reaction_count,
+                    share_count_override=share_count,
                 )
                 if post_data:
                     post_data["group_id"] = request_group_id
@@ -1078,7 +1182,7 @@ def fetch_posts(
 
         if posts_found == 0:
             print(
-                "Chan doan response:"
+                "Chuẩn đoán response:"
                 f" blocks={response_summary['total_blocks']},"
                 f" group_nodes={response_summary['group_nodes']},"
                 f" group_feed_edges={response_summary['group_feed_edges']},"
@@ -1100,14 +1204,14 @@ def fetch_posts(
                     )
             if response_summary["group_nodes"] > 0 and response_summary["group_feed_edges"] == 0 and response_summary["story_nodes"] == 0:
                 print(
-                    "  Nghi ngo: response co Group node nhung khong co feed edges."
-                    " Thuong do session khong xem duoc noi dung group,"
-                    " user khong con la member, hoac Facebook da doi schema query."
+                    "  Nghi ngờ: response có Group node nhưng không có feed edges."
+                    " Thường do session không xem được nội dung group,"
+                    " user không còn là member, hoặc Facebook đã đổi schema query."
                 )
             elif response_summary["group_nodes"] == 0 and response_summary["story_nodes"] == 0:
                 print(
-                    "  Nghi ngo: response khong chua Group/Story node."
-                    " Kha nang cao la payload/doc_id/schema khong con khop."
+                    "  Nghi ngờ: response không chứa Group/Story node."
+                    " Khả năng cao là payload/doc_id/schema không còn khớp."
                 )
 
             if WRITE_DEBUG_FILES:
@@ -1119,7 +1223,7 @@ def fetch_posts(
                     f.write(r.text)
                 with open(parsed_path, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
-                print(f"  Da luu debug: {raw_path}, {parsed_path}")
+                print(f"  Đã lưu debug: {raw_path}, {parsed_path}")
 
         if stop_due_to_time:
             print("Đã gặp post cũ hơn 24h. Dừng phân trang.")
