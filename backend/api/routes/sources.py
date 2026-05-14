@@ -5,6 +5,7 @@ import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from backend.api.auth import get_current_user
@@ -25,16 +26,20 @@ from backend.database.schemas import (
     CreateSourceResult,
     SourceCreate,
     SourceDetail,
+    SourceScheduleStatsResponse,
     SourceResponse,
     SourceUpdate,
     PostResponse,
 )
+from backend.services.schedule_service import TIER_CONFIG, calculate_tier
 from backend.scraper.facebook_service import FacebookScraperService
 from backend.utils.facebook_url_parser import FacebookURLParser, FacebookSourceType
 from backend.utils.permission_checker import FacebookPermissionChecker, SourceAccessValidator
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+TIER_INTERVAL_MAP = {cfg["tier"]: cfg["interval_minutes"] for cfg in TIER_CONFIG}
 
 
 def _format_source_label(source_id: int, source_name: str = None) -> str:
@@ -297,6 +302,53 @@ async def get_source(
     detail.post_count = stats["posts_count"]
     
     return detail
+
+
+@router.get("/{source_id}/stats", response_model=SourceScheduleStatsResponse)
+async def get_source_schedule_stats(
+    source_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return suggested schedule tier and current applied schedule state for a source."""
+    source = SourceCRUD.get_by_id(db, source_id)
+    if not source or source.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    suggested = calculate_tier(source_id, db)
+    current_state = db.execute(
+        text(
+            """
+            SELECT schedule_tier, schedule_override_minutes, next_scrape
+            FROM sources
+            WHERE id = :source_id
+            """
+        ),
+        {"source_id": source_id},
+    ).fetchone()
+
+    if not current_state:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    override_minutes = current_state.schedule_override_minutes
+    is_overridden = override_minutes is not None
+    current_tier = current_state.schedule_tier
+    current_interval = override_minutes if is_overridden else TIER_INTERVAL_MAP.get(current_tier)
+
+    return SourceScheduleStatsResponse(
+        suggested_tier=suggested["tier"],
+        suggested_interval_minutes=suggested["interval_minutes"],
+        engagement_available=suggested["engagement_available"],
+        data_days=suggested["data_days"],
+        avg_posts_per_day=suggested["avg_posts_per_day"],
+        avg_engagement_rate=suggested["avg_engagement_rate"],
+        tier_reason=suggested["reason"],
+        current_tier=current_tier,
+        current_interval_minutes=current_interval,
+        is_overridden=is_overridden,
+        override_minutes=override_minutes,
+        next_scrape=current_state.next_scrape,
+    )
 
 
 @router.put("/{source_id}", response_model=SourceResponse)

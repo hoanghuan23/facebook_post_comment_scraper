@@ -3,11 +3,12 @@ from types import SimpleNamespace
 import json
 
 from fastapi import BackgroundTasks
+from sqlalchemy import text
 from backend.database.crud import CommentCRUD, FacebookSessionCRUD, PostCRUD, SourceCRUD, UserCRUD
 from backend.database.db import SessionLocal, engine
 from backend.database.models import Base, ScrapeJob, ScraperLog
 from backend.database.schemas import SourceCreate
-from backend.api.routes.sources import _bootstrap_scrape_source_last_24h, create_source
+from backend.api.routes.sources import _bootstrap_scrape_source_last_24h, create_source, get_source_schedule_stats
 from backend.scraper.facebook_service import (
     FacebookScraperService,
     _load_json_dict,
@@ -1917,6 +1918,138 @@ def test_create_source_batch_all_success(monkeypatch):
         assert len(result.created) == 2
         assert len(result.errors) == 0
         assert len(added_tasks) == 2
+    finally:
+        db.close()
+
+
+def test_get_source_schedule_stats_returns_suggested_and_current_state():
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="source-stats-user", email="source-stats-user@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-source-stats",
+            facebook_url="https://www.facebook.com/groups/group-source-stats",
+            source_name="Source Stats",
+        )
+
+        source.member_count = 1000
+        source.schedule_tier = 1
+        source.schedule_override_minutes = None
+        source.next_scrape = datetime(2026, 5, 14, 10, 35, 0)
+        db.commit()
+
+        analytics_rows = [
+                {
+                    "date": datetime(2026, 5, 9, 0, 0, 0),
+                    "total_posts": 10,
+                    "total_likes": 30,
+                    "total_shares": 6,
+                    "total_comments": 6,
+                    "avg_likes_per_post": 30.0,
+                },
+                {
+                    "date": datetime(2026, 5, 10, 0, 0, 0),
+                    "total_posts": 12,
+                    "total_likes": 30,
+                    "total_shares": 6,
+                    "total_comments": 6,
+                    "avg_likes_per_post": 25.0,
+                },
+                {
+                    "date": datetime(2026, 5, 11, 0, 0, 0),
+                    "total_posts": 11,
+                    "total_likes": 30,
+                    "total_shares": 6,
+                    "total_comments": 6,
+                    "avg_likes_per_post": 27.0,
+                },
+                {
+                    "date": datetime(2026, 5, 12, 0, 0, 0),
+                    "total_posts": 13,
+                    "total_likes": 30,
+                    "total_shares": 6,
+                    "total_comments": 6,
+                    "avg_likes_per_post": 28.0,
+                },
+                {
+                    "date": datetime(2026, 5, 13, 0, 0, 0),
+                    "total_posts": 14,
+                    "total_likes": 30,
+                    "total_shares": 6,
+                    "total_comments": 6,
+                    "avg_likes_per_post": 29.0,
+                },
+                {
+                    "date": datetime(2026, 5, 14, 0, 0, 0),
+                    "total_posts": 15,
+                    "total_likes": 30,
+                    "total_shares": 6,
+                    "total_comments": 6,
+                    "avg_likes_per_post": 31.0,
+                },
+                {
+                    "date": datetime(2026, 5, 15, 0, 0, 0),
+                    "total_posts": 16,
+                    "total_likes": 30,
+                    "total_shares": 6,
+                    "total_comments": 6,
+                    "avg_likes_per_post": 32.0,
+                },
+        ]
+
+        for row in analytics_rows:
+            db.execute(
+                text(
+                    """
+                    INSERT INTO analytics_cache (
+                        source_id, date, total_posts, total_likes, total_shares,
+                        total_comments, avg_likes_per_post, cached_at
+                    )
+                    VALUES (
+                        :source_id, :date, :total_posts, :total_likes, :total_shares,
+                        :total_comments, :avg_likes_per_post, :cached_at
+                    )
+                    """
+                ),
+                {
+                    "source_id": source.id,
+                    "date": row["date"],
+                    "total_posts": row["total_posts"],
+                    "total_likes": row["total_likes"],
+                    "total_shares": row["total_shares"],
+                    "total_comments": row["total_comments"],
+                    "avg_likes_per_post": row["avg_likes_per_post"],
+                    "cached_at": datetime.utcnow(),
+                },
+            )
+        db.commit()
+
+        import asyncio
+
+        result = asyncio.run(
+            get_source_schedule_stats(
+                source_id=source.id,
+                current_user=user,
+                db=db,
+            )
+        )
+
+        assert result.suggested_tier == 2
+        assert result.suggested_interval_minutes == 60
+        assert result.engagement_available is True
+        assert result.data_days == 7
+        assert result.avg_posts_per_day == 13.0
+        assert result.avg_engagement_rate == 0.042
+        assert result.current_tier == 1
+        assert result.current_interval_minutes == 15
+        assert result.is_overridden is False
+        assert result.override_minutes is None
+        assert result.next_scrape == datetime(2026, 5, 14, 10, 35, 0)
+        assert "avg 13.0 posts" in result.tier_reason
+        assert "engagement 4.20%" in result.tier_reason
     finally:
         db.close()
 

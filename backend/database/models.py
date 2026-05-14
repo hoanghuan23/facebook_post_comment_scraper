@@ -115,6 +115,8 @@ class Source(Base):
     is_accessible = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     last_scraped = Column(DateTime, nullable=True)
+    schedule_tier = Column(Integer, nullable=True)
+    schedule_override_minutes = Column(Integer, nullable=True)
     next_scrape = Column(DateTime, nullable=True)
 
     user = relationship("User", back_populates="sources")

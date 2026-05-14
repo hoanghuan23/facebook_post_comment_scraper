@@ -118,6 +118,22 @@ class SourceDetail(SourceResponse):
     permission_checked_at: Optional[datetime] = None
 
 
+class SourceScheduleStatsResponse(BaseModel):
+    """Suggested and current schedule stats for a source."""
+    suggested_tier: Optional[int] = None
+    suggested_interval_minutes: Optional[int] = None
+    engagement_available: bool
+    data_days: int
+    avg_posts_per_day: float
+    avg_engagement_rate: Optional[float] = None
+    tier_reason: str
+    current_tier: Optional[int] = None
+    current_interval_minutes: Optional[int] = None
+    is_overridden: bool
+    override_minutes: Optional[int] = None
+    next_scrape: Optional[datetime] = None
+
+
 # ==================== POST SCHEMAS ====================
 
 class PostCreate(BaseModel):
