@@ -8,7 +8,13 @@ from backend.database.crud import CommentCRUD, FacebookSessionCRUD, PostCRUD, So
 from backend.database.db import SessionLocal, engine
 from backend.database.models import Base, ScrapeJob, ScraperLog
 from backend.database.schemas import SourceCreate
-from backend.api.routes.sources import _bootstrap_scrape_source_last_24h, create_source, get_source_schedule_stats
+from backend.api.routes.sources import (
+    _bootstrap_scrape_source_last_24h,
+    auto_schedule_sources,
+    create_source,
+    get_source_schedule_stats,
+    get_sources_ranking,
+)
 from backend.scraper.facebook_service import (
     FacebookScraperService,
     _load_json_dict,
@@ -2050,6 +2056,151 @@ def test_get_source_schedule_stats_returns_suggested_and_current_state():
         assert result.next_scrape == datetime(2026, 5, 14, 10, 35, 0)
         assert "avg 13.0 posts" in result.tier_reason
         assert "engagement 4.20%" in result.tier_reason
+    finally:
+        db.close()
+
+
+def test_get_sources_ranking_returns_ranked_user_sources_and_tier_distribution():
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="ranking-user", email="ranking-user@example.com", password="secret123")
+        other_user = UserCRUD.create(db, username="ranking-other", email="ranking-other@example.com", password="secret123")
+        hot_source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="ranking-hot",
+            facebook_url="https://www.facebook.com/groups/ranking-hot",
+            source_name="Hot Source",
+        )
+        warm_source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="ranking-warm",
+            facebook_url="https://www.facebook.com/groups/ranking-warm",
+            source_name="Warm Source",
+        )
+        frozen_source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="ranking-frozen",
+            facebook_url="https://www.facebook.com/groups/ranking-frozen",
+            source_name="Frozen Source",
+        )
+        other_source = SourceCRUD.create(
+            db,
+            user_id=other_user.id,
+            source_type="group",
+            facebook_id="ranking-other-hot",
+            facebook_url="https://www.facebook.com/groups/ranking-other-hot",
+            source_name="Other Hot Source",
+        )
+
+        today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        fixtures = [
+            (hot_source, 20, 50, 5, 5, 1, None),
+            (warm_source, 10, 16, 2, 2, 2, 30),
+            (other_source, 50, 100, 10, 10, 1, None),
+        ]
+        for source, posts, likes, shares, comments, current_tier, override_minutes in fixtures:
+            source.member_count = 1000
+            source.schedule_tier = current_tier
+            source.schedule_override_minutes = override_minutes
+            db.execute(
+                text(
+                    """
+                    INSERT INTO analytics_cache (
+                        source_id, date, total_posts, total_likes, total_shares,
+                        total_comments, avg_likes_per_post, cached_at
+                    )
+                    VALUES (
+                        :source_id, :date, :total_posts, :total_likes, :total_shares,
+                        :total_comments, :avg_likes_per_post, :cached_at
+                    )
+                    """
+                ),
+                {
+                    "source_id": source.id,
+                    "date": today,
+                    "total_posts": posts,
+                    "total_likes": likes,
+                    "total_shares": shares,
+                    "total_comments": comments,
+                    "avg_likes_per_post": likes / posts,
+                    "cached_at": datetime.utcnow(),
+                },
+            )
+        db.commit()
+
+        import asyncio
+
+        result = asyncio.run(
+            get_sources_ranking(
+                sort="posts_per_day",
+                limit=2,
+                current_user=user,
+                db=db,
+            )
+        )
+
+        assert result.total_sources == 3
+        assert result.tier_distribution == {"tier_1": 1, "tier_2": 1, "tier_3": 0, "tier_4": 1}
+        assert [item.source_id for item in result.sources] == [hot_source.id, warm_source.id]
+        assert [item.rank for item in result.sources] == [1, 2]
+        assert result.sources[0].avg_posts_per_day == 20.0
+        assert result.sources[0].avg_engagement_rate == 0.06
+        assert result.sources[0].suggested_tier == 1
+        assert result.sources[0].current_tier == 1
+        assert result.sources[0].is_overridden is False
+        assert result.sources[1].suggested_tier == 2
+        assert result.sources[1].is_overridden is True
+
+        tier_sorted = asyncio.run(
+            get_sources_ranking(
+                sort="tier",
+                current_user=user,
+                db=db,
+            )
+        )
+        assert [item.source_id for item in tier_sorted.sources] == [
+            hot_source.id,
+            warm_source.id,
+            frozen_source.id,
+        ]
+    finally:
+        db.close()
+
+
+def test_auto_schedule_sources_returns_service_summary(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="auto-schedule-user", email="auto-schedule-user@example.com", password="secret123")
+        expected = {
+            "processed": 11,
+            "skipped_override": 1,
+            "no_change": 9,
+            "tier_summary": {1: 2, 2: 4, 3: 3, 4: 2},
+            "changes": [
+                {"source_id": 5, "old_tier": 3, "new_tier": 4, "action": "paused"},
+                {"source_id": 9, "old_tier": 2, "new_tier": 1, "action": "scheduled"},
+            ],
+        }
+        calls = []
+
+        def fake_apply_schedule_all(user_id, session):
+            calls.append((user_id, session))
+            return expected
+
+        monkeypatch.setattr("backend.api.routes.sources.apply_schedule_all", fake_apply_schedule_all)
+
+        import asyncio
+
+        result = asyncio.run(auto_schedule_sources(current_user=user, db=db))
+
+        assert result is expected
+        assert calls == [(user.id, db)]
     finally:
         db.close()
 

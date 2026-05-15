@@ -1,9 +1,9 @@
 # Source management routes
 from datetime import datetime, timedelta
-from typing import List, Union
+from typing import Annotated, List, Literal, Union
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -26,12 +26,13 @@ from backend.database.schemas import (
     CreateSourceResult,
     SourceCreate,
     SourceDetail,
+    SourceRankingResponse,
     SourceScheduleStatsResponse,
     SourceResponse,
     SourceUpdate,
     PostResponse,
 )
-from backend.services.schedule_service import TIER_CONFIG, calculate_tier
+from backend.services.schedule_service import TIER_CONFIG, apply_schedule_all, calculate_tier
 from backend.scraper.facebook_service import FacebookScraperService
 from backend.utils.facebook_url_parser import FacebookURLParser, FacebookSourceType
 from backend.utils.permission_checker import FacebookPermissionChecker, SourceAccessValidator
@@ -284,6 +285,82 @@ async def list_sources(
     if active_only:
         return SourceCRUD.get_active_sources(db, current_user.id)
     return SourceCRUD.get_by_user(db, current_user.id, skip=skip, limit=limit)
+
+
+@router.get("/ranking", response_model=SourceRankingResponse)
+async def get_sources_ranking(
+    sort: Literal["posts_per_day", "engagement", "tier"] = "posts_per_day",
+    limit: Annotated[int, Query(ge=1)] = 50,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Rank current user's sources by calculated activity, engagement, or tier."""
+    sources = SourceCRUD.get_by_user(db, current_user.id, limit=100000)
+    tier_distribution = {f"tier_{tier}": 0 for tier in range(1, 5)}
+    ranked_sources = []
+
+    for source in sources:
+        suggested = calculate_tier(source.id, db)
+        suggested_tier = suggested["tier"] or 4
+        tier_distribution[f"tier_{suggested_tier}"] += 1
+        ranked_sources.append(
+            {
+                "source_id": source.id,
+                "source_name": source.source_name,
+                "avg_posts_per_day": suggested["avg_posts_per_day"],
+                "avg_engagement_rate": suggested["avg_engagement_rate"],
+                "engagement_available": suggested["engagement_available"],
+                "data_days": suggested["data_days"],
+                "suggested_tier": suggested_tier,
+                "current_tier": source.schedule_tier,
+                "is_overridden": source.schedule_override_minutes is not None,
+            }
+        )
+
+    if sort == "engagement":
+        ranked_sources.sort(
+            key=lambda item: (
+                item["avg_engagement_rate"] is not None,
+                item["avg_engagement_rate"] or 0,
+                item["avg_posts_per_day"],
+            ),
+            reverse=True,
+        )
+    elif sort == "tier":
+        ranked_sources.sort(
+            key=lambda item: (
+                item["suggested_tier"],
+                -item["avg_posts_per_day"],
+                -(item["avg_engagement_rate"] or 0),
+            )
+        )
+    else:
+        ranked_sources.sort(
+            key=lambda item: (
+                item["avg_posts_per_day"],
+                item["avg_engagement_rate"] or 0,
+            ),
+            reverse=True,
+        )
+
+    limited_sources = ranked_sources[:limit]
+    for rank, item in enumerate(limited_sources, start=1):
+        item["rank"] = rank
+
+    return SourceRankingResponse(
+        total_sources=len(sources),
+        tier_distribution=tier_distribution,
+        sources=limited_sources,
+    )
+
+
+@router.post("/auto-schedule")
+async def auto_schedule_sources(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Apply automatic schedule tiers to all sources for current user."""
+    return apply_schedule_all(current_user.id, db)
 
 
 @router.get("/{source_id}", response_model=SourceDetail)

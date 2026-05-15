@@ -134,6 +134,27 @@ class SourceScheduleStatsResponse(BaseModel):
     next_scrape: Optional[datetime] = None
 
 
+class SourceRankingItem(BaseModel):
+    """Single source ranking item based on calculated schedule tier metrics."""
+    rank: int
+    source_id: int
+    source_name: Optional[str] = None
+    avg_posts_per_day: float
+    avg_engagement_rate: Optional[float] = None
+    engagement_available: bool
+    data_days: int
+    suggested_tier: int
+    current_tier: Optional[int] = None
+    is_overridden: bool
+
+
+class SourceRankingResponse(BaseModel):
+    """Ranking response for all sources owned by the current user."""
+    total_sources: int
+    tier_distribution: dict[str, int]
+    sources: List[SourceRankingItem]
+
+
 # ==================== POST SCHEMAS ====================
 
 class PostCreate(BaseModel):
