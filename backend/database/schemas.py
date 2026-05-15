@@ -143,6 +143,13 @@ class SourceScheduleStatsResponse(BaseModel):
     next_scrape: Optional[datetime] = None
 
 
+class SourceAnalyticsStatsResponse(BaseModel):
+    """Aggregated analytics stats for a source."""
+    total_likes: int = 0
+    total_shares: int = 0
+    total_comments: int = 0
+
+
 class SourceRankingItem(BaseModel):
     """Single source ranking item based on calculated schedule tier metrics."""
     rank: int

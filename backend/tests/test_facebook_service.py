@@ -1931,7 +1931,7 @@ def test_create_source_batch_all_success(monkeypatch):
         db.close()
 
 
-def test_get_source_schedule_stats_returns_suggested_and_current_state():
+def test_get_source_schedule_stats_returns_analytics_totals():
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="source-stats-user", email="source-stats-user@example.com", password="secret123")
@@ -2046,19 +2046,9 @@ def test_get_source_schedule_stats_returns_suggested_and_current_state():
             )
         )
 
-        assert result.suggested_tier == 2
-        assert result.suggested_interval_minutes == 60
-        assert result.engagement_available is True
-        assert result.data_days == 7
-        assert result.avg_posts_per_day == 13.0
-        assert result.avg_engagement_rate == 0.042
-        assert result.current_tier == 1
-        assert result.current_interval_minutes == 15
-        assert result.is_overridden is False
-        assert result.override_minutes is None
-        assert result.next_scrape == datetime(2026, 5, 14, 10, 35, 0)
-        assert "avg 13.0 posts" in result.tier_reason
-        assert "engagement 4.20%" in result.tier_reason
+        assert result.total_likes == 210
+        assert result.total_shares == 42
+        assert result.total_comments == 42
     finally:
         db.close()
 
