@@ -21,6 +21,7 @@ from backend.api.routes.sources import (
 from backend.scraper.facebook_service import (
     FacebookScraperService,
     _load_json_dict,
+    _coerce_count,
     _coerce_datetime,
     _normalize_group_post,
     _normalize_timeline_post,
@@ -139,6 +140,31 @@ def test_normalize_group_post_maps_metrics_and_media_flags():
     assert normalized["media_count"] == 1
     assert normalized["has_images"] is True
     assert normalized["has_videos"] is False
+
+
+def test_coerce_count_parses_compact_facebook_counts():
+    assert _coerce_count("2K") == 2000
+    assert _coerce_count("1.2K") == 1200
+    assert _coerce_count("1,2K") == 1200
+    assert _coerce_count("1,234") == 1234
+    assert _coerce_count("bad-value") == 0
+
+
+def test_normalize_group_post_parses_compact_metric_counts():
+    normalized = _normalize_group_post(
+        {
+            "post_id": "compact-1",
+            "reaction_count": "2K",
+            "share_count": "1.2K",
+            "comment_count": "1,234",
+            "photos": [],
+            "videos": [],
+        }
+    )
+
+    assert normalized["likes_count"] == 2000
+    assert normalized["shares_count"] == 1200
+    assert normalized["comments_count"] == 1234
 
 
 def test_normalize_timeline_post_maps_media_and_text():
@@ -533,8 +559,8 @@ def test_scrape_group_source_saves_only_top_level_comments_when_replies_enabled(
                         "author_name": "User One",
                         "author_url": "https://facebook.com/u1",
                         "text": "Top level",
-                        "reaction_count": 2,
-                        "reply_count": 1,
+                        "reaction_count": "2K",
+                        "reply_count": "1.2K",
                         "_feedback_id": "feedback-c1",
                         "_expansion_token": "token-c1",
                     }
@@ -561,7 +587,8 @@ def test_scrape_group_source_saves_only_top_level_comments_when_replies_enabled(
         assert top_comment is not None
         assert top_comment.post_id == post.id
         assert top_comment.depth_level == 0
-        assert top_comment.reply_count == 1
+        assert top_comment.likes_count == 2000
+        assert top_comment.reply_count == 1200
         assert fetch_replies_called["called"] is False
         assert CommentCRUD.get_replies(db, "c1") == []
         assert CommentCRUD.count_by_post(db, post.id) == 1

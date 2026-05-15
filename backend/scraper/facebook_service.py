@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 import base64
 import json
 import logging
+import re
 
 from sqlalchemy.orm import Session
 
@@ -93,6 +94,50 @@ def _coerce_datetime(value: Any) -> Optional[datetime]:
     return None
 
 
+def _coerce_count(value: Any) -> int:
+    """Convert Facebook compact count values like 2K or 1.2M to integers."""
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+
+    if isinstance(value, dict):
+        for key in ("count", "value", "text", "total_count"):
+            if key in value:
+                return _coerce_count(value.get(key))
+        return 0
+
+    if isinstance(value, str):
+        candidate = value.strip()
+        if not candidate:
+            return 0
+
+        match = re.search(r"(\d[\d.,]*)\s*([KMB])?", candidate, re.IGNORECASE)
+        if not match:
+            return 0
+
+        number_text = match.group(1)
+        suffix = (match.group(2) or "").upper()
+        if suffix and "," in number_text and "." not in number_text:
+            number_text = number_text.replace(",", ".")
+        else:
+            number_text = number_text.replace(",", "")
+
+        try:
+            number = float(number_text)
+        except ValueError:
+            return 0
+
+        multiplier = {"K": 1_000, "M": 1_000_000, "B": 1_000_000_000}.get(suffix, 1)
+        return int(number * multiplier)
+
+    return 0
+
+
 def _normalize_group_post(post: Dict[str, Any]) -> Dict[str, Any]:
     photos = post.get("photos") or []
     videos = post.get("videos") or []
@@ -102,9 +147,9 @@ def _normalize_group_post(post: Dict[str, Any]) -> Dict[str, Any]:
         "facebook_url": post.get("permalink") or "",
         "content": post.get("message") or None,
         "posted_at": posted_at,
-        "likes_count": int(post.get("reaction_count") or 0),
-        "shares_count": int(post.get("share_count") or 0),
-        "comments_count": int(post.get("comment_count") or 0),
+        "likes_count": _coerce_count(post.get("reaction_count")),
+        "shares_count": _coerce_count(post.get("share_count")),
+        "comments_count": _coerce_count(post.get("comment_count")),
         "media_count": len(photos) + len(videos),
         "has_images": bool(photos),
         "has_videos": bool(videos),
@@ -119,9 +164,9 @@ def _normalize_timeline_post(post: Dict[str, Any]) -> Dict[str, Any]:
         "facebook_url": post.get("permalink") or "",
         "content": post.get("text") or None,
         "posted_at": posted_at,
-        "likes_count": int(post.get("reaction_count") or 0),
-        "shares_count": int(post.get("share_count") or 0),
-        "comments_count": int(post.get("comment_count") or 0),
+        "likes_count": _coerce_count(post.get("reaction_count")),
+        "shares_count": _coerce_count(post.get("share_count")),
+        "comments_count": _coerce_count(post.get("comment_count")),
         "media_count": len(media),
         "has_images": any(item.get("type") == "photo" for item in media),
         "has_videos": any(item.get("type") == "video" for item in media),
@@ -314,8 +359,8 @@ class FacebookScraperService:
                 commenter_id=comment.get("author_id"),
                 commenter_name=comment.get("author_name"),
                 commenter_url=comment.get("author_url"),
-                likes_count=int(comment.get("reaction_count") or 0),
-                reply_count=int(comment.get("reply_count") or 0),
+                likes_count=_coerce_count(comment.get("reaction_count")),
+                reply_count=_coerce_count(comment.get("reply_count")),
                 depth_level=0,
             )
             saved_count += 1
