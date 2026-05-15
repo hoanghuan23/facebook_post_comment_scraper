@@ -311,11 +311,64 @@ class SourceCRUD:
         return db.query(models.Source).filter(models.Source.id == source_id).first()
     
     @staticmethod
-    def get_by_user(db: Session, user_id: int, skip: int = 0, limit: int = 100) -> List[models.Source]:
-        """Get all sources for a user"""
-        return db.query(models.Source).filter(
-            models.Source.user_id == user_id
-        ).offset(skip).limit(limit).all()
+    def get_by_user(
+        db: Session,
+        user_id: int,
+        skip: int = 0,
+        limit: int = 100,
+        active_only: bool = False,
+        tiers: Optional[List[int]] = None,
+        sort: str = "created_at",
+    ) -> List[models.Source]:
+        """Get all sources for a user."""
+        query = db.query(models.Source).filter(models.Source.user_id == user_id)
+
+        if active_only:
+            query = query.filter(models.Source.is_active == True)
+
+        if tiers:
+            query = query.filter(models.Source.schedule_tier.in_(tiers))
+
+        if sort in {"posts_today", "engagement"}:
+            today = datetime.utcnow().date().isoformat()
+            today_metrics = (
+                db.query(
+                    models.AnalyticsCache.source_id.label("source_id"),
+                    func.sum(models.AnalyticsCache.total_posts).label("posts_today"),
+                    func.sum(
+                        models.AnalyticsCache.total_likes
+                        + models.AnalyticsCache.total_shares
+                        + models.AnalyticsCache.total_comments
+                    ).label("engagement"),
+                )
+                .filter(func.date(models.AnalyticsCache.date) == today)
+                .group_by(models.AnalyticsCache.source_id)
+                .subquery()
+            )
+            query = query.outerjoin(today_metrics, today_metrics.c.source_id == models.Source.id)
+
+            if sort == "posts_today":
+                query = query.order_by(
+                    desc(func.coalesce(today_metrics.c.posts_today, 0)),
+                    desc(models.Source.created_at),
+                    desc(models.Source.id),
+                )
+            else:
+                query = query.order_by(
+                    desc(func.coalesce(today_metrics.c.engagement, 0)),
+                    desc(models.Source.created_at),
+                    desc(models.Source.id),
+                )
+        elif sort == "tier":
+            query = query.order_by(
+                func.coalesce(models.Source.schedule_tier, 5),
+                desc(models.Source.created_at),
+                desc(models.Source.id),
+            )
+        else:
+            query = query.order_by(desc(models.Source.created_at), desc(models.Source.id))
+
+        return query.offset(skip).limit(limit).all()
     
     @staticmethod
     def get_active_sources(db: Session, user_id: int) -> List[models.Source]:
@@ -360,11 +413,13 @@ class SourceCRUD:
         allowed_fields = {
             'source_name', 'description', 'include_comments',
             'max_days_old', 'is_active', 'member_count',
-            'permission_status', 'is_accessible', 'permission_checked_at'
+            'permission_status', 'is_accessible', 'permission_checked_at',
+            'schedule_override_minutes',
         }
+        nullable_fields = {'schedule_override_minutes'}
         
         for key, value in kwargs.items():
-            if key in allowed_fields and value is not None:
+            if key in allowed_fields and (value is not None or key in nullable_fields):
                 setattr(source, key, value)
         
         db.commit()

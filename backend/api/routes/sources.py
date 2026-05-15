@@ -1,9 +1,10 @@
 # Source management routes
 from datetime import datetime, timedelta
-from typing import Annotated, List, Literal, Union
+from typing import Annotated, List, Literal, Optional, Union
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -30,9 +31,10 @@ from backend.database.schemas import (
     SourceScheduleStatsResponse,
     SourceResponse,
     SourceUpdate,
+    SourceUpdateResponse,
     PostResponse,
 )
-from backend.services.schedule_service import TIER_CONFIG, apply_schedule_all, calculate_tier
+from backend.services.schedule_service import TIER_CONFIG, apply_schedule, apply_schedule_all, calculate_tier
 from backend.scraper.facebook_service import FacebookScraperService
 from backend.utils.facebook_url_parser import FacebookURLParser, FacebookSourceType
 from backend.utils.permission_checker import FacebookPermissionChecker, SourceAccessValidator
@@ -273,18 +275,42 @@ async def create_source(
     )
 
 
-@router.get("/", response_model=List[SourceResponse])
+def _serialize_source(source, include_stats: bool = False) -> dict:
+    item = SourceResponse.model_validate(source).model_dump()
+    if include_stats:
+        item.update(
+            {
+                "schedule_tier": source.schedule_tier,
+                "schedule_override_minutes": source.schedule_override_minutes,
+                "next_scrape": source.next_scrape,
+            }
+        )
+    return jsonable_encoder(item)
+
+
+@router.get("/")
 async def list_sources(
     skip: int = 0,
     limit: int = 100,
     active_only: bool = False,
+    sort: Literal["created_at", "posts_today", "engagement", "tier"] = "created_at",
+    tier: Optional[List[int]] = Query(default=None, ge=1, le=4),
+    include_stats: bool = False,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """List all sources for current user."""
-    if active_only:
-        return SourceCRUD.get_active_sources(db, current_user.id)
-    return SourceCRUD.get_by_user(db, current_user.id, skip=skip, limit=limit)
+    selected_tiers = tier if isinstance(tier, list) else None
+    sources = SourceCRUD.get_by_user(
+        db,
+        current_user.id,
+        skip=skip,
+        limit=limit,
+        active_only=active_only,
+        tiers=selected_tiers,
+        sort=sort,
+    )
+    return [_serialize_source(source, include_stats=include_stats) for source in sources]
 
 
 @router.get("/ranking", response_model=SourceRankingResponse)
@@ -428,7 +454,7 @@ async def get_source_schedule_stats(
     )
 
 
-@router.put("/{source_id}", response_model=SourceResponse)
+@router.put("/{source_id}", response_model=SourceUpdateResponse)
 async def update_source(
     source_id: int,
     source_data: SourceUpdate,
@@ -441,11 +467,29 @@ async def update_source(
         raise HTTPException(status_code=404, detail="Source not found")
 
     payload = source_data.model_dump(exclude_unset=True)
+    schedule_override_requested = "schedule_override_minutes" in payload
     updated_source = SourceCRUD.update(db, source_id, **payload)
     if not updated_source:
         raise HTTPException(status_code=500, detail="Failed to update source")
 
-    return updated_source
+    suggested_tier = None
+    if schedule_override_requested:
+        schedule_result = apply_schedule(source_id, db)
+        if schedule_result.get("error"):
+            raise HTTPException(status_code=500, detail=schedule_result["error"])
+        updated_source = SourceCRUD.get_by_id(db, source_id)
+
+    if schedule_override_requested or updated_source.schedule_override_minutes is not None:
+        suggested = calculate_tier(source_id, db)
+        suggested_tier = suggested.get("tier") or 4
+
+    response = SourceUpdateResponse.model_validate(updated_source)
+    response.is_overridden = updated_source.schedule_override_minutes is not None
+    response.override_minutes = updated_source.schedule_override_minutes
+    response.suggested_tier = suggested_tier
+    response.next_scrape = updated_source.next_scrape
+
+    return response
 
 
 @router.delete("/{source_id}")
@@ -476,8 +520,20 @@ async def refresh_source(
     if not source or source.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Source not found")
 
-    SourceCRUD.update_scrape_info(db, source_id, next_scrape=datetime.utcnow())
-    return {"message": f"Source {source_id} queued for refresh", "source_id": source_id}
+    schedule_result = apply_schedule(source_id, db)
+    next_scrape = datetime.utcnow().replace(microsecond=0)
+    SourceCRUD.update_scrape_info(db, source_id, next_scrape=next_scrape)
+
+    return {
+        "message": "Scrape scheduled",
+        "source_id": source_id,
+        "next_scrape": next_scrape.strftime("%Y-%m-%dT%H:%M:%S"),
+        "current_tier": schedule_result.get("applied_tier"),
+        "applied_interval_minutes": schedule_result.get("applied_interval_minutes"),
+        "next_auto_scrape": schedule_result.get("next_scrape"),
+        "engagement_available": schedule_result.get("engagement_available"),
+        "data_days": schedule_result.get("data_days"),
+    }
 
 
 @router.post("/{source_id}/check-access")

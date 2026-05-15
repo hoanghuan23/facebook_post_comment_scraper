@@ -70,6 +70,7 @@ class SourceUpdate(BaseModel):
     include_comments: Optional[bool] = None
     max_days_old: Optional[int] = None
     is_active: Optional[bool] = None
+    schedule_override_minutes: Optional[int] = None
 
 
 class SourceResponse(BaseModel):
@@ -91,6 +92,14 @@ class SourceResponse(BaseModel):
     is_accessible: bool = False
     
     model_config = ConfigDict(from_attributes=True, use_enum_values=True)
+
+
+class SourceUpdateResponse(SourceResponse):
+    """Source update response with schedule override state."""
+    is_overridden: bool = False
+    override_minutes: Optional[int] = None
+    suggested_tier: Optional[int] = None
+    next_scrape: Optional[datetime] = None
 
 
 class CreateSourceError(BaseModel):
