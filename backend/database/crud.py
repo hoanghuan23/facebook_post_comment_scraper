@@ -663,15 +663,13 @@ class PostMetricCRUD:
     """CRUD operations for PostMetric model"""
     
     @staticmethod
-    def create(db: Session, post_id: int, likes: int, shares: int, comments: int,
-               views: int = None) -> models.PostMetric:
+    def create(db: Session, post_id: int, likes: int, shares: int, comments: int) -> models.PostMetric:
         """Create a metric snapshot"""
         db_metric = models.PostMetric(
             post_id=post_id,
             likes_count=likes,
             shares_count=shares,
             comments_count=comments,
-            views_count=views,
         )
         db.add(db_metric)
         db.commit()
@@ -882,8 +880,6 @@ class AnalyticsCRUD:
             total_likes=metrics.get('total_likes', 0),
             total_shares=metrics.get('total_shares', 0),
             total_comments=metrics.get('total_comments', 0),
-            total_views=metrics.get('total_views'),
-            avg_engagement_rate=metrics.get('avg_engagement_rate'),
             avg_likes_per_post=metrics.get('avg_likes_per_post'),
             top_post_id=metrics.get('top_post_id'),
             growth_rate=metrics.get('growth_rate'),
@@ -937,8 +933,7 @@ class AnalyticsCRUD:
         
         allowed_fields = {
             'total_posts', 'total_likes', 'total_shares', 'total_comments',
-            'total_views', 'avg_engagement_rate', 'avg_likes_per_post',
-            'top_post_id', 'growth_rate'
+            'avg_likes_per_post', 'top_post_id', 'growth_rate'
         }
         
         for key, value in metrics.items():

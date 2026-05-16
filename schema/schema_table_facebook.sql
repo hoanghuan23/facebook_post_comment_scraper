@@ -117,8 +117,6 @@ CREATE TABLE analytics_cache (
         total_likes INTEGER, 
         total_shares INTEGER, 
         total_comments INTEGER, 
-        total_views INTEGER, 
-        avg_engagement_rate FLOAT, 
         avg_likes_per_post FLOAT, 
         top_post_id VARCHAR(100), 
         growth_rate FLOAT, 
@@ -136,7 +134,6 @@ CREATE TABLE post_metrics (
         likes_count INTEGER, 
         shares_count INTEGER, 
         comments_count INTEGER, 
-        views_count INTEGER, 
         recorded_at DATETIME, 
         PRIMARY KEY (id), 
         FOREIGN KEY(post_id) REFERENCES posts (id)

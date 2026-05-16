@@ -419,8 +419,6 @@ async def get_source_schedule_stats(
     total_likes = sum(post.current_likes for post in posts)
     total_shares = sum(post.current_shares for post in posts)
     total_comments = sum(post.current_comments for post in posts)
-    total_views_values = [post.current_views for post in posts if post.current_views is not None]
-    total_views = sum(total_views_values) if total_views_values else None
     total_engagement = total_likes + total_shares + total_comments
 
     return SourceAnalyticsStatsResponse(
@@ -428,7 +426,6 @@ async def get_source_schedule_stats(
         total_likes=total_likes,
         total_comments=total_comments,
         total_shares=total_shares,
-        total_views=total_views,
         total_engagement=total_engagement,
         avg_likes_per_post=(total_likes / total_posts) if total_posts else 0,
         posts=[
@@ -440,7 +437,6 @@ async def get_source_schedule_stats(
                 "latest_likes": post.current_likes,
                 "latest_shares": post.current_shares,
                 "latest_comments": post.current_comments,
-                "latest_views": post.current_views,
                 "last_metric_update": post.last_metric_update,
             }
             for post in posts

@@ -94,7 +94,6 @@ async def get_post_analytics(
             "likes": post.current_likes,
             "shares": post.current_shares,
             "comments": post.current_comments,
-            "views": post.current_views,
         },
         "initial_metrics": {
             "likes": post.initial_likes,

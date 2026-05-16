@@ -545,10 +545,8 @@ async def generate_analytics_cache():
             total_likes = sum(post.current_likes for post in posts)
             total_shares = sum(post.current_shares for post in posts)
             total_comments = sum(post.current_comments for post in posts)
-            total_views = sum(post.current_views or 0 for post in posts) if posts else None
             total_engagement = total_likes + total_shares + total_comments
             avg_likes_per_post = (total_likes / total_posts) if total_posts else 0
-            avg_engagement_rate = ((total_engagement / total_views) * 100) if total_views else None
 
             top_post = None
             if posts:
@@ -578,8 +576,6 @@ async def generate_analytics_cache():
                 total_likes=total_likes,
                 total_shares=total_shares,
                 total_comments=total_comments,
-                total_views=total_views,
-                avg_engagement_rate=avg_engagement_rate,
                 avg_likes_per_post=avg_likes_per_post,
                 top_post_id=top_post.facebook_post_id if top_post else None,
                 growth_rate=growth_rate,

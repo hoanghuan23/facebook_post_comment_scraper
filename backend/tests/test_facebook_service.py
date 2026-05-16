@@ -2003,11 +2003,11 @@ def test_get_source_schedule_stats_returns_latest_post_metrics_totals():
         )
         ignored_post.is_tracked = False
 
-        PostMetricCRUD.create(db, first_post.id, likes=10, shares=1, comments=2, views=100)
-        PostMetricCRUD.create(db, first_post.id, likes=30, shares=3, comments=4, views=150)
-        PostMetricCRUD.create(db, second_post.id, likes=5, shares=2, comments=1, views=50)
-        PostMetricCRUD.create(db, second_post.id, likes=7, shares=4, comments=6, views=70)
-        PostMetricCRUD.create(db, ignored_post.id, likes=100, shares=100, comments=100, views=100)
+        PostMetricCRUD.create(db, first_post.id, likes=10, shares=1, comments=2)
+        PostMetricCRUD.create(db, first_post.id, likes=30, shares=3, comments=4)
+        PostMetricCRUD.create(db, second_post.id, likes=5, shares=2, comments=1)
+        PostMetricCRUD.create(db, second_post.id, likes=7, shares=4, comments=6)
+        PostMetricCRUD.create(db, ignored_post.id, likes=100, shares=100, comments=100)
         db.execute(
             text(
                 """
@@ -2042,7 +2042,6 @@ def test_get_source_schedule_stats_returns_latest_post_metrics_totals():
         assert result.total_likes == 37
         assert result.total_shares == 7
         assert result.total_comments == 10
-        assert result.total_views == 220
         assert result.total_engagement == 54
         assert result.avg_likes_per_post == 18.5
         assert [post.facebook_post_id for post in result.posts] == [
@@ -2052,11 +2051,9 @@ def test_get_source_schedule_stats_returns_latest_post_metrics_totals():
         assert result.posts[0].latest_likes == 30
         assert result.posts[0].latest_shares == 3
         assert result.posts[0].latest_comments == 4
-        assert result.posts[0].latest_views == 150
         assert result.posts[1].latest_likes == 7
         assert result.posts[1].latest_shares == 4
         assert result.posts[1].latest_comments == 6
-        assert result.posts[1].latest_views == 70
     finally:
         db.close()
 

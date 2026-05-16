@@ -109,7 +109,6 @@ def _ensure_minimal_schema(conn):
             likes_count INTEGER DEFAULT 0,
             shares_count INTEGER DEFAULT 0,
             comments_count INTEGER DEFAULT 0,
-            views_count INTEGER,
             recorded_at DATETIME
         );
 

@@ -173,7 +173,6 @@ class PostMetric(Base):
     likes_count = Column(Integer, default=0)
     shares_count = Column(Integer, default=0)
     comments_count = Column(Integer, default=0)
-    views_count = Column(Integer, nullable=True)
     recorded_at = Column(DateTime, default=datetime.utcnow, index=True)
 
     post = relationship("Post", back_populates="metrics_history")
@@ -181,11 +180,6 @@ class PostMetric(Base):
     __table_args__ = (
         Index("idx_metric_post_date", "post_id", "recorded_at"),
     )
-
-    @property
-    def engagement_rate(self):
-        total = (self.likes_count or 0) + (self.shares_count or 0) + (self.comments_count or 0)
-        return ((total / self.views_count) * 100) if self.views_count else None
 
     @property
     def comment_ratio(self):
@@ -256,14 +250,6 @@ Post.current_comments = column_property(
         0,
     )
 )
-Post.current_views = column_property(
-    select(PostMetric.views_count)
-    .where(PostMetric.post_id == Post.id)
-    .order_by(PostMetric.recorded_at.desc(), PostMetric.id.desc())
-    .limit(1)
-    .correlate_except(PostMetric)
-    .scalar_subquery()
-)
 Post.initial_likes = column_property(
     func.coalesce(
         select(PostMetric.likes_count)
@@ -315,8 +301,6 @@ class AnalyticsCache(Base):
     total_likes = Column(Integer, default=0)
     total_shares = Column(Integer, default=0)
     total_comments = Column(Integer, default=0)
-    total_views = Column(Integer, nullable=True)
-    avg_engagement_rate = Column(Float, nullable=True)
     avg_likes_per_post = Column(Float, nullable=True)
     top_post_id = Column(String(100), nullable=True)
     growth_rate = Column(Float, nullable=True)

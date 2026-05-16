@@ -152,7 +152,6 @@ class SourcePostLatestMetrics(BaseModel):
     latest_likes: int = 0
     latest_shares: int = 0
     latest_comments: int = 0
-    latest_views: Optional[int] = None
     last_metric_update: Optional[datetime] = None
 
 
@@ -162,7 +161,6 @@ class SourceAnalyticsStatsResponse(BaseModel):
     total_likes: int = 0
     total_shares: int = 0
     total_comments: int = 0
-    total_views: Optional[int] = None
     total_engagement: int = 0
     avg_likes_per_post: float = 0
     posts: List[SourcePostLatestMetrics] = Field(default_factory=list)
@@ -204,7 +202,6 @@ class PostMetricSnapshot(BaseModel):
     likes_count: int
     shares_count: int
     comments_count: int
-    views_count: Optional[int] = None
     recorded_at: datetime
     
     class Config:
@@ -225,7 +222,6 @@ class PostResponse(BaseModel):
     current_likes: int
     current_shares: int
     current_comments: int
-    current_views: Optional[int]
     
     # Initial metrics for comparison
     initial_likes: int
@@ -283,7 +279,6 @@ class DailyAnalytics(BaseModel):
     total_likes: int
     total_shares: int
     total_comments: int
-    avg_engagement_rate: Optional[float]
     growth_rate: Optional[float]
     
     class Config:
@@ -301,7 +296,6 @@ class AnalyticsSummary(BaseModel):
     avg_likes_per_post: float
     avg_shares_per_post: float
     avg_comments_per_post: float
-    avg_engagement_rate: float
     
     # Top posts
     top_posts_by_likes: List[dict]
