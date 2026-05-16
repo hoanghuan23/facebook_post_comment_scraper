@@ -4,7 +4,7 @@ import json
 
 from fastapi import BackgroundTasks
 from sqlalchemy import text
-from backend.database.crud import CommentCRUD, FacebookSessionCRUD, PostCRUD, SourceCRUD, UserCRUD
+from backend.database.crud import CommentCRUD, FacebookSessionCRUD, PostCRUD, PostMetricCRUD, SourceCRUD, UserCRUD
 from backend.database.db import SessionLocal, engine
 from backend.database.models import Base, ScrapeJob, ScraperLog
 from backend.database.schemas import SourceCreate, SourceUpdate
@@ -1958,7 +1958,7 @@ def test_create_source_batch_all_success(monkeypatch):
         db.close()
 
 
-def test_get_source_schedule_stats_returns_analytics_totals():
+def test_get_source_schedule_stats_returns_latest_post_metrics_totals():
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="source-stats-user", email="source-stats-user@example.com", password="secret123")
@@ -1977,90 +1977,55 @@ def test_get_source_schedule_stats_returns_analytics_totals():
         source.next_scrape = datetime(2026, 5, 14, 10, 35, 0)
         db.commit()
 
-        analytics_rows = [
-                {
-                    "date": datetime(2026, 5, 9, 0, 0, 0),
-                    "total_posts": 10,
-                    "total_likes": 30,
-                    "total_shares": 6,
-                    "total_comments": 6,
-                    "avg_likes_per_post": 30.0,
-                },
-                {
-                    "date": datetime(2026, 5, 10, 0, 0, 0),
-                    "total_posts": 12,
-                    "total_likes": 30,
-                    "total_shares": 6,
-                    "total_comments": 6,
-                    "avg_likes_per_post": 25.0,
-                },
-                {
-                    "date": datetime(2026, 5, 11, 0, 0, 0),
-                    "total_posts": 11,
-                    "total_likes": 30,
-                    "total_shares": 6,
-                    "total_comments": 6,
-                    "avg_likes_per_post": 27.0,
-                },
-                {
-                    "date": datetime(2026, 5, 12, 0, 0, 0),
-                    "total_posts": 13,
-                    "total_likes": 30,
-                    "total_shares": 6,
-                    "total_comments": 6,
-                    "avg_likes_per_post": 28.0,
-                },
-                {
-                    "date": datetime(2026, 5, 13, 0, 0, 0),
-                    "total_posts": 14,
-                    "total_likes": 30,
-                    "total_shares": 6,
-                    "total_comments": 6,
-                    "avg_likes_per_post": 29.0,
-                },
-                {
-                    "date": datetime(2026, 5, 14, 0, 0, 0),
-                    "total_posts": 15,
-                    "total_likes": 30,
-                    "total_shares": 6,
-                    "total_comments": 6,
-                    "avg_likes_per_post": 31.0,
-                },
-                {
-                    "date": datetime(2026, 5, 15, 0, 0, 0),
-                    "total_posts": 16,
-                    "total_likes": 30,
-                    "total_shares": 6,
-                    "total_comments": 6,
-                    "avg_likes_per_post": 32.0,
-                },
-        ]
+        first_post = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="source-stats-post-1",
+            facebook_url="https://www.facebook.com/groups/group-source-stats/posts/1",
+            posted_at=datetime(2026, 5, 15, 9, 0, 0),
+            content="first",
+        )
+        second_post = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="source-stats-post-2",
+            facebook_url="https://www.facebook.com/groups/group-source-stats/posts/2",
+            posted_at=datetime(2026, 5, 15, 8, 0, 0),
+            content="second",
+        )
+        ignored_post = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="source-stats-untracked",
+            facebook_url="https://www.facebook.com/groups/group-source-stats/posts/3",
+            posted_at=datetime(2026, 5, 15, 7, 0, 0),
+            content="ignored",
+        )
+        ignored_post.is_tracked = False
 
-        for row in analytics_rows:
-            db.execute(
-                text(
-                    """
-                    INSERT INTO analytics_cache (
-                        source_id, date, total_posts, total_likes, total_shares,
-                        total_comments, avg_likes_per_post, cached_at
-                    )
-                    VALUES (
-                        :source_id, :date, :total_posts, :total_likes, :total_shares,
-                        :total_comments, :avg_likes_per_post, :cached_at
-                    )
-                    """
-                ),
-                {
-                    "source_id": source.id,
-                    "date": row["date"],
-                    "total_posts": row["total_posts"],
-                    "total_likes": row["total_likes"],
-                    "total_shares": row["total_shares"],
-                    "total_comments": row["total_comments"],
-                    "avg_likes_per_post": row["avg_likes_per_post"],
-                    "cached_at": datetime.utcnow(),
-                },
-            )
+        PostMetricCRUD.create(db, first_post.id, likes=10, shares=1, comments=2, views=100)
+        PostMetricCRUD.create(db, first_post.id, likes=30, shares=3, comments=4, views=150)
+        PostMetricCRUD.create(db, second_post.id, likes=5, shares=2, comments=1, views=50)
+        PostMetricCRUD.create(db, second_post.id, likes=7, shares=4, comments=6, views=70)
+        PostMetricCRUD.create(db, ignored_post.id, likes=100, shares=100, comments=100, views=100)
+        db.execute(
+            text(
+                """
+                INSERT INTO analytics_cache (
+                    source_id, date, total_posts, total_likes, total_shares,
+                    total_comments, avg_likes_per_post, cached_at
+                )
+                VALUES (
+                    :source_id, :date, 99, 999, 999, 999, 999, :cached_at
+                )
+                """
+            ),
+            {
+                "source_id": source.id,
+                "date": datetime(2026, 5, 15, 0, 0, 0),
+                "cached_at": datetime.utcnow(),
+            },
+        )
         db.commit()
 
         import asyncio
@@ -2073,9 +2038,25 @@ def test_get_source_schedule_stats_returns_analytics_totals():
             )
         )
 
-        assert result.total_likes == 210
-        assert result.total_shares == 42
-        assert result.total_comments == 42
+        assert result.total_posts == 2
+        assert result.total_likes == 37
+        assert result.total_shares == 7
+        assert result.total_comments == 10
+        assert result.total_views == 220
+        assert result.total_engagement == 54
+        assert result.avg_likes_per_post == 18.5
+        assert [post.facebook_post_id for post in result.posts] == [
+            "source-stats-post-1",
+            "source-stats-post-2",
+        ]
+        assert result.posts[0].latest_likes == 30
+        assert result.posts[0].latest_shares == 3
+        assert result.posts[0].latest_comments == 4
+        assert result.posts[0].latest_views == 150
+        assert result.posts[1].latest_likes == 7
+        assert result.posts[1].latest_shares == 4
+        assert result.posts[1].latest_comments == 6
+        assert result.posts[1].latest_views == 70
     finally:
         db.close()
 

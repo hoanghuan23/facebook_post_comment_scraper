@@ -143,11 +143,29 @@ class SourceScheduleStatsResponse(BaseModel):
     next_scrape: Optional[datetime] = None
 
 
+class SourcePostLatestMetrics(BaseModel):
+    """Latest metric snapshot for a post in a source stats response."""
+    post_id: int
+    facebook_post_id: str
+    facebook_url: str
+    posted_at: datetime
+    latest_likes: int = 0
+    latest_shares: int = 0
+    latest_comments: int = 0
+    latest_views: Optional[int] = None
+    last_metric_update: Optional[datetime] = None
+
+
 class SourceAnalyticsStatsResponse(BaseModel):
-    """Aggregated analytics stats for a source."""
+    """Current analytics totals and latest per-post metrics for a source."""
+    total_posts: int = 0
     total_likes: int = 0
     total_shares: int = 0
     total_comments: int = 0
+    total_views: Optional[int] = None
+    total_engagement: int = 0
+    avg_likes_per_post: float = 0
+    posts: List[SourcePostLatestMetrics] = Field(default_factory=list)
 
 
 class SourceRankingItem(BaseModel):

@@ -6,7 +6,6 @@ import logging
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from backend.api.auth import get_current_user
@@ -410,29 +409,42 @@ async def get_source_schedule_stats(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Return aggregated analytics totals for a source."""
+    """Return current analytics totals and latest per-post metrics for a source."""
     source = SourceCRUD.get_by_id(db, source_id)
     if not source or source.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Source not found")
 
-    stats = db.execute(
-        text(
-            """
-            SELECT
-                COALESCE(SUM(total_likes), 0) AS total_likes,
-                COALESCE(SUM(total_shares), 0) AS total_shares,
-                COALESCE(SUM(total_comments), 0) AS total_comments
-            FROM analytics_cache
-            WHERE source_id = :source_id
-            """
-        ),
-        {"source_id": source_id},
-    ).fetchone()
+    posts = PostCRUD.get_by_source(db, source_id, skip=0, limit=1000, tracked_only=True)
+    total_posts = len(posts)
+    total_likes = sum(post.current_likes for post in posts)
+    total_shares = sum(post.current_shares for post in posts)
+    total_comments = sum(post.current_comments for post in posts)
+    total_views_values = [post.current_views for post in posts if post.current_views is not None]
+    total_views = sum(total_views_values) if total_views_values else None
+    total_engagement = total_likes + total_shares + total_comments
 
     return SourceAnalyticsStatsResponse(
-        total_likes=stats.total_likes,
-        total_comments=stats.total_comments,
-        total_shares=stats.total_shares,
+        total_posts=total_posts,
+        total_likes=total_likes,
+        total_comments=total_comments,
+        total_shares=total_shares,
+        total_views=total_views,
+        total_engagement=total_engagement,
+        avg_likes_per_post=(total_likes / total_posts) if total_posts else 0,
+        posts=[
+            {
+                "post_id": post.id,
+                "facebook_post_id": post.facebook_post_id,
+                "facebook_url": post.facebook_url,
+                "posted_at": post.posted_at,
+                "latest_likes": post.current_likes,
+                "latest_shares": post.current_shares,
+                "latest_comments": post.current_comments,
+                "latest_views": post.current_views,
+                "last_metric_update": post.last_metric_update,
+            }
+            for post in posts
+        ],
     )
 
 
