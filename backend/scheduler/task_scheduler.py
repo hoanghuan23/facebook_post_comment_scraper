@@ -22,7 +22,13 @@ async def start_scheduler():
         health_check,
     )
     
-    scheduler = AsyncIOScheduler()
+    scheduler = AsyncIOScheduler(
+        job_defaults={
+            'coalesce': True,  # Nếu một job bị trễ, chỉ chạy lần
+            "max_instances": 1,  # Chỉ cho phép một instance của job chạy cùng lúc
+            "misfire_grace_time": 600,  # Nếu job bị trễ hơn 10 phút, bỏ qua lần chạy đó
+        }
+    )
     
     if settings.SCHEDULER_ENABLED:
         # Add scheduled tasks
