@@ -124,7 +124,7 @@ def download_image(url, post_id, image_index=1, save_dir="page_post"):
         return None
 
 
-def fetch_remaining_images(last_media_id, post_id, current_image_count, save_dir="page_post", seen_media_ids=None, seen_urls=None):
+def fetch_remaining_images(last_media_id, post_id, current_image_count, save_dir="page_post", download_media=True, seen_media_ids=None, seen_urls=None):
     """Fetch remaining images using media ID iteration (for posts with 5+ images)"""
     if not last_media_id or not post_id:
         return []
@@ -195,18 +195,19 @@ def fetch_remaining_images(last_media_id, post_id, current_image_count, save_dir
             
             media_is_new = (not current_media_id) or (current_media_id not in seen_media_ids)
             if image_url and media_is_new and image_url not in seen_urls:
-                saved_filename = download_image(image_url, post_id, image_index, save_dir)
-                if saved_filename:
-                    if current_media_id:
-                        seen_media_ids.add(current_media_id)
-                    seen_urls.add(image_url)
-                    remaining_photos.append({
-                        'id': current_media_id or current_node,
-                        'type': 'photo',
-                        'url': image_url,
-                        'saved_as': saved_filename
-                    })
-                    image_index += 1
+                saved_filename = None
+                if download_media:
+                    saved_filename = download_image(image_url, post_id, image_index, save_dir)
+                if current_media_id:
+                    seen_media_ids.add(current_media_id)
+                seen_urls.add(image_url)
+                remaining_photos.append({
+                    'id': current_media_id or current_node,
+                    'type': 'photo',
+                    'url': image_url,
+                    'saved_as': saved_filename
+                })
+                image_index += 1
             
             # Extract next node
             next_node = None
@@ -480,12 +481,13 @@ def extract_media(node, post_id, save_dir="page_post", download_media=True):
     
     # Fetch remaining images if we have exactly 5 photos (indicating there may be more)
     photo_count = sum(1 for m in media if m.get("type") == "photo")
-    if download_media and photo_count == 5 and last_media_id:
+    if photo_count == 5 and last_media_id:
         remaining_photos = fetch_remaining_images(
             last_media_id,
             post_id,
             _image_counters[post_id],
             save_dir,
+            download_media=download_media,
             seen_media_ids=seen_photo_ids,
             seen_urls=seen_photo_urls,
         )

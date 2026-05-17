@@ -16,7 +16,6 @@ from utils.facebook_extractor import (
     extract_comment_count,
     extract_reaction_count,
     extract_share_count,
-    is_reel_or_video_post,
     extract_posted_at,
     extract_author,
     make_scraped_at,
@@ -188,6 +187,7 @@ def fetch_remaining_images(
     post_id,
     current_image_count,
     save_dir="group_post",
+    download_media=True,
     seen_media_ids=None,
     seen_urls=None,
     cookies=None,
@@ -274,17 +274,18 @@ def fetch_remaining_images(
             
             media_is_new = (not current_media_id) or (current_media_id not in seen_media_ids)
             if image_url and media_is_new and image_url not in seen_urls:
-                saved_filename = download_image(image_url, post_id, image_index, save_dir)
-                if saved_filename:
-                    if current_media_id:
-                        seen_media_ids.add(current_media_id)
-                    seen_urls.add(image_url)
-                    remaining_photos.append({
-                        'id': current_media_id or current_node,
-                        'url': image_url,
-                        'saved_as': saved_filename
-                    })
-                    image_index += 1
+                saved_filename = None
+                if download_media:
+                    saved_filename = download_image(image_url, post_id, image_index, save_dir)
+                if current_media_id:
+                    seen_media_ids.add(current_media_id)
+                seen_urls.add(image_url)
+                remaining_photos.append({
+                    'id': current_media_id or current_node,
+                    'url': image_url,
+                    'saved_as': saved_filename
+                })
+                image_index += 1
             
             # Extract next node
             next_node = None
@@ -577,12 +578,13 @@ def extract_media(node, post_id, save_dir="group_post", cookies=None, fb_dtsg=No
             })
     
     # Fetch remaining images if we have exactly 5 photos (indicating there may be more)
-    if download_media and image_index == 5 and last_media_id:
+    if image_index == 5 and last_media_id:
         remaining_photos = fetch_remaining_images(
             last_media_id,
             post_id,
             image_index,
             save_dir,
+            download_media=download_media,
             seen_media_ids=seen_photo_ids,
             seen_urls=seen_photo_urls,
             cookies=cookies,
@@ -1197,11 +1199,6 @@ def fetch_posts(
             
             # Process all found Story nodes
             for story_node in story_nodes:
-                # Skip reels and video posts
-                if is_reel_or_video_post(story_node):
-                    print(f"Bỏ qua bài reel/video")
-                    continue
-
                 temp_post_id = story_node.get('post_id')
                 posted_at = extract_posted_at(story_node)
                 posted_dt = _parse_iso_datetime(posted_at)
