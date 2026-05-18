@@ -51,9 +51,6 @@ def _ensure_minimal_schema(conn):
             username VARCHAR(50) NOT NULL UNIQUE,
             email VARCHAR(100) NOT NULL UNIQUE,
             password_hash VARCHAR(255) NOT NULL,
-            fb_cookies TEXT,
-            fb_dtsg VARCHAR(255),
-            fb_user_agent VARCHAR(500),
             is_active BOOLEAN DEFAULT 1,
             is_admin BOOLEAN DEFAULT 0,
             created_at DATETIME,
@@ -68,16 +65,11 @@ def _ensure_minimal_schema(conn):
             facebook_url VARCHAR(255) NOT NULL,
             source_name VARCHAR(255),
             description TEXT,
-            cover_image_url VARCHAR(500),
             member_count INTEGER,
-            follower_count INTEGER,
             is_active BOOLEAN DEFAULT 1,
             include_comments BOOLEAN DEFAULT 1,
-            include_replies BOOLEAN DEFAULT 1,
             max_days_old INTEGER DEFAULT 30,
             permission_status VARCHAR(11),
-            permission_message TEXT,
-            access_restrictions TEXT,
             permission_checked_at DATETIME,
             is_accessible BOOLEAN DEFAULT 1,
             created_at DATETIME,
@@ -200,10 +192,10 @@ def _upsert_source(conn, post_type, post_data):
         """
         INSERT INTO sources (
             user_id, source_type, facebook_id, facebook_url, source_name,
-            is_active, include_comments, include_replies, permission_status,
+            is_active, include_comments, permission_status,
             is_accessible, created_at, last_scraped
         )
-        VALUES (?, ?, ?, ?, ?, 1, 1, 1, 'granted', 1, ?, ?)
+        VALUES (?, ?, ?, ?, ?, 1, 1, 'granted', 1, ?, ?)
         """,
         (user_id, source_type, facebook_id, facebook_url, source_name, now, now),
     )

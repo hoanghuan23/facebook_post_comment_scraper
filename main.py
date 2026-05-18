@@ -274,6 +274,7 @@ def save_post_data(post_type, post_id, post_data, comments_data):
     output_file = os.path.join(folder_path, f"{post_id}.json")
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(combined_data, f, ensure_ascii=False, indent=2)
+    db_result = None
     try:
         db_result = save_scraped_post_to_db(post_type, post_data, comments_data)
         if db_result:
@@ -281,6 +282,10 @@ def save_post_data(post_type, post_id, post_data, comments_data):
     except Exception as e:
         print(f"  Failed to save DB: {e}")
     print(f"Saved to {output_file}")
+    return {
+        "file_path": output_file,
+        "db_result": db_result,
+    }
 
 
 def resolve_timeline_output_folder(post_data):
