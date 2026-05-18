@@ -1,7 +1,7 @@
 # Analytics routes
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from backend.api.auth import get_current_user
@@ -16,6 +16,7 @@ from backend.database.crud import (
 )
 from backend.database.db import get_db
 from backend.database.models import Post, Source, User
+from backend.services.trending_service import get_trending_posts_for_user
 
 router = APIRouter()
 
@@ -105,40 +106,22 @@ async def get_post_analytics(
 
 @router.get("/trending")
 async def get_trending_posts(
-    limit: int = 10,
+    limit: int = Query(default=10, ge=1, le=100),
+    window_hours: int = Query(default=24, ge=1, le=168),
+    max_post_age_hours: int = Query(default=168, ge=1, le=720),
+    min_baseline_gap_hours: int = Query(default=6, ge=1, le=48),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Get trending posts from user's sources."""
-    sources = SourceCRUD.get_by_user(db, current_user.id)
-    source_ids = {s.id for s in sources}
-    if not source_ids:
-        return {"count": 0, "trending_posts": []}
-
-    recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=max(limit * 5, 20))
-    user_posts = [p for p in recent_posts if p.source_id in source_ids]
-
-    now = datetime.utcnow()
-    ranked = []
-    for p in user_posts:
-        total = p.current_likes + p.current_shares + p.current_comments
-        hours_since_post = max((now - p.posted_at).total_seconds() / 3600, 1)
-        ranked.append(
-            {
-                "post_id": p.id,
-                "facebook_post_id": p.facebook_post_id,
-                "url": p.facebook_url,
-                "posted_at": p.posted_at,
-                "likes": p.current_likes,
-                "shares": p.current_shares,
-                "comments": p.current_comments,
-                "total_engagement": total,
-                "engagement_velocity": total / hours_since_post,
-            }
-        )
-
-    trending = sorted(ranked, key=lambda item: item["engagement_velocity"], reverse=True)[:limit]
-    return {"count": len(trending), "trending_posts": trending}
+    return get_trending_posts_for_user(
+        db=db,
+        user_id=current_user.id,
+        limit=limit,
+        window_hours=window_hours,
+        max_post_age_hours=max_post_age_hours,
+        min_baseline_gap_hours=min_baseline_gap_hours,
+    )
 
 
 @router.get("/growth")
@@ -186,7 +169,9 @@ async def export_analytics(
         raise HTTPException(status_code=404, detail="Source not found")
 
     posts = PostCRUD.get_by_source(db, source_id, limit=1000)
-    total_engagement = sum(p.current_likes + p.current_shares + p.current_comments for p in posts)
+    total_engagement = sum(
+        p.current_likes + p.current_shares + p.current_comments for p in posts
+    )
 
     return {
         "status": "ready_for_export",
