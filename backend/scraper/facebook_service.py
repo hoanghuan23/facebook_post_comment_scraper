@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 import base64
 import json
@@ -659,11 +659,13 @@ class FacebookScraperService:
                 "fetched": 0,
                 "updated": 0,
                 "skipped": 0,
+                "deleted": 0,
                 "matched_target_count": 0,
                 "target_posts_count": 0,
                 "pages_scanned": 0,
                 "stop_reason": "empty_targets",
                 "updated_post_refs": [],
+                "deleted_post_refs": [],
             }
 
         if source.source_type == SourceType.GROUP:
@@ -693,7 +695,9 @@ class FacebookScraperService:
 
         updated_posts = 0
         skipped_posts = 0
+        deleted_posts = 0
         updated_post_refs: List[str] = []
+        deleted_post_refs: List[str] = []
         matched_targets = set()
         scanned_count = 0
         post_per_page = 3
@@ -736,16 +740,39 @@ class FacebookScraperService:
             if stop_reason == "completed":
                 stop_reason = "source_exhausted"
 
+        can_mark_missing_deleted = (
+            scanned_count > 0
+            and stop_reason in {"source_exhausted", "max_pages_reached", "completed"}
+        )
+        if can_mark_missing_deleted:
+            recent_cutoff = datetime.utcnow() - timedelta(hours=24)
+            for missing_post_id in sorted(target_set - matched_targets):
+                db_post = PostCRUD.get_by_source_and_facebook_post_id(
+                    db, source.id, missing_post_id
+                )
+                if not db_post:
+                    continue
+                if db_post.posted_at < recent_cutoff:
+                    if db_post.is_tracked:
+                        db_post.is_tracked = False
+                        db.commit()
+                    continue
+                if PostCRUD.delete(db, db_post.id):
+                    deleted_posts += 1
+                    deleted_post_refs.append(str(db_post.facebook_post_id or db_post.id))
+
         pages_scanned = (scanned_count + post_per_page - 1) // post_per_page if scanned_count > 0 else 0
         return {
             "fetched": scanned_count,
             "updated": updated_posts,
             "skipped": skipped_posts,
+            "deleted": deleted_posts,
             "matched_target_count": len(matched_targets),
             "target_posts_count": len(target_set),
             "pages_scanned": pages_scanned,
             "stop_reason": stop_reason,
             "updated_post_refs": updated_post_refs,
+            "deleted_post_refs": deleted_post_refs,
         }
 
     @classmethod

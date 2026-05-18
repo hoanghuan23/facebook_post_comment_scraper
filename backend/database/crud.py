@@ -528,14 +528,33 @@ class PostCRUD:
     
     @staticmethod
     def get_recent_posts(db: Session, hours: int = 24, limit: int = 100) -> List[models.Post]:
-        """theo dõi post sau khi được tạo trong N giờ gần đây (recent by posted_at - thời gian đăng)."""
+        """Get tracked posts posted in the last N hours."""
         cutoff_time = datetime.utcnow() - timedelta(hours=hours)
         return db.query(models.Post).filter(
             and_(
                 models.Post.posted_at >= cutoff_time,
-                models.Post.is_tracked == True
+                models.Post.is_tracked == True,
+                models.Post.is_deleted == False,
             )
         ).order_by(desc(models.Post.posted_at)).limit(limit).all()
+
+    @staticmethod
+    def untrack_posts_older_than(db: Session, hours: int = 24) -> int:
+        """Stop tracking non-deleted posts once they age out of the tracking window."""
+        cutoff_time = datetime.utcnow() - timedelta(hours=hours)
+        posts = db.query(models.Post).filter(
+            and_(
+                models.Post.posted_at < cutoff_time,
+                models.Post.is_tracked == True,
+                models.Post.is_deleted == False,
+            )
+        ).all()
+
+        for post in posts:
+            post.is_tracked = False
+
+        db.commit()
+        return len(posts)
     
     @staticmethod
     def get_old_posts(db: Session, days: int = 30) -> List[models.Post]:

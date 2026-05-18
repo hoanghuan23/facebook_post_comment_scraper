@@ -275,6 +275,7 @@ async def update_recent_post_metrics():
     task_log = _start_task_log(db, "update_recent_post_metrics")
 
     try:
+        untracked_old_posts = PostCRUD.untrack_posts_older_than(db, hours=24)
         # recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=settings.SCRAPER_MAX_WORKERS * 50)
         recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=1500) # giới hạn chạy 1000 post gần đây
         source_ids = list({post.source_id for post in recent_posts})
@@ -282,9 +283,10 @@ async def update_recent_post_metrics():
         for post in recent_posts:
             target_posts_by_source.setdefault(post.source_id, []).append(str(post.facebook_post_id))
         logger.info(
-            "Bắt đầu update_recent_post_metrics: recent_posts_count=%s candidate_source_count=%s",
+            "Bắt đầu update_recent_post_metrics: recent_posts_count=%s candidate_source_count=%s untracked_old_posts=%s",
             len(recent_posts),
             len(source_ids),
+            untracked_old_posts,
         )
         if not recent_posts:
             logger.info("Kết thúc update_recent_post_metrics: recent_posts_count=0 candidate_source_count=0")
@@ -371,7 +373,7 @@ async def update_recent_post_metrics():
                     finished_at=datetime.utcnow(),
                 )
                 logger.info(
-                    "Kết thúc cập nhật metric source: thread=%s source=%s progress=%s/%s fetched=%s updated_count=%s skipped=%s target_posts_count=%s matched_target_count=%s pages_scanned=%s stop_reason=%s fetch_to_update_ratio=%s duration_seconds=%s",
+                    "Kết thúc cập nhật metric source: thread=%s source=%s progress=%s/%s fetched=%s updated_count=%s skipped=%s target_posts_count=%s matched_target_count=%s pages_scanned=%s stop_reason=%s fetch_to_update_ratio=%s updated_posts=[%s] duration_seconds=%s",
                     thread_label,
                     source_label,
                     progress_index,
@@ -384,6 +386,7 @@ async def update_recent_post_metrics():
                     result.get("pages_scanned", 0),
                     result.get("stop_reason", "unknown"),
                     fetch_to_update_ratio,
+                    _format_post_update_list(updated_post_refs),
                     source_duration,
                 )
                 return {

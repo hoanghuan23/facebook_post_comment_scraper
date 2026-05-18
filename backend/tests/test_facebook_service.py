@@ -803,7 +803,7 @@ def test_get_latest_posted_at_by_source_returns_latest_and_none_for_empty():
         db.close()
 
 
-def test_get_recent_posts_uses_created_at_window():
+def test_get_recent_posts_uses_posted_at_window_and_excludes_deleted_posts():
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="recent-created-at", email="recent-created-at@example.com", password="secret123")
@@ -836,12 +836,22 @@ def test_get_recent_posts_uses_created_at_window():
         old_created_new_posted.created_at = datetime.utcnow() - timedelta(hours=30)
         db.commit()
         db.refresh(old_created_new_posted)
+        deleted_post = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="deleted-recent",
+            facebook_url="https://facebook.com/posts/deleted-recent",
+            posted_at=datetime.utcnow(),
+            content="Deleted recent",
+        )
+        PostCRUD.update(db, deleted_post.id, is_deleted=True, is_tracked=True)
 
         recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=50)
         recent_ids = {post.id for post in recent_posts}
 
-        assert recent_created_old_posted.id in recent_ids
-        assert old_created_new_posted.id not in recent_ids
+        assert recent_created_old_posted.id not in recent_ids
+        assert old_created_new_posted.id in recent_ids
+        assert deleted_post.id not in recent_ids
     finally:
         db.close()
 
@@ -923,7 +933,7 @@ def test_scrape_source_min_posted_at_filters_old_and_equal_posts(monkeypatch):
         db.close()
 
 
-def test_update_recent_post_metrics_only_refreshes_sources_with_recent_created_posts(monkeypatch):
+def test_update_recent_post_metrics_only_refreshes_sources_with_recent_posted_posts(monkeypatch):
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="metrics-created-at", email="metrics-created-at@example.com", password="secret123")
@@ -949,19 +959,17 @@ def test_update_recent_post_metrics_only_refreshes_sources_with_recent_created_p
             source_id=recent_source.id,
             facebook_post_id="metrics-recent-post",
             facebook_url="https://facebook.com/posts/metrics-recent-post",
-            posted_at=datetime(2020, 1, 1, 0, 0, 0),
-            content="Recent created",
+            posted_at=datetime.utcnow(),
+            content="Recent posted",
         )
         old_post = PostCRUD.create(
             db,
             source_id=old_source.id,
             facebook_post_id="metrics-old-post",
             facebook_url="https://facebook.com/posts/metrics-old-post",
-            posted_at=datetime.utcnow(),
-            content="Old created",
+            posted_at=datetime.utcnow() - timedelta(hours=30),
+            content="Old posted",
         )
-
-        old_post.created_at = datetime.utcnow() - timedelta(hours=30)
         db.commit()
         db.refresh(recent_post)
         db.refresh(old_post)
@@ -1003,6 +1011,42 @@ def test_update_recent_post_metrics_only_refreshes_sources_with_recent_created_p
     called_source_ids = {source_id for source_id, _target_post_ids in calls}
     assert recent_source_id in called_source_ids
     assert old_source_id not in called_source_ids
+
+
+def test_update_recent_post_metrics_untracks_posts_older_than_24h():
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="metrics-untrack-old", email="metrics-untrack-old@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-metrics-untrack-old",
+            facebook_url="https://www.facebook.com/groups/group-metrics-untrack-old",
+            source_name="Metrics Untrack Old Group",
+        )
+        old_post = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="metrics-old-untracked",
+            facebook_url="https://facebook.com/posts/metrics-old-untracked",
+            posted_at=datetime.utcnow() - timedelta(hours=30),
+            content="Old tracked post",
+        )
+        old_post_id = old_post.id
+    finally:
+        db.close()
+
+    import asyncio
+    asyncio.run(update_recent_post_metrics())
+
+    verify_db = SessionLocal()
+    try:
+        refreshed_old_post = PostCRUD.get_by_id(verify_db, old_post_id)
+        assert refreshed_old_post.is_tracked is False
+        assert refreshed_old_post.is_deleted is False
+    finally:
+        verify_db.close()
 
 
 def test_update_recent_post_metrics_records_active_session_id(monkeypatch):
@@ -1535,6 +1579,121 @@ def test_refresh_target_post_metrics_returns_max_pages_stop_reason(monkeypatch):
 
         assert result["stop_reason"] == "max_pages_reached"
         assert result["matched_target_count"] == 0
+    finally:
+        db.close()
+
+
+def test_refresh_target_post_metrics_marks_recent_missing_targets_deleted(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="target-deleted", email="target-deleted@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-target-deleted",
+            facebook_url="https://www.facebook.com/groups/group-target-deleted",
+            source_name="Target Deleted Group",
+        )
+        missing_post = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="missing-target",
+            facebook_url="https://facebook.com/posts/missing-target",
+            posted_at=datetime.utcnow(),
+            content="Missing target",
+            likes_count=3,
+            shares_count=0,
+            comments_count=0,
+        )
+
+        monkeypatch.setattr(
+            "backend.scraper.facebook_service.group_scraper.fetch_posts",
+            lambda limit=20, **kwargs: [
+                {
+                    "post_id": "other-visible",
+                    "permalink": "https://facebook.com/posts/other-visible",
+                    "message": "Other visible",
+                    "posted_at": datetime.utcnow(),
+                    "reaction_count": 1,
+                    "share_count": 0,
+                    "comment_count": 0,
+                    "photos": [],
+                    "videos": [],
+                }
+            ],
+        )
+
+        result = FacebookScraperService.refresh_target_post_metrics(
+            db,
+            source,
+            target_post_ids=["missing-target"],
+            max_pages=10,
+            stop_when_all_found=True,
+        )
+        refreshed_missing_post = PostCRUD.get_by_id(db, missing_post.id)
+
+        assert result["stop_reason"] == "source_exhausted"
+        assert result["matched_target_count"] == 0
+        assert result["deleted"] == 1
+        assert result["deleted_post_refs"] == ["missing-target"]
+        assert refreshed_missing_post.is_tracked is False
+        assert refreshed_missing_post.is_deleted is True
+    finally:
+        db.close()
+
+
+def test_refresh_target_post_metrics_untracks_old_missing_targets_without_deleting(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="target-old-missing", email="target-old-missing@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-target-old-missing",
+            facebook_url="https://www.facebook.com/groups/group-target-old-missing",
+            source_name="Target Old Missing Group",
+        )
+        old_missing_post = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="old-missing-target",
+            facebook_url="https://facebook.com/posts/old-missing-target",
+            posted_at=datetime.utcnow() - timedelta(hours=30),
+            content="Old missing target",
+        )
+
+        monkeypatch.setattr(
+            "backend.scraper.facebook_service.group_scraper.fetch_posts",
+            lambda limit=20, **kwargs: [
+                {
+                    "post_id": "other-visible",
+                    "permalink": "https://facebook.com/posts/other-visible",
+                    "message": "Other visible",
+                    "posted_at": datetime.utcnow(),
+                    "reaction_count": 1,
+                    "share_count": 0,
+                    "comment_count": 0,
+                    "photos": [],
+                    "videos": [],
+                }
+            ],
+        )
+
+        result = FacebookScraperService.refresh_target_post_metrics(
+            db,
+            source,
+            target_post_ids=["old-missing-target"],
+            max_pages=10,
+            stop_when_all_found=True,
+        )
+        refreshed_old_post = PostCRUD.get_by_id(db, old_missing_post.id)
+
+        assert result["deleted"] == 0
+        assert result["deleted_post_refs"] == []
+        assert refreshed_old_post.is_tracked is False
+        assert refreshed_old_post.is_deleted is False
     finally:
         db.close()
 
