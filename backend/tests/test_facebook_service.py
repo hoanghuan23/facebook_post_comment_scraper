@@ -1005,6 +1005,85 @@ def test_update_recent_post_metrics_only_refreshes_sources_with_recent_created_p
     assert old_source_id not in called_source_ids
 
 
+def test_update_recent_post_metrics_records_active_session_id(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(
+            db,
+            username="metrics-session",
+            email="metrics-session@example.com",
+            password="secret123",
+        )
+        session = FacebookSessionCRUD.upsert_active_for_user(
+            db=db,
+            user_id=user.id,
+            fb_cookies='{"c_user":"metrics-session"}',
+            fb_dtsg="metrics-token",
+            fb_user_agent="metrics-agent",
+        )
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-metrics-session",
+            facebook_url="https://www.facebook.com/groups/group-metrics-session",
+            source_name="Metrics Session Group",
+        )
+        PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="metrics-session-post",
+            facebook_url="https://facebook.com/posts/metrics-session-post",
+            posted_at=datetime.utcnow(),
+            content="Session metric",
+        )
+        source_id = source.id
+        session_id = session.id
+    finally:
+        db.close()
+
+    def fake_refresh_target_post_metrics(
+        _db,
+        _source,
+        target_post_ids,
+        max_pages=20,
+        stop_when_all_found=True,
+        last_24_hours_only=True,
+        download_media=False,
+    ):
+        return {
+            "fetched": 1,
+            "updated": 1,
+            "skipped": 0,
+            "matched_target_count": len(target_post_ids),
+            "target_posts_count": len(target_post_ids),
+            "pages_scanned": 1,
+            "stop_reason": "all_targets_found",
+            "updated_post_refs": target_post_ids,
+        }
+
+    monkeypatch.setattr(
+        "backend.scheduler.periodic_tasks.FacebookScraperService.refresh_target_post_metrics",
+        fake_refresh_target_post_metrics,
+    )
+
+    import asyncio
+    asyncio.run(update_recent_post_metrics())
+
+    verify_db = SessionLocal()
+    try:
+        job = (
+            verify_db.query(ScrapeJob)
+            .filter(ScrapeJob.job_type == "post_metric", ScrapeJob.source_id == source_id)
+            .order_by(ScrapeJob.id.desc())
+            .first()
+        )
+        assert job is not None
+        assert job.session_id == session_id
+    finally:
+        verify_db.close()
+
+
 def test_periodic_scrape_new_posts_uses_latest_db_post_as_cutoff(monkeypatch):
     db = SessionLocal()
     try:

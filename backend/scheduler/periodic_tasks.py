@@ -326,10 +326,12 @@ async def update_recent_post_metrics():
                     return {"status": "skipped"}
 
                 target_post_ids = target_posts_by_source.get(source.id, [])
+                active_session = FacebookSessionCRUD.get_active_by_user_id(job_db, source.user_id)
                 pipeline_job = PipelineJobCRUD.create_job(
                     db=job_db,
                     job_type="post_metric",
                     source_id=source.id,
+                    session_id=active_session.id if active_session else None,
                     status="running",
                     started_at=datetime.utcnow(),
                 )
