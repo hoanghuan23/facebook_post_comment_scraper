@@ -2177,12 +2177,11 @@ def test_get_sources_ranking_returns_ranked_user_sources_and_tier_distribution()
 
         today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
         fixtures = [
-            (hot_source, 20, 50, 5, 5, 1, None),
-            (warm_source, 10, 16, 2, 2, 2, 30),
-            (other_source, 50, 100, 10, 10, 1, None),
+            (hot_source, 20, 10000, 5, 5, 1, None),
+            (warm_source, 10, 1000, 2, 2, 2, 30),
+            (other_source, 50, 25000, 10, 10, 1, None),
         ]
         for source, posts, likes, shares, comments, current_tier, override_minutes in fixtures:
-            source.member_count = 1000
             source.schedule_tier = current_tier
             source.schedule_override_minutes = override_minutes
             db.execute(
@@ -2227,7 +2226,7 @@ def test_get_sources_ranking_returns_ranked_user_sources_and_tier_distribution()
         assert [item.source_id for item in result.sources] == [hot_source.id, warm_source.id]
         assert [item.rank for item in result.sources] == [1, 2]
         assert result.sources[0].avg_posts_per_day == 20.0
-        assert result.sources[0].avg_engagement_rate == 0.06
+        assert result.sources[0].avg_likes_per_post == 500.0
         assert result.sources[0].suggested_tier == 1
         assert result.sources[0].current_tier == 1
         assert result.sources[0].is_overridden is False
@@ -2540,7 +2539,7 @@ def test_refresh_source_appends_schedule_response(monkeypatch):
                 "applied_tier": 1,
                 "applied_interval_minutes": 15,
                 "next_scrape": "2026-05-14T10:35:00",
-                "engagement_available": True,
+                "avg_likes_per_post": 500.0,
                 "data_days": 1,
             }
 
@@ -2557,7 +2556,7 @@ def test_refresh_source_appends_schedule_response(monkeypatch):
             "current_tier": 1,
             "applied_interval_minutes": 15,
             "next_auto_scrape": "2026-05-14T10:35:00",
-            "engagement_available": True,
+            "avg_likes_per_post": 500.0,
             "data_days": 1,
         }
         assert datetime.fromisoformat(result["next_scrape"])

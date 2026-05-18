@@ -311,12 +311,12 @@ async def list_sources(
 
 @router.get("/ranking", response_model=SourceRankingResponse)
 async def get_sources_ranking(
-    sort: Literal["posts_per_day", "engagement", "tier"] = "posts_per_day",
+    sort: Literal["posts_per_day", "likes_per_post", "tier"] = "posts_per_day",
     limit: Annotated[int, Query(ge=1)] = 50,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Rank current user's sources by calculated activity, engagement, or tier."""
+    """Rank current user's sources by calculated activity, likes per post, or tier."""
     sources = SourceCRUD.get_by_user(db, current_user.id, limit=100000)
     tier_distribution = {f"tier_{tier}": 0 for tier in range(1, 5)}
     ranked_sources = []
@@ -330,8 +330,7 @@ async def get_sources_ranking(
                 "source_id": source.id,
                 "source_name": source.source_name,
                 "avg_posts_per_day": suggested["avg_posts_per_day"],
-                "avg_engagement_rate": suggested["avg_engagement_rate"],
-                "engagement_available": suggested["engagement_available"],
+                "avg_likes_per_post": suggested["avg_likes_per_post"],
                 "data_days": suggested["data_days"],
                 "suggested_tier": suggested_tier,
                 "current_tier": source.schedule_tier,
@@ -339,11 +338,10 @@ async def get_sources_ranking(
             }
         )
 
-    if sort == "engagement":
+    if sort == "likes_per_post":
         ranked_sources.sort(
             key=lambda item: (
-                item["avg_engagement_rate"] is not None,
-                item["avg_engagement_rate"] or 0,
+                item["avg_likes_per_post"],
                 item["avg_posts_per_day"],
             ),
             reverse=True,
@@ -353,14 +351,14 @@ async def get_sources_ranking(
             key=lambda item: (
                 item["suggested_tier"],
                 -item["avg_posts_per_day"],
-                -(item["avg_engagement_rate"] or 0),
+                -item["avg_likes_per_post"],
             )
         )
     else:
         ranked_sources.sort(
             key=lambda item: (
                 item["avg_posts_per_day"],
-                item["avg_engagement_rate"] or 0,
+                item["avg_likes_per_post"],
             ),
             reverse=True,
         )
@@ -521,7 +519,7 @@ async def refresh_source(
         "current_tier": schedule_result.get("applied_tier"),
         "applied_interval_minutes": schedule_result.get("applied_interval_minutes"),
         "next_auto_scrape": schedule_result.get("next_scrape"),
-        "engagement_available": schedule_result.get("engagement_available"),
+        "avg_likes_per_post": schedule_result.get("avg_likes_per_post"),
         "data_days": schedule_result.get("data_days"),
     }
 

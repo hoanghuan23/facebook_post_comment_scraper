@@ -131,10 +131,9 @@ class SourceScheduleStatsResponse(BaseModel):
     """Suggested and current schedule stats for a source."""
     suggested_tier: Optional[int] = None
     suggested_interval_minutes: Optional[int] = None
-    engagement_available: bool
     data_days: int
     avg_posts_per_day: float
-    avg_engagement_rate: Optional[float] = None
+    avg_likes_per_post: float = 0
     tier_reason: str
     current_tier: Optional[int] = None
     current_interval_minutes: Optional[int] = None
@@ -172,8 +171,7 @@ class SourceRankingItem(BaseModel):
     source_id: int
     source_name: Optional[str] = None
     avg_posts_per_day: float
-    avg_engagement_rate: Optional[float] = None
-    engagement_available: bool
+    avg_likes_per_post: float = 0
     data_days: int
     suggested_tier: int
     current_tier: Optional[int] = None
