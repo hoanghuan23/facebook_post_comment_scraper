@@ -79,7 +79,7 @@ async def periodic_scrape_new_posts():
 
     try:
         # due_sources = SourceCRUD.get_due_for_scraping(db, limit=settings.SCRAPER_MAX_WORKERS * 5)
-        due_sources = SourceCRUD.get_due_for_scraping(db, limit=150) # giới hạn chạy 100 nguồn
+        due_sources = SourceCRUD.get_due_for_scraping(db, limit=settings.SCRAPER_SOURCE_BATCH_LIMIT) # giới hạn số source mỗi lần chạy scrape_new_posts
         total_due_sources = len(due_sources)
         logger.info("Bắt đầu periodic_scrape_new_posts: total_due_sources=%s", total_due_sources)
         if not due_sources:
@@ -227,7 +227,7 @@ async def periodic_scrape_new_posts():
             finally:
                 job_db.close()
 
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=settings.SCRAPER_MAX_WORKERS) as executor:
             futures = [executor.submit(_scrape_source_job, job) for job in source_jobs]
             total_updated_posts = 0
             total_fetched_posts = 0
@@ -284,7 +284,7 @@ async def update_recent_post_metrics():
     try:
         untracked_old_posts = PostCRUD.untrack_posts_older_than(db, hours=24)
         # recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=settings.SCRAPER_MAX_WORKERS * 50)
-        recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=1500) # giới hạn chạy 1000 post gần đây
+        recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=settings.SCRAPER_POSTS_BATCH_LIMIT)
         source_ids = list({post.source_id for post in recent_posts})
         target_posts_by_source = {}
         for post in recent_posts:
@@ -431,7 +431,7 @@ async def update_recent_post_metrics():
             finally:
                 job_db.close()
 
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=settings.SCRAPER_MAX_WORKERS) as executor:
             futures = [executor.submit(_refresh_metrics_job, source_id) for source_id in source_ids]
             total_fetched = 0
             for future in as_completed(futures):

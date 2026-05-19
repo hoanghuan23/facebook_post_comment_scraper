@@ -74,17 +74,20 @@ class Settings(BaseSettings):
     
     # Scraping settings
     SCRAPER_ENABLED: bool = True
-    SCRAPER_MAX_WORKERS: int = 3 # số lượng worker mặc định cho scraping (để tránh bị block IP)
+    SCRAPER_MAX_WORKERS: int = 5 # số lượng worker mặc định cho scraping (để tránh bị block IP)
     SCRAPER_TIMEOUT: int = 30 # thời gian chờ tối đa cho mỗi request (giây)
     SCRAPER_RETRY_ATTEMPTS: int = 3 # số lần thử lại khi gặp lỗi
     SCRAPER_WRITE_DEBUG_FILES: bool = False
     SCRAPER_DOWNLOAD_MEDIA: bool = False
     SCRAPER_GROUP_PAGE_SIZE: int = 10
     SCRAPER_CONSECUTIVE_OLD_LIMIT: int = 3 # nếu gặp 3 post cũ liên tiếp dừng scarpe source đó
-    SCRAPER_MAX_24H_PAGES: int = 100 # giới hạn số trang cần quét trong 24h gần nhất để tránh bị block IP
-    METRIC_REFRESH_MAX_PAGES: int = 20
+    SCRAPER_MAX_24H_PAGES: int = 100 # giới hạn số trang cần quét trong 24h gần nhất 
+    METRIC_REFRESH_MAX_PAGES: int = 20 # giới hạn số trang cần quét khi refresh metrics 
     METRIC_REFRESH_USE_24H_WINDOW: bool = True
     METRIC_REFRESH_DOWNLOAD_MEDIA: bool = False
+
+    SCRAPER_SOURCE_BATCH_LIMIT: int = 500 # giới hạn số nguồn cần quét task scarpe_new_posts
+    SCRAPER_POSTS_BATCH_LIMIT : int = 2500 # giới hạ số bài viết cần quét task update_recent_metrics
     
     # Scheduler settings (APScheduler)
     SCHEDULER_ENABLED: bool = True
