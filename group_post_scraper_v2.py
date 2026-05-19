@@ -990,6 +990,8 @@ def fetch_posts(
     proxies=None,
     download_media=True,
     skip_existing_posts=True,
+    target_post_ids=None,
+    stop_when_targets_found=False,
 ):
     """Fetch posts from Facebook group
     
@@ -1005,6 +1007,8 @@ def fetch_posts(
             When omitted, module globals are used for backwards compatibility.
         download_media: Whether to download media files locally. Metadata is still extracted when False.
         skip_existing_posts: When True, skip posts already persisted on disk. Disable for metric refresh.
+        target_post_ids: Optional post IDs to look for during metric refresh.
+        stop_when_targets_found: Stop pagination once all target_post_ids have been seen.
     """
     global GROUP_NAME
     use_global_group_name = group_id is None and group_name is None
@@ -1033,6 +1037,9 @@ def fetch_posts(
     consecutive_old_count = 0
     stop_due_to_time = False
     stop_due_to_consecutive_old = False
+    target_post_id_set = {str(post_id) for post_id in (target_post_ids or []) if post_id}
+    matched_target_post_ids = set()
+    stop_due_to_targets = False
     max_pages = int(os.getenv("SCRAPER_MAX_24H_PAGES", "100")) if last_24_hours_only else None
     page_size = int(os.getenv("SCRAPER_GROUP_PAGE_SIZE", "3"))
     if page_size <= 0:
@@ -1277,6 +1284,16 @@ def fetch_posts(
                     all_posts.append(post_data)
                     posts_found += 1
                     print(f"  - Tìm thấy post: {post_data['post_id']}")
+
+                    post_id_text = str(post_data.get("post_id"))
+                    if post_id_text in target_post_id_set:
+                        matched_target_post_ids.add(post_id_text)
+                        if (
+                            stop_when_targets_found
+                            and target_post_id_set
+                            and len(matched_target_post_ids) >= len(target_post_id_set)
+                        ):
+                            stop_due_to_targets = True
                     
                     # Check if we should process this batch
                     if batch_size > 0 and len(batch_posts) >= batch_size and on_batch_complete:
@@ -1287,12 +1304,18 @@ def fetch_posts(
                     
                     if limit is not None and len(all_posts) >= limit:
                         break
+
+                    if stop_due_to_targets:
+                        break
             
             # Break outer loop if limit reached
             if limit is not None and len(all_posts) >= limit:
                 break
 
             if stop_due_to_consecutive_old:
+                break
+
+            if stop_due_to_targets:
                 break
 
             # Keep behavior aligned with page scraper: once an older post is seen,
@@ -1388,6 +1411,13 @@ def fetch_posts(
             print(
                 "Đã gặp đủ số post cũ liên tiếp theo latest cutoff."
                 f" Dừng phân trang. consecutive_old={consecutive_old_count}/{consecutive_old_limit}"
+            )
+            break
+
+        if stop_due_to_targets:
+            print(
+                "Đã gặp đủ target posts. Dừng phân trang."
+                f" matched_targets={len(matched_target_post_ids)}/{len(target_post_id_set)}"
             )
             break
         

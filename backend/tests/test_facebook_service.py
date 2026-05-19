@@ -1756,7 +1756,10 @@ def test_refresh_target_post_metrics_disables_skip_existing_posts(monkeypatch):
 
         assert result["matched_target_count"] == 1
         assert calls
+        assert calls[0]["limit"] == 60
         assert calls[0]["skip_existing_posts"] is False
+        assert calls[0]["target_post_ids"] == ["target-existing-1"]
+        assert calls[0]["stop_when_targets_found"] is True
     finally:
         db.close()
 

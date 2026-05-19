@@ -257,6 +257,8 @@ class FacebookScraperService:
         group_name: Optional[str] = None,
         download_media: bool = True,
         skip_existing_posts: bool = True,
+        target_post_ids: Optional[List[str]] = None,
+        stop_when_targets_found: bool = False,
     ) -> List[Dict[str, Any]]:
         """Call group scraper with new args, fallback to legacy signature for compatibility."""
         try:
@@ -271,6 +273,8 @@ class FacebookScraperService:
                 fb_dtsg=group_scraper.FB_DTSG,
                 download_media=download_media,
                 skip_existing_posts=skip_existing_posts,
+                target_post_ids=target_post_ids,
+                stop_when_targets_found=stop_when_targets_found,
             )
         except TypeError:
             # Legacy tests/mocks may patch fetch_posts(limit=...) only.
@@ -684,22 +688,27 @@ class FacebookScraperService:
                 "deleted_post_refs": [],
             }
 
+        post_per_page = 3
+        max_scan_posts = max_pages * post_per_page if max_pages and max_pages > 0 else None
+
         if source.source_type == SourceType.GROUP:
             cls._apply_group_context(source)
             fetched_posts = cls._fetch_group_posts_with_compat(
-                limit=None,
+                limit=max_scan_posts,
                 last_24_hours_only=last_24_hours_only,
                 group_id=source.facebook_id,
                 group_name=source.source_name,
                 download_media=download_media,
                 skip_existing_posts=False,
+                target_post_ids=list(target_set),
+                stop_when_targets_found=stop_when_all_found,
             )
             normalize_post = _normalize_group_post
         elif source.source_type in {SourceType.PAGE, SourceType.USER}:
             cls._apply_timeline_context(source)
             base_folder = "page_post" if source.source_type == SourceType.PAGE else "user_post"
             fetched_posts = cls._fetch_timeline_posts_with_compat(
-                limit=None,
+                limit=max_scan_posts,
                 base_folder=base_folder,
                 last_24_hours_only=last_24_hours_only,
                 download_media=download_media,
@@ -716,15 +725,13 @@ class FacebookScraperService:
         deleted_post_refs: List[str] = []
         matched_targets = set()
         scanned_count = 0
-        post_per_page = 3
-        max_scan_posts = max_pages * post_per_page if max_pages and max_pages > 0 else None
         stop_reason = "completed"
 
         for raw_post in fetched_posts:
-            scanned_count += 1
-            if max_scan_posts is not None and scanned_count > max_scan_posts:
+            if max_scan_posts is not None and scanned_count >= max_scan_posts:
                 stop_reason = "max_pages_reached"
                 break
+            scanned_count += 1
 
             facebook_post_id = raw_post.get("post_id")
             if not facebook_post_id:
@@ -754,7 +761,14 @@ class FacebookScraperService:
                 break
         else:
             if stop_reason == "completed":
-                stop_reason = "source_exhausted"
+                if (
+                    max_scan_posts is not None
+                    and scanned_count >= max_scan_posts
+                    and len(matched_targets) < len(target_set)
+                ):
+                    stop_reason = "max_pages_reached"
+                else:
+                    stop_reason = "source_exhausted"
 
         can_mark_missing_deleted = (
             scanned_count > 0
