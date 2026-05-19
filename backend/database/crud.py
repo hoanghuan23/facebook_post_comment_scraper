@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, desc, func
 from datetime import datetime, timedelta
 import json
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from backend.database import models
 from backend.api.auth import hash_password
@@ -118,6 +118,29 @@ class FacebookSessionCRUD:
                 models.FacebookSession.is_active == True,
             )
         ).order_by(desc(models.FacebookSession.created_at), desc(models.FacebookSession.id)).first()
+
+    @staticmethod
+    def get_active_sessions_bulk(db: Session, user_ids: List[int]) -> Dict[int, models.FacebookSession]:
+        """Get the newest active Facebook session for each user."""
+        unique_user_ids = list({user_id for user_id in user_ids if user_id is not None})
+        if not unique_user_ids:
+            return {}
+
+        sessions = db.query(models.FacebookSession).filter(
+            and_(
+                models.FacebookSession.user_id.in_(unique_user_ids),
+                models.FacebookSession.is_active == True,
+            )
+        ).order_by(
+            models.FacebookSession.user_id,
+            desc(models.FacebookSession.created_at),
+            desc(models.FacebookSession.id),
+        ).all()
+
+        sessions_by_user_id = {}
+        for session in sessions:
+            sessions_by_user_id.setdefault(session.user_id, session)
+        return sessions_by_user_id
 
     @staticmethod
     def upsert_active_for_user(
@@ -525,6 +548,28 @@ class PostCRUD:
         if tracked_only:
             query = query.filter(models.Post.is_tracked == True)
         return query.scalar()
+
+    @staticmethod
+    def get_latest_posted_at_bulk(
+        db: Session,
+        source_ids: List[int],
+        tracked_only: bool = True,
+    ) -> Dict[int, Optional[datetime]]:
+        """Get latest posted_at timestamp for multiple sources."""
+        unique_source_ids = list({source_id for source_id in source_ids if source_id is not None})
+        if not unique_source_ids:
+            return {}
+
+        query = db.query(
+            models.Post.source_id,
+            func.max(models.Post.posted_at),
+        ).filter(models.Post.source_id.in_(unique_source_ids))
+
+        if tracked_only:
+            query = query.filter(models.Post.is_tracked == True)
+
+        rows = query.group_by(models.Post.source_id).all()
+        return {source_id: latest_posted_at for source_id, latest_posted_at in rows}
     
     @staticmethod
     def get_recent_posts(db: Session, hours: int = 24, limit: int = 100) -> List[models.Post]:

@@ -87,13 +87,25 @@ async def periodic_scrape_new_posts():
             _finish_task_log(db, task_log, 0, started_at_ts)
             return
 
+        source_ids = [source.id for source in due_sources]
+        user_ids = [source.user_id for source in due_sources]
+        latest_posted_at_map = PostCRUD.get_latest_posted_at_bulk(db, source_ids, tracked_only=True)
+        active_sessions_map = FacebookSessionCRUD.get_active_sessions_bulk(db, user_ids)
+
         source_jobs = [
             {
                 "id": source.id,
+                "user_id": source.user_id,
                 "source_name": source.source_name,
                 "source_type": source.source_type,
                 "is_accessible": source.is_accessible,
                 "permission_checked_at": source.permission_checked_at,
+                "latest_posted_at": latest_posted_at_map.get(source.id),
+                "active_session_id": (
+                    active_sessions_map[source.user_id].id
+                    if source.user_id in active_sessions_map
+                    else None
+                ),
             }
             for source in due_sources
         ]
@@ -133,18 +145,12 @@ async def periodic_scrape_new_posts():
                     SourceCRUD.update_scrape_info(job_db, source_id, next_scrape=next_scrape)
                     return {"status": "skipped"}
 
-                latest_posted_at = PostCRUD.get_latest_posted_at_by_source(job_db, source_id, tracked_only=True)
-                source = SourceCRUD.get_by_id(job_db, source_id)
-                active_session = (
-                    FacebookSessionCRUD.get_active_by_user_id(job_db, source.user_id)
-                    if source
-                    else None
-                )
+                latest_posted_at = job.get("latest_posted_at")
                 pipeline_job = PipelineJobCRUD.create_job(
                     db=job_db,
                     job_type="scraper_job",
                     source_id=source_id,
-                    session_id=active_session.id if active_session else None,
+                    session_id=job.get("active_session_id"),
                     status="running",
                     started_at=datetime.utcnow(),
                 )
