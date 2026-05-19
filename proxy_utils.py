@@ -101,8 +101,8 @@ def select_proxy(has_cookies: bool):
             return None
 
         proxy_url = static_proxy
-        print("🔒 Proxy mode : STATIC  (cookie-based session, fixed IP)")
-        print("   Initial port: using STATIC_PROXY as configured")
+        # print("🔒 Proxy mode : STATIC  (cookie-based session, fixed IP)")
+        # print("   Initial port: using STATIC_PROXY as configured")
         print(f"   Proxy URL   : {proxy_url}")
         return _build_proxy_dict(proxy_url)
 

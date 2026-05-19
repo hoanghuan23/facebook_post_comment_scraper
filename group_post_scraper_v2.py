@@ -1322,8 +1322,8 @@ def fetch_posts(
             )
             if response_summary["node_typenames"]:
                 print(f"  node typenames: {response_summary['node_typenames']}")
-            if response_summary["top_level_keys"]:
-                print(f"  top-level keys: {response_summary['top_level_keys']}")
+            # if response_summary["top_level_keys"]:
+            #     print(f"  top-level keys: {response_summary['top_level_keys']}")
             if response_summary["errors"]:
                 for idx, err in enumerate(response_summary["errors"], start=1):
                     print(
@@ -1332,17 +1332,17 @@ def fetch_posts(
                         f" description={err.get('errorDescription')},"
                         f" isNotCritical={err.get('isNotCritical')}"
                     )
-            if response_summary["group_nodes"] > 0 and response_summary["group_feed_edges"] == 0 and response_summary["story_nodes"] == 0:
-                print(
-                    "  Nghi ngờ: response có Group node nhưng không có feed edges."
-                    " Thường do session không xem được nội dung group,"
-                    " user không còn là member, hoặc Facebook đã đổi schema query."
-                )
-            elif response_summary["group_nodes"] == 0 and response_summary["story_nodes"] == 0:
-                print(
-                    "  Nghi ngờ: response không chứa Group/Story node."
-                    " Khả năng cao là payload/doc_id/schema không còn khớp."
-                )
+            # if response_summary["group_nodes"] > 0 and response_summary["group_feed_edges"] == 0 and response_summary["story_nodes"] == 0:
+            #     print(
+            #         "  Nghi ngờ: response có Group node nhưng không có feed edges."
+            #         " Thường do session không xem được nội dung group,"
+            #         " user không còn là member, hoặc Facebook đã đổi schema query."
+            #     )
+            # elif response_summary["group_nodes"] == 0 and response_summary["story_nodes"] == 0:
+            #     # print(
+            #     #     "  Nghi ngờ: response không chứa Group/Story node."
+            #     #     " Khả năng cao là payload/doc_id/schema không còn khớp."
+            #     # )
 
             if WRITE_DEBUG_FILES:
                 debug_dir = "logs"
