@@ -517,7 +517,18 @@ def _parse_iso_datetime(value):
         return None
 
 
-def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None, base_folder="page_post", last_24_hours_only=False, download_media=True, skip_existing_posts=True):
+def fetch_posts(
+    limit=10,
+    min_comments=0,
+    batch_size=10,
+    on_batch_complete=None,
+    base_folder="page_post",
+    last_24_hours_only=False,
+    download_media=True,
+    skip_existing_posts=True,
+    min_posted_at=None,
+    consecutive_old_limit=None,
+):
     """Fetch posts from a Facebook timeline (page or user profile).
     
     Args:
@@ -528,6 +539,8 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
         base_folder: Base output folder for saving posts/media (e.g. "page_post", "user_post")
         last_24_hours_only: Only include posts whose posted_at is within the last 24 hours.
         download_media: Whether to download media files locally. Metadata is still extracted when False.
+        min_posted_at: When set, skip posts at or before this timestamp.
+        consecutive_old_limit: Stop pagination after this many consecutive posts are at or before min_posted_at.
     """
     global PAGE_NAME
     all_posts = []
@@ -535,7 +548,11 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
     cursor = None
     page_num = 1  # Track page number for saving cleaned data
     cutoff_time = datetime.now(timezone.utc) - timedelta(hours=24) if last_24_hours_only else None
+    min_posted_at_cutoff = _parse_iso_datetime(min_posted_at)
+    consecutive_old_limit = int(consecutive_old_limit or 0)
+    consecutive_old_count = 0
     stop_due_to_time = False
+    stop_due_to_consecutive_old = False
     max_pages = int(os.getenv("SCRAPER_MAX_24H_PAGES", "100")) if last_24_hours_only else None
     
     if min_comments > 0:
@@ -683,6 +700,19 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
             posted_at = extract_posted_at(node)
             posted_dt = _parse_iso_datetime(posted_at)
 
+            if min_posted_at_cutoff and posted_dt:
+                if posted_dt <= min_posted_at_cutoff:
+                    consecutive_old_count += 1
+                    print(
+                        f"  Gặp post cũ hơn/equal latest cutoff:"
+                        f" {post_id} ({posted_at})"
+                        f" consecutive_old={consecutive_old_count}/{consecutive_old_limit or '-'}"
+                    )
+                    if consecutive_old_limit > 0 and consecutive_old_count >= consecutive_old_limit:
+                        stop_due_to_consecutive_old = True
+                    continue
+                consecutive_old_count = 0
+
             if cutoff_time:
                 if not posted_dt:
                     print(f"  Skipping post {post_id} vì không xác định được posted_at")
@@ -784,6 +814,13 @@ def fetch_posts(limit=10, min_comments=0, batch_size=10, on_batch_complete=None,
             
             if limit is not None and len(all_posts) >= limit:
                 break
+
+        if stop_due_to_consecutive_old:
+            print(
+                "Đã gặp đủ số post cũ liên tiếp theo latest cutoff."
+                f" Dừng phân trang. consecutive_old={consecutive_old_count}/{consecutive_old_limit}"
+            )
+            break
 
         if stop_due_to_time:
             print("Đã gặp post cũ hơn 24h. Dừng phân trang.")

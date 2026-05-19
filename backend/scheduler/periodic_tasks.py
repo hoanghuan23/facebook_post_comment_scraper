@@ -168,6 +168,7 @@ async def periodic_scrape_new_posts():
                     source_id,
                     limit=10,
                     min_posted_at=latest_posted_at,
+                    consecutive_old_limit=settings.SCRAPER_CONSECUTIVE_OLD_LIMIT,
                 )
                 PipelineJobCRUD.mark_done(
                     db=job_db,

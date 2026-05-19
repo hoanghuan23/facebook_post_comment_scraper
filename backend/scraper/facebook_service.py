@@ -251,9 +251,11 @@ class FacebookScraperService:
         *,
         limit: Optional[int],
         last_24_hours_only: bool,
-        group_id: str,
-        group_name: Optional[str],
-        download_media: bool,
+        min_posted_at: Optional[datetime] = None,
+        consecutive_old_limit: Optional[int] = None,
+        group_id: Optional[str] = None,
+        group_name: Optional[str] = None,
+        download_media: bool = True,
         skip_existing_posts: bool = True,
     ) -> List[Dict[str, Any]]:
         """Call group scraper with new args, fallback to legacy signature for compatibility."""
@@ -261,6 +263,8 @@ class FacebookScraperService:
             return group_scraper.fetch_posts(
                 limit=limit,
                 last_24_hours_only=last_24_hours_only,
+                min_posted_at=min_posted_at,
+                consecutive_old_limit=consecutive_old_limit,
                 group_id=group_id,
                 group_name=group_name,
                 cookies=group_scraper.COOKIES,
@@ -280,7 +284,9 @@ class FacebookScraperService:
         limit: Optional[int],
         base_folder: str,
         last_24_hours_only: bool,
-        download_media: bool,
+        min_posted_at: Optional[datetime] = None,
+        consecutive_old_limit: Optional[int] = None,
+        download_media: bool = True,
         skip_existing_posts: bool = True,
     ) -> List[Dict[str, Any]]:
         try:
@@ -289,6 +295,8 @@ class FacebookScraperService:
                     limit=None,
                     base_folder=base_folder,
                     last_24_hours_only=True,
+                    min_posted_at=min_posted_at,
+                    consecutive_old_limit=consecutive_old_limit,
                     download_media=download_media,
                     skip_existing_posts=skip_existing_posts,
                 )
@@ -297,6 +305,8 @@ class FacebookScraperService:
                 base_folder=base_folder,
                 download_media=download_media,
                 skip_existing_posts=skip_existing_posts,
+                min_posted_at=min_posted_at,
+                consecutive_old_limit=consecutive_old_limit,
             )
         except TypeError:
             if last_24_hours_only:
@@ -404,6 +414,7 @@ class FacebookScraperService:
         limit: int = 20,
         last_24_hours_only: bool = False,
         min_posted_at: Optional[datetime] = None,
+        consecutive_old_limit: Optional[int] = None,
     ) -> FacebookScrapeResult:
         cls._apply_source_auth_context(db, source)
         resolved_group_id = cls._resolve_group_id(source)
@@ -415,6 +426,8 @@ class FacebookScraperService:
         raw_posts = cls._fetch_group_posts_with_compat(
             limit=None if last_24_hours_only else limit,
             last_24_hours_only=last_24_hours_only,
+            min_posted_at=min_posted_at,
+            consecutive_old_limit=consecutive_old_limit,
             group_id=source.facebook_id,
             group_name=source.source_name,
             download_media=settings.SCRAPER_DOWNLOAD_MEDIA,
@@ -500,6 +513,7 @@ class FacebookScraperService:
         limit: int = 20,
         last_24_hours_only: bool = False,
         min_posted_at: Optional[datetime] = None,
+        consecutive_old_limit: Optional[int] = None,
     ) -> FacebookScrapeResult:
         cls._apply_source_auth_context(db, source)
         cls._apply_timeline_context(source)
@@ -509,6 +523,8 @@ class FacebookScraperService:
             limit=limit,
             base_folder=base_folder,
             last_24_hours_only=last_24_hours_only,
+            min_posted_at=min_posted_at,
+            consecutive_old_limit=consecutive_old_limit,
             download_media=settings.SCRAPER_DOWNLOAD_MEDIA,
             skip_existing_posts=True,
         )
@@ -783,6 +799,7 @@ class FacebookScraperService:
         limit: int = 20,
         last_24_hours_only: bool = False,
         min_posted_at: Optional[datetime] = None,
+        consecutive_old_limit: Optional[int] = None,
     ) -> FacebookScrapeResult:
         source = SourceCRUD.get_by_id(db, source_id)
         if not source:
@@ -794,6 +811,7 @@ class FacebookScraperService:
                 limit=limit,
                 last_24_hours_only=last_24_hours_only,
                 min_posted_at=min_posted_at,
+                consecutive_old_limit=consecutive_old_limit,
             )
         if source.source_type in {SourceType.PAGE, SourceType.USER}:
             return cls.scrape_timeline_source(
@@ -802,5 +820,6 @@ class FacebookScraperService:
                 limit=limit,
                 last_24_hours_only=last_24_hours_only,
                 min_posted_at=min_posted_at,
+                consecutive_old_limit=consecutive_old_limit,
             )
         raise NotImplementedError(f"Facebook source type '{source.source_type.value}' is not implemented yet")

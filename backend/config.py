@@ -74,13 +74,14 @@ class Settings(BaseSettings):
     
     # Scraping settings
     SCRAPER_ENABLED: bool = True
-    SCRAPER_MAX_WORKERS: int = 3
-    SCRAPER_TIMEOUT: int = 30
-    SCRAPER_RETRY_ATTEMPTS: int = 3
+    SCRAPER_MAX_WORKERS: int = 3 # số lượng worker mặc định cho scraping (để tránh bị block IP)
+    SCRAPER_TIMEOUT: int = 30 # thời gian chờ tối đa cho mỗi request (giây)
+    SCRAPER_RETRY_ATTEMPTS: int = 3 # số lần thử lại khi gặp lỗi
     SCRAPER_WRITE_DEBUG_FILES: bool = False
     SCRAPER_DOWNLOAD_MEDIA: bool = False
     SCRAPER_GROUP_PAGE_SIZE: int = 10
-    SCRAPER_MAX_24H_PAGES: int = 100
+    SCRAPER_CONSECUTIVE_OLD_LIMIT: int = 3 # nếu gặp 3 post cũ liên tiếp dừng scarpe source đó
+    SCRAPER_MAX_24H_PAGES: int = 100 # giới hạn số trang cần quét trong 24h gần nhất để tránh bị block IP
     METRIC_REFRESH_MAX_PAGES: int = 20
     METRIC_REFRESH_USE_24H_WINDOW: bool = True
     METRIC_REFRESH_DOWNLOAD_MEDIA: bool = False
