@@ -758,7 +758,7 @@ class FacebookScraperService:
 
         can_mark_missing_deleted = (
             scanned_count > 0
-            and stop_reason in {"source_exhausted", "max_pages_reached", "completed"}
+            and stop_reason == "source_exhausted"
         )
         if can_mark_missing_deleted:
             recent_cutoff = datetime.utcnow() - timedelta(hours=24)

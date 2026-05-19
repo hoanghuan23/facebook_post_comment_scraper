@@ -1552,7 +1552,7 @@ def test_refresh_target_post_metrics_returns_max_pages_stop_reason(monkeypatch):
             facebook_url="https://www.facebook.com/groups/group-target-max-pages",
             source_name="Target Max Pages Group",
         )
-        PostCRUD.create(
+        late_post = PostCRUD.create(
             db,
             source_id=source.id,
             facebook_post_id="late-target",
@@ -1576,9 +1576,14 @@ def test_refresh_target_post_metrics_returns_max_pages_stop_reason(monkeypatch):
             max_pages=2,
             stop_when_all_found=True,
         )
+        refreshed_late_post = PostCRUD.get_by_id(db, late_post.id)
 
         assert result["stop_reason"] == "max_pages_reached"
         assert result["matched_target_count"] == 0
+        assert result["deleted"] == 0
+        assert result["deleted_post_refs"] == []
+        assert refreshed_late_post.is_tracked is True
+        assert refreshed_late_post.is_deleted is False
     finally:
         db.close()
 
