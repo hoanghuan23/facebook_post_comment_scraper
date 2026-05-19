@@ -22,7 +22,8 @@ from utils.facebook_extractor import (
 )
 
 GRAPHQL_URL = "https://www.facebook.com/api/graphql/"
-WRITE_DEBUG_FILES = os.getenv("SCRAPER_WRITE_DEBUG_FILES", "true").lower() == "true"
+WRITE_DEBUG_FILES = os.getenv("SCRAPER_WRITE_DEBUG_FILES", "false").lower() == "true"
+WRITE_POST_FILES = os.getenv("SCRAPER_WRITE_POST_FILES", "true").lower() == "true"
 
 # ========= CONFIG (FILL THESE) =========
 GROUP_ID = "361726451351144"  # group id
@@ -707,7 +708,7 @@ def extract_post_data(
         'videos': extracted_media['videos']
     }
     
-    if WRITE_DEBUG_FILES:
+    if WRITE_POST_FILES:
         # Save individual post to folder structure: group_post/{group_name}/{post_id}/{post_id}.json
         post_dir = os.path.join("group_post", name_folder, str(post_id))
         os.makedirs(post_dir, exist_ok=True)
