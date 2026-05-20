@@ -87,17 +87,17 @@ class Settings(BaseSettings):
     METRIC_REFRESH_DOWNLOAD_MEDIA: bool = False
 
     SCRAPER_SOURCE_BATCH_LIMIT: int = 500 # giới hạn số nguồn cần quét task scarpe_new_posts
-    SCRAPER_POSTS_BATCH_LIMIT : int = 2500 # giới hạ số bài viết cần quét task update_recent_metrics
+    SCRAPER_POSTS_BATCH_LIMIT : int = 5000 # giới hạ số bài viết cần quét task update_recent_metrics
     
     # Scheduler settings (APScheduler)
     SCHEDULER_ENABLED: bool = True
     
     # Task schedules (cron expressions or seconds)
-    TASK_SCRAPE_NEW_POSTS_INTERVAL: int = 600  # mỗi 10 phút
-    TASK_UPDATE_RECENT_METRICS_INTERVAL: int = 300 # mỗi 5 phút
-    TASK_CLEANUP_OLD_DATA_INTERVAL: int = 3600  # mỗi 1 giờ
+    TASK_SCRAPE_NEW_POSTS_INTERVAL: int = 3600  # mỗi 60 phút
+    TASK_UPDATE_RECENT_METRICS_INTERVAL: int = 7200  # mỗi 120 phút
+    TASK_CLEANUP_OLD_DATA_INTERVAL: int = 43200  # mỗi 12 giờ
     TASK_GENERATE_ANALYTICS_INTERVAL: int = 86400 # mỗi 24 giờ
-    TASK_HEALTH_CHECK_INTERVAL: int = 60 # mỗi 1 phút
+    TASK_HEALTH_CHECK_INTERVAL: int = 1800 # mỗi 30 phút
     
     # Data retention
     DATA_RETENTION_DAYS: int = 30  # xóa dữ liệu cũ hơn N ngày
