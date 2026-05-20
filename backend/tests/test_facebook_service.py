@@ -856,6 +856,107 @@ def test_get_recent_posts_uses_posted_at_window_and_excludes_deleted_posts():
         db.close()
 
 
+def test_get_recent_posts_prioritizes_stale_metric_updates():
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="recent-stale", email="recent-stale@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-recent-stale",
+            facebook_url="https://www.facebook.com/groups/group-recent-stale",
+            source_name="Recent Stale Group",
+        )
+
+        now = datetime.utcnow()
+        updated_newer = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="updated-newer",
+            facebook_url="https://facebook.com/posts/updated-newer",
+            posted_at=now,
+            content="Updated newer",
+            last_metric_update=now - timedelta(minutes=5),
+        )
+        never_updated = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="never-updated",
+            facebook_url="https://facebook.com/posts/never-updated",
+            posted_at=now - timedelta(hours=1),
+            content="Never updated",
+        )
+        stale_updated = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="stale-updated",
+            facebook_url="https://facebook.com/posts/stale-updated",
+            posted_at=now - timedelta(hours=2),
+            content="Stale updated",
+            last_metric_update=now - timedelta(hours=3),
+        )
+
+        recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=2)
+
+        assert [post.id for post in recent_posts] == [never_updated.id, stale_updated.id]
+        assert updated_newer.id not in {post.id for post in recent_posts}
+    finally:
+        db.close()
+
+
+def test_get_due_for_scraping_prioritizes_never_scraped_then_oldest_due():
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="due-source-order", email="due-source-order@example.com", password="secret123")
+        now = datetime.utcnow()
+
+        newer_due = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="newer-due-source",
+            facebook_url="https://www.facebook.com/groups/newer-due-source",
+            source_name="Newer Due Source",
+        )
+        older_due = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="older-due-source",
+            facebook_url="https://www.facebook.com/groups/older-due-source",
+            source_name="Older Due Source",
+        )
+        never_scraped = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="never-scraped-source",
+            facebook_url="https://www.facebook.com/groups/never-scraped-source",
+            source_name="Never Scraped Source",
+        )
+        future_source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="future-source",
+            facebook_url="https://www.facebook.com/groups/future-source",
+            source_name="Future Source",
+        )
+
+        newer_due.next_scrape = now - timedelta(minutes=10)
+        older_due.next_scrape = now - timedelta(hours=2)
+        future_source.next_scrape = now + timedelta(hours=1)
+        db.commit()
+
+        due_sources = SourceCRUD.get_due_for_scraping(db, limit=3)
+
+        assert [source.id for source in due_sources] == [never_scraped.id, older_due.id, newer_due.id]
+        assert future_source.id not in {source.id for source in due_sources}
+    finally:
+        db.close()
+
+
 def test_scrape_source_min_posted_at_filters_old_and_equal_posts(monkeypatch):
     db = SessionLocal()
     try:

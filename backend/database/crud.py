@@ -424,6 +424,9 @@ class SourceCRUD:
                     models.Source.next_scrape <= now
                 )
             )
+        ).order_by(
+            models.Source.next_scrape.asc().nullsfirst(),
+            models.Source.id.asc()
         ).limit(limit).all()
     
     @staticmethod
@@ -581,7 +584,12 @@ class PostCRUD:
                 models.Post.is_tracked == True,
                 models.Post.is_deleted == False,
             )
-        ).order_by(desc(models.Post.posted_at)).limit(limit).all()
+        ).order_by(
+            models.Post.last_metric_update.isnot(None),
+            models.Post.last_metric_update.asc(),
+            desc(models.Post.posted_at),
+            models.Post.id.asc(),
+        ).limit(limit).all()
 
     @staticmethod
     def untrack_posts_older_than(db: Session, hours: int = 24) -> int:

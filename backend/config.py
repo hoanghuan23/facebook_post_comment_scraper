@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     SCRAPER_GROUP_PAGE_SIZE: int = 10
     SCRAPER_CONSECUTIVE_OLD_LIMIT: int = 3 # nếu gặp 3 post cũ liên tiếp dừng scarpe source đó
     SCRAPER_MAX_24H_PAGES: int = 100 # giới hạn số trang cần quét trong 24h gần nhất 
-    METRIC_REFRESH_MAX_PAGES: int = 20 # giới hạn số trang cần quét khi refresh metrics 
+    METRIC_REFRESH_MAX_PAGES: int = 30 # giới hạn số trang cần quét khi refresh metrics 
     METRIC_REFRESH_USE_24H_WINDOW: bool = True
     METRIC_REFRESH_DOWNLOAD_MEDIA: bool = False
 
