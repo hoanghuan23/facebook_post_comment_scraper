@@ -352,6 +352,136 @@ def test_scrape_group_source_creates_posts_and_metrics(monkeypatch):
         db.close()
 
 
+def test_scrape_group_source_last_24h_does_not_persist_old_or_unknown_dates(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="last24-user", email="last24@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="last24-group",
+            facebook_url="https://www.facebook.com/groups/last24-group",
+            source_name="Last 24 Group",
+            include_comments=False,
+        )
+        recent_time = datetime.utcnow() - timedelta(hours=2)
+        old_time = datetime.utcnow() - timedelta(hours=30)
+
+        monkeypatch.setattr(
+            "backend.scraper.facebook_service.group_scraper.fetch_posts",
+            lambda **kwargs: [
+                {
+                    "post_id": "recent-post",
+                    "permalink": "https://facebook.com/posts/recent-post",
+                    "message": "Recent",
+                    "posted_at": recent_time,
+                    "reaction_count": 1,
+                    "share_count": 0,
+                    "comment_count": 0,
+                    "group_name": "Last 24 Group",
+                    "photos": [],
+                    "videos": [],
+                },
+                {
+                    "post_id": "old-post",
+                    "permalink": "https://facebook.com/posts/old-post",
+                    "message": "Old",
+                    "posted_at": old_time,
+                    "reaction_count": 1,
+                    "share_count": 0,
+                    "comment_count": 0,
+                    "group_name": "Last 24 Group",
+                    "photos": [],
+                    "videos": [],
+                },
+                {
+                    "post_id": "unknown-date-post",
+                    "permalink": "https://facebook.com/posts/unknown-date-post",
+                    "message": "Unknown date",
+                    "posted_at": "not-a-date",
+                    "reaction_count": 1,
+                    "share_count": 0,
+                    "comment_count": 0,
+                    "group_name": "Last 24 Group",
+                    "photos": [],
+                    "videos": [],
+                },
+            ],
+        )
+
+        result = FacebookScraperService.scrape_source(db, source.id, last_24_hours_only=True)
+
+        assert result.total_fetched == 3
+        assert result.created_posts == 1
+        assert result.filtered_by_cutoff == 2
+        assert PostCRUD.get_by_source_and_facebook_post_id(db, source.id, "recent-post") is not None
+        assert PostCRUD.get_by_source_and_facebook_post_id(db, source.id, "old-post") is None
+        assert PostCRUD.get_by_source_and_facebook_post_id(db, source.id, "unknown-date-post") is None
+    finally:
+        db.close()
+
+
+def test_scrape_group_source_min_posted_at_only_persists_newer_posts(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="cutoff-user", email="cutoff@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="cutoff-group",
+            facebook_url="https://www.facebook.com/groups/cutoff-group",
+            source_name="Cutoff Group",
+            include_comments=False,
+        )
+        latest_seen = datetime.utcnow() - timedelta(hours=3)
+
+        monkeypatch.setattr(
+            "backend.scraper.facebook_service.group_scraper.fetch_posts",
+            lambda **kwargs: [
+                {
+                    "post_id": "equal-cutoff",
+                    "permalink": "https://facebook.com/posts/equal-cutoff",
+                    "message": "Equal cutoff",
+                    "posted_at": latest_seen,
+                    "reaction_count": 1,
+                    "share_count": 0,
+                    "comment_count": 0,
+                    "group_name": "Cutoff Group",
+                    "photos": [],
+                    "videos": [],
+                },
+                {
+                    "post_id": "newer-than-cutoff",
+                    "permalink": "https://facebook.com/posts/newer-than-cutoff",
+                    "message": "Newer",
+                    "posted_at": latest_seen + timedelta(minutes=5),
+                    "reaction_count": 1,
+                    "share_count": 0,
+                    "comment_count": 0,
+                    "group_name": "Cutoff Group",
+                    "photos": [],
+                    "videos": [],
+                },
+            ],
+        )
+
+        result = FacebookScraperService.scrape_source(
+            db,
+            source.id,
+            last_24_hours_only=True,
+            min_posted_at=latest_seen,
+        )
+
+        assert result.created_posts == 1
+        assert result.filtered_by_cutoff == 1
+        assert PostCRUD.get_by_source_and_facebook_post_id(db, source.id, "equal-cutoff") is None
+        assert PostCRUD.get_by_source_and_facebook_post_id(db, source.id, "newer-than-cutoff") is not None
+    finally:
+        db.close()
+
+
 def test_scrape_group_source_updates_existing_post_without_duplicate_metric(monkeypatch):
     db = SessionLocal()
     try:
@@ -701,7 +831,7 @@ def test_periodic_scrape_new_posts_accepts_string_posted_at(monkeypatch):
                     "group_link": "https://www.facebook.com/groups/group-999/",
                     "permalink": "https://facebook.com/posts/string-datetime-post",
                     "message": "Post with string datetime",
-                    "posted_at": "2026-01-03T09:00:00Z",
+                    "posted_at": (datetime.utcnow() - timedelta(hours=1)).isoformat() + "Z",
                     "reaction_count": 3,
                     "share_count": 1,
                     "comment_count": 2,
@@ -1241,12 +1371,13 @@ def test_periodic_scrape_new_posts_uses_latest_db_post_as_cutoff(monkeypatch):
             facebook_url="https://www.facebook.com/groups/group-periodic-cutoff",
             source_name="Periodic Cutoff Group",
         )
+        latest_seen = datetime.utcnow() - timedelta(hours=2)
         PostCRUD.create(
             db,
             source_id=source.id,
             facebook_post_id="seed-post",
             facebook_url="https://facebook.com/posts/seed-post",
-            posted_at=datetime(2026, 1, 4, 10, 0, 0),
+            posted_at=latest_seen,
             content="Seed",
         )
         source_id = source.id
@@ -1261,7 +1392,7 @@ def test_periodic_scrape_new_posts_uses_latest_db_post_as_cutoff(monkeypatch):
                 "group_link": "https://www.facebook.com/groups/group-periodic-cutoff/",
                 "permalink": "https://facebook.com/posts/periodic-old",
                 "message": "Old periodic",
-                "posted_at": datetime(2026, 1, 4, 9, 0, 0),
+                "posted_at": latest_seen - timedelta(minutes=1),
                 "reaction_count": 1,
                 "share_count": 0,
                 "comment_count": 0,
@@ -1274,7 +1405,7 @@ def test_periodic_scrape_new_posts_uses_latest_db_post_as_cutoff(monkeypatch):
                 "group_link": "https://www.facebook.com/groups/group-periodic-cutoff/",
                 "permalink": "https://facebook.com/posts/periodic-new",
                 "message": "New periodic",
-                "posted_at": datetime(2026, 1, 4, 10, 1, 0),
+                "posted_at": latest_seen + timedelta(minutes=1),
                 "reaction_count": 5,
                 "share_count": 1,
                 "comment_count": 2,
@@ -1323,7 +1454,7 @@ def test_periodic_scrape_new_posts_logs_source_name_and_summary(monkeypatch, cap
                 "group_link": "https://www.facebook.com/groups/group-log-periodic/",
                 "permalink": "https://facebook.com/posts/log-periodic-new",
                 "message": "New periodic",
-                "posted_at": datetime(2026, 1, 4, 10, 1, 0),
+                "posted_at": datetime.utcnow() - timedelta(hours=1),
                 "reaction_count": 5,
                 "share_count": 1,
                 "comment_count": 2,
@@ -1440,7 +1571,7 @@ def test_scrape_source_last_24_hours_uses_unbounded_recent_fetch(monkeypatch):
                     "group_link": "https://www.facebook.com/groups/group-24h/",
                     "permalink": "https://facebook.com/posts/recent-1",
                     "message": "Recent post",
-                    "posted_at": datetime(2026, 1, 3, 9, 0, 0),
+                    "posted_at": datetime.utcnow() - timedelta(hours=1),
                     "reaction_count": 1,
                     "share_count": 0,
                     "comment_count": 0,
@@ -2835,6 +2966,58 @@ def test_refresh_source_appends_schedule_response(monkeypatch):
         db.close()
 
 
+def test_periodic_scrape_new_posts_uses_24h_window_and_latest_post_even_untracked(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="periodic-cutoff-user", email="periodic-cutoff@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="periodic-cutoff-group",
+            facebook_url="https://www.facebook.com/groups/periodic-cutoff-group",
+            source_name="Periodic Cutoff Group",
+        )
+        latest_posted_at = datetime.utcnow() - timedelta(days=3)
+        existing_post = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="existing-untracked",
+            facebook_url="https://facebook.com/posts/existing-untracked",
+            posted_at=latest_posted_at,
+        )
+        existing_post.is_tracked = False
+        db.commit()
+        source_id = source.id
+    finally:
+        db.close()
+
+    calls = []
+
+    def fake_scrape_source(session, passed_source_id, **kwargs):
+        calls.append((passed_source_id, kwargs))
+        return SimpleNamespace(
+            total_fetched=0,
+            created_posts=0,
+            updated_posts=0,
+            skipped_posts=0,
+            filtered_by_cutoff=0,
+        )
+
+    monkeypatch.setattr(
+        "backend.scheduler.periodic_tasks.FacebookScraperService.scrape_source",
+        fake_scrape_source,
+    )
+
+    import asyncio
+    asyncio.run(periodic_scrape_new_posts())
+
+    assert len(calls) == 1
+    assert calls[0][0] == source_id
+    assert calls[0][1]["last_24_hours_only"] is True
+    assert calls[0][1]["min_posted_at"] == latest_posted_at
+
+
 def test_periodic_scrape_new_posts_creates_done_scrape_job_without_session(monkeypatch):
     db = SessionLocal()
     try:
@@ -2859,7 +3042,7 @@ def test_periodic_scrape_new_posts_creates_done_scrape_job_without_session(monke
                 "group_link": "https://www.facebook.com/groups/group-periodic-job-no-session/",
                 "permalink": "https://facebook.com/posts/periodic-job-post-1",
                 "message": "Periodic job post",
-                "posted_at": datetime(2026, 1, 6, 10, 0, 0),
+                "posted_at": datetime.utcnow(),
                 "reaction_count": 2,
                 "share_count": 1,
                 "comment_count": 1,

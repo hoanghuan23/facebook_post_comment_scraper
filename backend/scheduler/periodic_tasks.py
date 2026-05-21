@@ -89,7 +89,7 @@ async def periodic_scrape_new_posts():
 
         source_ids = [source.id for source in due_sources]
         user_ids = [source.user_id for source in due_sources]
-        latest_posted_at_map = PostCRUD.get_latest_posted_at_bulk(db, source_ids, tracked_only=True)
+        latest_posted_at_map = PostCRUD.get_latest_posted_at_bulk(db, source_ids, tracked_only=False)
         active_sessions_map = FacebookSessionCRUD.get_active_sessions_bulk(db, user_ids)
 
         source_jobs = [
@@ -167,6 +167,7 @@ async def periodic_scrape_new_posts():
                     job_db,
                     source_id,
                     limit=10,
+                    last_24_hours_only=True,
                     min_posted_at=latest_posted_at,
                     consecutive_old_limit=settings.SCRAPER_CONSECUTIVE_OLD_LIMIT,
                 )
@@ -394,6 +395,10 @@ async def update_recent_post_metrics():
                     result.get("stop_reason", "unknown"),
                     fetch_to_update_ratio,
                     source_duration,
+                )
+                logger.info(
+                    "updated_posts=[%s]",
+                    _format_post_update_list(updated_post_refs),
                 )
                 return {
                     "status": "refreshed",

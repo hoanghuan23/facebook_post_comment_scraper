@@ -173,6 +173,29 @@ def _normalize_timeline_post(post: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _post_cutoff_skip_reason(
+    raw_post: Dict[str, Any],
+    normalized_post: Dict[str, Any],
+    *,
+    last_24_hours_only: bool,
+    min_posted_at: Optional[datetime],
+) -> Optional[str]:
+    raw_posted_at = _coerce_datetime(raw_post.get("posted_at"))
+    posted_at = raw_posted_at or normalized_post.get("posted_at")
+
+    if min_posted_at is not None and posted_at <= min_posted_at:
+        return "latest_cutoff"
+
+    if last_24_hours_only:
+        if raw_posted_at is None:
+            return "missing_posted_at_24h"
+        recent_cutoff = datetime.utcnow() - timedelta(hours=24)
+        if raw_posted_at < recent_cutoff:
+            return "24h_cutoff"
+
+    return None
+
+
 class FacebookScraperService:
     """Bridge existing Facebook scraper scripts into backend storage flows."""
 
@@ -279,7 +302,10 @@ class FacebookScraperService:
         except TypeError:
             # Legacy tests/mocks may patch fetch_posts(limit=...) only.
             if last_24_hours_only:
-                return group_scraper.fetch_posts(limit=None, last_24_hours_only=True)
+                try:
+                    return group_scraper.fetch_posts(limit=None, last_24_hours_only=True)
+                except TypeError:
+                    return group_scraper.fetch_posts(limit=limit)
             return group_scraper.fetch_posts(limit=limit)
 
     @staticmethod
@@ -314,11 +340,14 @@ class FacebookScraperService:
             )
         except TypeError:
             if last_24_hours_only:
-                return timeline_scraper.fetch_posts(
-                    limit=None,
-                    base_folder=base_folder,
-                    last_24_hours_only=True,
-                )
+                try:
+                    return timeline_scraper.fetch_posts(
+                        limit=None,
+                        base_folder=base_folder,
+                        last_24_hours_only=True,
+                    )
+                except TypeError:
+                    return timeline_scraper.fetch_posts(limit=limit, base_folder=base_folder)
             return timeline_scraper.fetch_posts(limit=limit, base_folder=base_folder)
 
     @staticmethod
@@ -452,8 +481,23 @@ class FacebookScraperService:
 
             normalized_post = _normalize_group_post(raw_post)
             cls._ensure_valid_posted_at(raw_post, normalized_post)
-            if min_posted_at is not None and normalized_post["posted_at"] <= min_posted_at:
+            skip_reason = _post_cutoff_skip_reason(
+                raw_post,
+                normalized_post,
+                last_24_hours_only=last_24_hours_only,
+                min_posted_at=min_posted_at,
+            )
+            if skip_reason:
                 skipped_by_cutoff += 1
+                logger.info(
+                    "Skip group post by cutoff: source_id=%s post_id=%s reason=%s posted_at=%s min_posted_at=%s last_24_hours_only=%s",
+                    source.id,
+                    facebook_post_id,
+                    skip_reason,
+                    normalized_post["posted_at"],
+                    min_posted_at,
+                    last_24_hours_only,
+                )
                 continue
             db_post, created = PostCRUD.upsert_for_source(
                 db=db,
@@ -547,8 +591,23 @@ class FacebookScraperService:
 
             normalized_post = _normalize_timeline_post(raw_post)
             cls._ensure_valid_posted_at(raw_post, normalized_post)
-            if min_posted_at is not None and normalized_post["posted_at"] <= min_posted_at:
+            skip_reason = _post_cutoff_skip_reason(
+                raw_post,
+                normalized_post,
+                last_24_hours_only=last_24_hours_only,
+                min_posted_at=min_posted_at,
+            )
+            if skip_reason:
                 skipped_by_cutoff += 1
+                logger.info(
+                    "Skip timeline post by cutoff: source_id=%s post_id=%s reason=%s posted_at=%s min_posted_at=%s last_24_hours_only=%s",
+                    source.id,
+                    facebook_post_id,
+                    skip_reason,
+                    normalized_post["posted_at"],
+                    min_posted_at,
+                    last_24_hours_only,
+                )
                 continue
             db_post, created = PostCRUD.upsert_for_source(
                 db=db,
