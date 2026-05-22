@@ -62,7 +62,7 @@ def extract_user_id_from_url(url, cookies=None):
                 print(f"  âœ… Found User ID: {user_id}")
                 return user_id
         
-        print("User ID not found (trang cÃ¡ nhÃ¢n cÃ³ thá»ƒ bá»‹ khÃ³a hoáº·c cáº§n Ä‘Äƒng nháº­p)")
+        print("User ID not found")
         return None
     
     except Exception as e:
@@ -133,7 +133,7 @@ def extract_post_id_from_url(url, cookies=None):
         match = re.search(pattern, url)
         if match:
             post_id = match.group(1)
-            print(f"  âœ… Found Post ID in URL: {post_id}")
+            print(f"Found Post ID in URL: {post_id}")
             return post_id
     
     # If no direct pattern match, fetch the page and extract from HTML
@@ -536,7 +536,7 @@ def scrape_page_posts():
             save_post_data(output_folder, post_id, post, comments)
             time.sleep(1)  # Be nice to the server
         except Exception as e:
-            print(f"  âŒ Error fetching comments: {e}")
+            print(f"Error fetching comments: {e}")
             # Save post data even if comments fail
             output_folder = resolve_timeline_output_folder(post)
             save_post_data(output_folder, post_id, post, [])
@@ -644,5 +644,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-1
 
