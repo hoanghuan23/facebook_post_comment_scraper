@@ -1,12 +1,11 @@
 import os
-import random
 import requests
 from dotenv import load_dotenv
 
 load_dotenv()
 
-STATIC_PORT_MIN = 10000
-STATIC_PORT_MAX = 10000
+STATIC_PORT_MIN = os.getenv('STATIC_PROXY_PORT_MIN', '').strip()
+STATIC_PORT_MAX = os.getenv('STATIC_PROXY_PORT_MAX', '').strip()
 
 
 def _replace_trailing_port(proxy_url: str, port: int) -> str:
@@ -21,20 +20,74 @@ def _build_proxy_dict(proxy_url: str):
     return {'http': proxy_url, 'https': proxy_url}
 
 
+def _configured_static_port_range():
+    if not STATIC_PORT_MIN or not STATIC_PORT_MAX:
+        return None
+    try:
+        return int(STATIC_PORT_MIN), int(STATIC_PORT_MAX)
+    except ValueError:
+        return None
+
+
+def _proxy_url_from_dict(proxies):
+    if not proxies:
+        return ''
+    return (proxies.get('https') or proxies.get('http') or '').strip()
+
+
 def rotate_static_proxy():
     """
-    Pick a brand-new random static port and return a fresh proxy dict.
-    Call this whenever a static proxy appears blocked or unreachable.
+    Return the configured static proxy for cookie-based sessions.
+
+    By default this does not rewrite the port. Some providers issue one exact
+    host:port pair, and changing the port can turn a valid proxy into a dead one.
+    If a provider explicitly supports rotating static ports, configure
+    STATIC_PROXY_PORT_MIN and STATIC_PROXY_PORT_MAX in .env.
+
     Returns None if STATIC_PROXY (or fallback PROXY) is not configured.
     """
     proxy_base = os.getenv('STATIC_PROXY', '').strip() or os.getenv('PROXY', '').strip()
     if not proxy_base:
         return None
 
-    port = random.randint(STATIC_PORT_MIN, STATIC_PORT_MAX)
-    proxy_url = _replace_trailing_port(proxy_base, port)
-    print(f"  🔁 Static proxy rotated → new port {port}  ({proxy_url})")
+    port_range = _configured_static_port_range()
+    if port_range:
+        import random
+
+        port = random.randint(port_range[0], port_range[1])
+        proxy_url = _replace_trailing_port(proxy_base, port)
+        print(f"  Static proxy rotated -> new port {port}  ({proxy_url})")
+        return _build_proxy_dict(proxy_url)
+
+    proxy_url = proxy_base
+    print(f"  Static proxy retry -> keeping configured proxy ({proxy_url})")
     return _build_proxy_dict(proxy_url)
+
+
+def rotate_proxy_for_retry(current_proxies=None, has_cookies=False):
+    """
+    Pick the retry proxy without switching proxy modes.
+
+    has_cookies=False uses the rotating proxy endpoint as-is. With ProXoay-style
+    local endpoints such as http://10.0.2.15:10000, the provider handles IP
+    rotation behind that endpoint; changing to STATIC_PROXY here is wrong.
+
+    has_cookies=True uses the static proxy path.
+    """
+    if has_cookies:
+        return rotate_static_proxy()
+
+    current_proxy = _proxy_url_from_dict(current_proxies)
+    if current_proxy:
+        print(f"  Rotating proxy retry -> keeping configured endpoint ({current_proxy})")
+        return current_proxies
+
+    rotating_proxy = os.getenv('ROTATING_PROXY', '').strip() or os.getenv('PROXY', '').strip()
+    if not rotating_proxy:
+        return None
+
+    print(f"  Rotating proxy retry -> using configured endpoint ({rotating_proxy})")
+    return _build_proxy_dict(rotating_proxy)
 
 
 def is_proxy_infra_error(exc=None, status_code=None) -> bool:
@@ -85,7 +138,8 @@ def select_proxy(has_cookies: bool):
 
     has_cookies=True  → static proxy from STATIC_PROXY (country can already be
                         embedded in username, e.g. __cr.fr), used as-is first.
-                        Port is changed later only if retry logic rotates proxy.
+                        Port is kept as configured unless STATIC_PROXY_PORT_MIN
+                        and STATIC_PROXY_PORT_MAX are explicitly configured.
     has_cookies=False → rotating proxy from ROTATING_PROXY as-is.
 
     Backward compatibility:

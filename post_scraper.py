@@ -42,7 +42,7 @@ def sanitize_page_folder_name(page_name):
 def retry_request(url, headers, data, proxies, max_retries=5):
     """Make a POST request with retry logic"""
     global PROXIES
-    from proxy_utils import rotate_static_proxy, is_proxy_infra_error, is_ip_blocked
+    from proxy_utils import rotate_proxy_for_retry, is_proxy_infra_error, is_ip_blocked
 
     for attempt in range(1, max_retries + 1):
         try:
@@ -50,29 +50,29 @@ def retry_request(url, headers, data, proxies, max_retries=5):
             if r.status_code == 200:
                 return r
             if is_proxy_infra_error(status_code=r.status_code):
-                print(f"Attempt {attempt}/{max_retries}: Proxy auth failed (HTTP {r.status_code}) â€” rotating static proxy...")
-                new_p = rotate_static_proxy()
+                print(f"Attempt {attempt}/{max_retries}: Proxy auth failed (HTTP {r.status_code}) - retrying proxy...")
+                new_p = rotate_proxy_for_retry(proxies, has_cookies=bool(COOKIES))
                 if new_p:
                     proxies = new_p
                     PROXIES = new_p
             elif is_ip_blocked(status_code=r.status_code, response_text=r.text):
-                print(f"Attempt {attempt}/{max_retries}: Facebook blocked this IP (HTTP {r.status_code}) â€” rotating static proxy...")
-                new_p = rotate_static_proxy()
+                print(f"Attempt {attempt}/{max_retries}: Facebook blocked this IP (HTTP {r.status_code}) - retrying proxy...")
+                new_p = rotate_proxy_for_retry(proxies, has_cookies=bool(COOKIES))
                 if new_p:
                     proxies = new_p
                     PROXIES = new_p
             else:
                 print(f"Attempt {attempt}/{max_retries}: Status {r.status_code}")
         except requests.exceptions.ProxyError as e:
-            print(f"Attempt {attempt}/{max_retries}: Proxy unreachable â€” rotating static proxy...")
-            new_p = rotate_static_proxy()
+            print(f"Attempt {attempt}/{max_retries}: Proxy unreachable - retrying proxy...")
+            new_p = rotate_proxy_for_retry(proxies, has_cookies=bool(COOKIES))
             if new_p:
                 proxies = new_p
                 PROXIES = new_p
         except Exception as e:
             if is_proxy_infra_error(exc=e):
-                print(f"Attempt {attempt}/{max_retries}: Proxy connection error â€” rotating static proxy...")
-                new_p = rotate_static_proxy()
+                print(f"Attempt {attempt}/{max_retries}: Proxy connection error - retrying proxy...")
+                new_p = rotate_proxy_for_retry(proxies, has_cookies=bool(COOKIES))
                 if new_p:
                     proxies = new_p
                     PROXIES = new_p
