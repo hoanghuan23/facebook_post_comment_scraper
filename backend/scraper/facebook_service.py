@@ -10,7 +10,7 @@ import re
 
 from sqlalchemy.orm import Session
 
-from backend.database.crud import CommentCRUD, FacebookSessionCRUD, PostCRUD, PostMetricCRUD, SourceCRUD
+from backend.database.crud import CommentCRUD, FacebookSessionCRUD, LogCRUD, PostCRUD, PostMetricCRUD, SourceCRUD
 from backend.config import settings
 from backend.database.models import Source, SourceType
 import comment_scraper
@@ -282,6 +282,7 @@ class FacebookScraperService:
         skip_existing_posts: bool = True,
         target_post_ids: Optional[List[str]] = None,
         stop_when_targets_found: bool = False,
+        on_page_diagnostic: Any = None,
     ) -> List[Dict[str, Any]]:
         """Call group scraper with new args, fallback to legacy signature for compatibility."""
         try:
@@ -298,6 +299,7 @@ class FacebookScraperService:
                 skip_existing_posts=skip_existing_posts,
                 target_post_ids=target_post_ids,
                 stop_when_targets_found=stop_when_targets_found,
+                on_page_diagnostic=on_page_diagnostic,
             )
         except TypeError:
             # Legacy tests/mocks may patch fetch_posts(limit=...) only.
@@ -307,6 +309,40 @@ class FacebookScraperService:
                 except TypeError:
                     return group_scraper.fetch_posts(limit=limit)
             return group_scraper.fetch_posts(limit=limit)
+
+    @staticmethod
+    def _create_group_page_diagnostic_logger(
+        db: Session,
+        source_id: int,
+        job_id: Optional[int] = None,
+    ):
+        def persist_diagnostic(event: Dict[str, Any]) -> None:
+            summary = event["response_summary"]
+            stop_reason = event["stop_reason"]
+            final_line = (
+                f"Không còn trang hoặc đã đạt giới hạn. Dừng lại. reason={stop_reason}"
+                if stop_reason != "next_page"
+                else "Trang không có post, tiếp tục phân trang. reason=next_page"
+            )
+            message = (
+                "Chuẩn đoán response:"
+                f" blocks={summary['total_blocks']},"
+                f" group_nodes={summary['group_nodes']},"
+                f" group_feed_edges={summary['group_feed_edges']},"
+                f" timeline_edges={summary['timeline_edges']},"
+                f" story_nodes={summary['story_nodes']},"
+                f" page_info_blocks={summary['page_info_blocks']}\n"
+                f"{final_line}"
+            )
+            LogCRUD.create_pipeline_log(
+                db,
+                message=message,
+                log_level="WARNING",
+                job_id=job_id,
+                source_id=source_id,
+            )
+
+        return persist_diagnostic
 
     @staticmethod
     def _fetch_timeline_posts_with_compat(
@@ -448,6 +484,7 @@ class FacebookScraperService:
         last_24_hours_only: bool = False,
         min_posted_at: Optional[datetime] = None,
         consecutive_old_limit: Optional[int] = None,
+        job_id: Optional[int] = None,
     ) -> FacebookScrapeResult:
         cls._apply_source_auth_context(db, source)
         resolved_group_id = cls._resolve_group_id(source)
@@ -466,6 +503,7 @@ class FacebookScraperService:
             download_media=settings.SCRAPER_DOWNLOAD_MEDIA,
             # Persistence is DB-backed; a JSON file may have been written by metric refresh.
             skip_existing_posts=False,
+            on_page_diagnostic=cls._create_group_page_diagnostic_logger(db, source.id, job_id),
         )
         created_posts = 0
         updated_posts = 0
@@ -665,7 +703,13 @@ class FacebookScraperService:
         )
 
     @classmethod
-    def refresh_recent_post_metrics(cls, db: Session, source: Source, limit: int = 20) -> Dict[str, Any]:
+    def refresh_recent_post_metrics(
+        cls,
+        db: Session,
+        source: Source,
+        limit: int = 20,
+        job_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
         cls._apply_source_auth_context(db, source)
         fetched_posts: List[Dict[str, Any]]
         normalize_post: Any
@@ -678,6 +722,7 @@ class FacebookScraperService:
                 group_id=source.facebook_id,
                 group_name=source.source_name,
                 download_media=settings.SCRAPER_DOWNLOAD_MEDIA,
+                on_page_diagnostic=cls._create_group_page_diagnostic_logger(db, source.id, job_id),
             )
             normalize_post = _normalize_group_post
         elif source.source_type in {SourceType.PAGE, SourceType.USER}:
@@ -731,6 +776,7 @@ class FacebookScraperService:
         stop_when_all_found: bool = True,
         last_24_hours_only: bool = True,
         download_media: bool = False,
+        job_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         cls._apply_source_auth_context(db, source)
         target_set = {str(post_id) for post_id in target_post_ids if post_id}
@@ -762,6 +808,7 @@ class FacebookScraperService:
                 skip_existing_posts=False,
                 target_post_ids=list(target_set),
                 stop_when_targets_found=stop_when_all_found,
+                on_page_diagnostic=cls._create_group_page_diagnostic_logger(db, source.id, job_id),
             )
             normalize_post = _normalize_group_post
         elif source.source_type in {SourceType.PAGE, SourceType.USER}:
@@ -874,6 +921,7 @@ class FacebookScraperService:
         last_24_hours_only: bool = False,
         min_posted_at: Optional[datetime] = None,
         consecutive_old_limit: Optional[int] = None,
+        job_id: Optional[int] = None,
     ) -> FacebookScrapeResult:
         source = SourceCRUD.get_by_id(db, source_id)
         if not source:
@@ -886,6 +934,7 @@ class FacebookScraperService:
                 last_24_hours_only=last_24_hours_only,
                 min_posted_at=min_posted_at,
                 consecutive_old_limit=consecutive_old_limit,
+                job_id=job_id,
             )
         if source.source_type in {SourceType.PAGE, SourceType.USER}:
             return cls.scrape_timeline_source(

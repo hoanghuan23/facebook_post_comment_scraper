@@ -84,6 +84,7 @@ def _bootstrap_scrape_source_last_24h(source_id: int):
             db,
             source_id=source_id,
             last_24_hours_only=True,
+            job_id=pipeline_job_id,
         )
         PipelineJobCRUD.mark_done(
             db=db,

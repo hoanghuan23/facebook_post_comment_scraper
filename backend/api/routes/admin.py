@@ -235,7 +235,7 @@ async def run_task_manually(
                     started_at=datetime.utcnow(),
                 )
                 try:
-                    result = FacebookScraperService.scrape_source(db, source_id, limit=20)
+                    result = FacebookScraperService.scrape_source(db, source_id, limit=20, job_id=pipeline_job.id)
                     PipelineJobCRUD.mark_done(
                         db=db,
                         job_id=pipeline_job.id,
@@ -281,7 +281,7 @@ async def run_task_manually(
                     started_at=datetime.utcnow(),
                 )
                 try:
-                    result = FacebookScraperService.refresh_recent_post_metrics(db, source, limit=20)
+                    result = FacebookScraperService.refresh_recent_post_metrics(db, source, limit=20, job_id=pipeline_job.id)
                     PipelineJobCRUD.mark_done(
                         db=db,
                         job_id=pipeline_job.id,

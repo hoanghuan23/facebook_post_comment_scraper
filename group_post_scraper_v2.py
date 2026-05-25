@@ -992,6 +992,7 @@ def fetch_posts(
     skip_existing_posts=True,
     target_post_ids=None,
     stop_when_targets_found=False,
+    on_page_diagnostic=None,
 ):
     """Fetch posts from Facebook group
     
@@ -1009,6 +1010,7 @@ def fetch_posts(
         skip_existing_posts: When True, skip posts already persisted on disk. Disable for metric refresh.
         target_post_ids: Optional post IDs to look for during metric refresh.
         stop_when_targets_found: Stop pagination once all target_post_ids have been seen.
+        on_page_diagnostic: Optional callback receiving details for pages with no extracted posts.
     """
     global GROUP_NAME
     use_global_group_name = group_id is None and group_name is None
@@ -1402,6 +1404,32 @@ def fetch_posts(
                 with open(parsed_path, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
                 print(f"  Đã lưu debug: {raw_path}, {parsed_path}")
+
+        page_stop_reason = "next_page"
+        if stop_due_to_time:
+            page_stop_reason = "old_post"
+        elif stop_due_to_consecutive_old:
+            page_stop_reason = "consecutive_old"
+        elif stop_due_to_targets:
+            page_stop_reason = "targets_found"
+        elif limit is not None and len(all_posts) >= limit:
+            page_stop_reason = "limit"
+        elif not has_next_page:
+            page_stop_reason = "no_next_page"
+        elif not next_cursor:
+            page_stop_reason = "no_cursor"
+
+        if posts_found == 0 and on_page_diagnostic:
+            on_page_diagnostic(
+                {
+                    "page_num": page_num,
+                    "posts_found": posts_found,
+                    "has_next_page": has_next_page,
+                    "next_cursor": bool(next_cursor),
+                    "response_summary": response_summary,
+                    "stop_reason": page_stop_reason,
+                }
+            )
 
         if stop_due_to_time:
             print("Đã gặp post cũ hơn 24h. Dừng phân trang.")

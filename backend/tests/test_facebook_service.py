@@ -4,7 +4,7 @@ import json
 
 from fastapi import BackgroundTasks
 from sqlalchemy import text
-from backend.database.crud import CommentCRUD, FacebookSessionCRUD, PostCRUD, PostMetricCRUD, SourceCRUD, UserCRUD
+from backend.database.crud import CommentCRUD, FacebookSessionCRUD, PipelineJobCRUD, PostCRUD, PostMetricCRUD, SourceCRUD, UserCRUD
 from backend.database.db import SessionLocal, engine
 from backend.database.models import Base, ScrapeJob, ScraperLog
 from backend.database.schemas import SourceCreate, SourceUpdate
@@ -1219,6 +1219,7 @@ def test_update_recent_post_metrics_only_refreshes_sources_with_recent_posted_po
         stop_when_all_found=True,
         last_24_hours_only=True,
         download_media=False,
+        job_id=None,
     ):
         calls.append((source.id, target_post_ids))
         return {
@@ -1325,6 +1326,7 @@ def test_update_recent_post_metrics_records_active_session_id(monkeypatch):
         stop_when_all_found=True,
         last_24_hours_only=True,
         download_media=False,
+        job_id=None,
     ):
         return {
             "fetched": 1,
@@ -1514,6 +1516,7 @@ def test_update_recent_post_metrics_logs_updated_post_list_capped(monkeypatch, c
         stop_when_all_found=True,
         last_24_hours_only=True,
         download_media=False,
+        job_id=None,
     ):
         refs = [f"post-{idx}" for idx in range(1, 13)]
         return {
@@ -1635,6 +1638,55 @@ def test_scrape_source_passes_download_media_flag_to_group_fetch_posts(monkeypat
         db.close()
 
 
+def test_scrape_group_source_persists_empty_page_diagnostic_pipeline_log(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="empty-diagnostic", email="empty-diagnostic@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="empty-diagnostic-group",
+            facebook_url="https://www.facebook.com/groups/empty-diagnostic-group",
+            source_name="Empty Diagnostic Group",
+        )
+        job = PipelineJobCRUD.create_job(db, job_type="scraper_job", source_id=source.id, status="running")
+
+        def fake_fetch_posts(limit=10, **kwargs):
+            kwargs["on_page_diagnostic"](
+                {
+                    "page_num": 1,
+                    "posts_found": 0,
+                    "has_next_page": False,
+                    "next_cursor": False,
+                    "response_summary": {
+                        "total_blocks": 1,
+                        "group_nodes": 0,
+                        "group_feed_edges": 0,
+                        "timeline_edges": 0,
+                        "story_nodes": 0,
+                        "page_info_blocks": 0,
+                    },
+                    "stop_reason": "no_next_page",
+                }
+            )
+            return []
+
+        monkeypatch.setattr("backend.scraper.facebook_service.group_scraper.fetch_posts", fake_fetch_posts)
+
+        result = FacebookScraperService.scrape_source(db, source.id, limit=5, job_id=job.id)
+        log = db.query(ScraperLog).filter(ScraperLog.source_id == source.id).one()
+
+        assert result.total_fetched == 0
+        assert log.job_id == job.id
+        assert log.log_level == "WARNING"
+        assert "Tìm thấy 0 post trong trang này(has_next_page=False, next_cursor=no)" in log.message
+        assert "blocks=1, group_nodes=0, group_feed_edges=0" in log.message
+        assert "reason=no_next_page" in log.message
+    finally:
+        db.close()
+
+
 def test_refresh_recent_post_metrics_passes_download_media_flag_to_timeline_fetch_posts(monkeypatch):
     db = SessionLocal()
     try:
@@ -1661,8 +1713,39 @@ def test_refresh_recent_post_metrics_passes_download_media_flag_to_timeline_fetc
 
         assert calls
         assert calls[0]["download_media"] is False
+        assert calls[0]["skip_existing_posts"] is False
     finally:
         db.close()
+
+
+def test_group_fetch_posts_emits_empty_no_next_page_diagnostic(monkeypatch):
+    events = []
+
+    class FakeResponse:
+        text = json.dumps({"extensions": {"is_final": True}})
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+    monkeypatch.setattr(group_post_scraper_v2, "retry_request", lambda *args, **kwargs: FakeResponse())
+
+    posts = group_post_scraper_v2.fetch_posts(
+        limit=5,
+        group_id="empty-group",
+        cookies={},
+        download_media=False,
+        on_page_diagnostic=events.append,
+    )
+
+    assert posts == []
+    assert len(events) == 1
+    assert events[0]["posts_found"] == 0
+    assert events[0]["has_next_page"] is False
+    assert events[0]["next_cursor"] is False
+    assert events[0]["stop_reason"] == "no_next_page"
+    assert events[0]["response_summary"]["total_blocks"] == 1
+    assert events[0]["response_summary"]["story_nodes"] == 0
 
 
 def test_refresh_target_post_metrics_only_updates_target_posts(monkeypatch):

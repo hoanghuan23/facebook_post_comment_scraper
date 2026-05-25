@@ -170,6 +170,7 @@ async def periodic_scrape_new_posts():
                     last_24_hours_only=True,
                     min_posted_at=latest_posted_at,
                     consecutive_old_limit=settings.SCRAPER_CONSECUTIVE_OLD_LIMIT,
+                    job_id=pipeline_job_id,
                 )
                 PipelineJobCRUD.mark_done(
                     db=job_db,
@@ -364,6 +365,7 @@ async def update_recent_post_metrics():
                     stop_when_all_found=True,
                     last_24_hours_only=settings.METRIC_REFRESH_USE_24H_WINDOW,
                     download_media=settings.METRIC_REFRESH_DOWNLOAD_MEDIA,
+                    job_id=pipeline_job_id,
                 )
                 updated_post_refs = result.get("updated_post_refs", [])
                 source_duration = round(time.time() - source_started_at, 3)
