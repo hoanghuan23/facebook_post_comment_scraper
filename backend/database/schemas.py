@@ -59,7 +59,7 @@ class SourceCreate(BaseModel):
     """Create a new source"""
     source_type: Literal["group", "page", "user"]
     facebook_url: str
-    include_comments: bool = True
+    include_comments: bool = False
     max_days_old: int = 30
     check_access: bool = True  # Có kiểm tra quyền trước khi lưu không
 

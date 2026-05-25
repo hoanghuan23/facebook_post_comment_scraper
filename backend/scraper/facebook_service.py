@@ -464,7 +464,8 @@ class FacebookScraperService:
             group_id=source.facebook_id,
             group_name=source.source_name,
             download_media=settings.SCRAPER_DOWNLOAD_MEDIA,
-            skip_existing_posts=True,
+            # Persistence is DB-backed; a JSON file may have been written by metric refresh.
+            skip_existing_posts=False,
         )
         created_posts = 0
         updated_posts = 0
@@ -574,7 +575,7 @@ class FacebookScraperService:
             min_posted_at=min_posted_at,
             consecutive_old_limit=consecutive_old_limit,
             download_media=settings.SCRAPER_DOWNLOAD_MEDIA,
-            skip_existing_posts=True,
+            skip_existing_posts=False,
         )
         created_posts = 0
         updated_posts = 0
