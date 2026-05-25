@@ -474,6 +474,7 @@ class ScraperThread(QThread):
         count = self.params.get("count")
         last_24_hours_only = self.params.get("last_24_hours_only", False)
         download_media = self.params.get("download_media", False)
+        include_comments = self.params.get("include_comments", False)
 
         total_users = len(urls)
         all_posts_count = 0
@@ -507,7 +508,6 @@ class ScraperThread(QThread):
                     post_scraper.FB_DTSG = ""
                     comment_scraper.FB_DTSG = ""
 
-                min_comments = self.params.get("min_comments", 0)
                 batch_size = 2
 
                 def process_batch(batch_posts, total_so_far, total_limit):
@@ -522,10 +522,13 @@ class ScraperThread(QThread):
                         self.log(f"    [{i}/{len(batch_posts)}] Processing post {post_id}...")
 
                         try:
-                            comments, _ = fetch_comments_for_post(post_id, cookies=self.cookies)
+                            comments = []
+                            if include_comments:
+                                comments, _ = fetch_comments_for_post(post_id, cookies=self.cookies)
                             save_post_data("user_post", post_id, post, comments)
                             self.log(f"      ✓ Saved to user_post/{post_id}/{post_id}.json")
-                            time.sleep(1)
+                            if include_comments:
+                                time.sleep(1)
                         except Exception as e:
                             self.log(f"      ❌ Error fetching comments: {e}")
                             save_post_data("user_post", post_id, post, [])
@@ -534,7 +537,7 @@ class ScraperThread(QThread):
                 self.log(f"  Fetching {fetch_label} from user {user_id} (batch size: {batch_size})...")
                 posts = fetch_page_posts(
                     count,
-                    min_comments,
+                    0,
                     batch_size=batch_size,
                     on_batch_complete=process_batch,
                     base_folder="user_post",
@@ -557,6 +560,7 @@ class ScraperThread(QThread):
         count = self.params.get('count')
         last_24_hours_only = self.params.get("last_24_hours_only", False)
         download_media = self.params.get("download_media", False)
+        include_comments = self.params.get("include_comments", False)
         
         total_pages = len(urls)
         all_posts_count = 0
@@ -593,7 +597,6 @@ class ScraperThread(QThread):
                     post_scraper.FB_DTSG = ""
                     comment_scraper.FB_DTSG = ""
                 
-                min_comments = self.params.get('min_comments', 0)
                 batch_size = 2  # Process in batches of 10
                 
                 # Define callback to process each batch
@@ -609,10 +612,13 @@ class ScraperThread(QThread):
                         self.log(f"    [{i}/{len(batch_posts)}] Processing post {post_id}...")
                         
                         try:
-                            comments, _ = fetch_comments_for_post(post_id, cookies=self.cookies)
+                            comments = []
+                            if include_comments:
+                                comments, _ = fetch_comments_for_post(post_id, cookies=self.cookies)
                             save_post_data("page_post", post_id, post, comments)
                             self.log(f"      ✓ Saved to page_post/{post_id}/{post_id}.json")
-                            time.sleep(1)  # Be nice to the server
+                            if include_comments:
+                                time.sleep(1)  # Be nice to the server
                         except Exception as e:
                             self.log(f"      ❌ Error fetching comments: {e}")
                             # Save post data even if comments fail
@@ -622,7 +628,7 @@ class ScraperThread(QThread):
                 self.log(f"  Fetching {fetch_label} from page {page_id} (batch size: {batch_size})...")
                 posts = fetch_page_posts(
                     count,
-                    min_comments,
+                    0,
                     batch_size=batch_size,
                     on_batch_complete=process_batch,
                     base_folder="page_post",
@@ -646,6 +652,7 @@ class ScraperThread(QThread):
         count = self.params.get('count')
         last_24_hours_only = self.params.get("last_24_hours_only", False)
         download_media = self.params.get("download_media", False)
+        include_comments = self.params.get("include_comments", False)
         
         total_groups = len(urls)
         all_posts_count = 0
@@ -682,7 +689,6 @@ class ScraperThread(QThread):
                     group_post_scraper_v2.FB_DTSG = ""
                     comment_scraper.FB_DTSG = ""
                 
-                min_comments = self.params.get('min_comments', 0)
                 batch_size = 2  # Process in batches of 10
                 
                 # Define callback to process each batch
@@ -698,10 +704,13 @@ class ScraperThread(QThread):
                         self.log(f"    [{i}/{len(batch_posts)}] Processing post {post_id}...")
                         
                         try:
-                            comments, _ = fetch_comments_for_post(post_id, cookies=self.cookies)
+                            comments = []
+                            if include_comments:
+                                comments, _ = fetch_comments_for_post(post_id, cookies=self.cookies)
                             save_post_data("group_post", post_id, post, comments)
                             self.log(f"      ✓ Saved to group_post/{post_id}/{post_id}.json")
-                            time.sleep(1)  # Be nice to the server
+                            if include_comments:
+                                time.sleep(1)  # Be nice to the server
                         except Exception as e:
                             self.log(f"      ❌ Error fetching comments: {e}")
                             # Save post data even if comments fail
@@ -711,7 +720,7 @@ class ScraperThread(QThread):
                 self.log(f"  Fetching {fetch_label} from group {group_id} (batch size: {batch_size})...")
                 posts = fetch_group_posts(
                     count,
-                    min_comments,
+                    0,
                     batch_size=batch_size,
                     on_batch_complete=process_batch,
                     last_24_hours_only=last_24_hours_only,
@@ -734,8 +743,8 @@ class ScraperThread(QThread):
         count = self.params.get("count")
         last_24_hours_only = self.params.get("last_24_hours_only", False)
         download_media = self.params.get("download_media", False)
+        include_comments = self.params.get("include_comments", False)
         max_workers = max(1, min(int(self.params.get("max_workers", 3) or 3), 10))
-        min_comments = self.params.get("min_comments", 0)
         batch_size = 2
 
         total_groups = len(urls)
@@ -775,15 +784,18 @@ class ScraperThread(QThread):
                     self.log(f"{prefix} [{i}/{len(batch_posts)}] Processing post {post_id}...")
 
                     try:
-                        comments, _ = fetch_comments_for_post(
-                            post_id,
-                            cookies=self.cookies,
-                            fb_dtsg=self.fb_dtsg,
-                            proxies=self.proxies,
-                        )
+                        comments = []
+                        if include_comments:
+                            comments, _ = fetch_comments_for_post(
+                                post_id,
+                                cookies=self.cookies,
+                                fb_dtsg=self.fb_dtsg,
+                                proxies=self.proxies,
+                            )
                         save_post_data("group_post", post_id, post, comments)
                         self.log(f"{prefix} Saved post {post_id}")
-                        time.sleep(1)
+                        if include_comments:
+                            time.sleep(1)
                     except Exception as e:
                         self.log(f"{prefix} Error fetching comments for {post_id}: {e}")
                         save_post_data("group_post", post_id, post, [])
@@ -793,7 +805,7 @@ class ScraperThread(QThread):
                 self.log(f"{prefix} Fetching {fetch_label} from group {group_id} (batch size: {batch_size})...")
                 posts = fetch_group_posts(
                     count,
-                    min_comments,
+                    0,
                     batch_size=batch_size,
                     on_batch_complete=process_batch,
                     last_24_hours_only=last_24_hours_only,
@@ -954,15 +966,12 @@ class FacebookScraperUI(QMainWindow):
         media_layout.addStretch()
         input_layout.addLayout(media_layout)
 
-        # Comment threshold
+        # Comment fetching
         comment_layout = QHBoxLayout()
-        comment_layout.addWidget(QLabel("Min comments (0 = all posts):"))
-        self.user_min_comments = QSpinBox()
-        self.user_min_comments.setMinimum(0)
-        self.user_min_comments.setMaximum(10000)
-        self.user_min_comments.setValue(0)
-        self.user_min_comments.setToolTip("Only scrape posts with at least this many comments. Set to 0 to include all posts.")
-        comment_layout.addWidget(self.user_min_comments)
+        self.user_include_comments_check = QCheckBox("Fetch comments")
+        self.user_include_comments_check.setChecked(False)
+        self.user_include_comments_check.setToolTip("When selected, fetch and save comments for each scraped post.")
+        comment_layout.addWidget(self.user_include_comments_check)
         comment_layout.addStretch()
         input_layout.addLayout(comment_layout)
         
@@ -1029,15 +1038,12 @@ class FacebookScraperUI(QMainWindow):
         media_layout.addStretch()
         input_layout.addLayout(media_layout)
 
-        # Comment threshold
+        # Comment fetching
         comment_layout = QHBoxLayout()
-        comment_layout.addWidget(QLabel("Min comments (0 = all posts):"))
-        self.page_min_comments = QSpinBox()
-        self.page_min_comments.setMinimum(0)
-        self.page_min_comments.setMaximum(10000)
-        self.page_min_comments.setValue(0)
-        self.page_min_comments.setToolTip("Only scrape posts with at least this many comments. Set to 0 to include all posts.")
-        comment_layout.addWidget(self.page_min_comments)
+        self.page_include_comments_check = QCheckBox("Fetch comments")
+        self.page_include_comments_check.setChecked(False)
+        self.page_include_comments_check.setToolTip("When selected, fetch and save comments for each scraped post.")
+        comment_layout.addWidget(self.page_include_comments_check)
         comment_layout.addStretch()
         input_layout.addLayout(comment_layout)
         
@@ -1103,15 +1109,12 @@ class FacebookScraperUI(QMainWindow):
         media_layout.addStretch()
         input_layout.addLayout(media_layout)
         
-        # Comment threshold
+        # Comment fetching
         comment_layout = QHBoxLayout()
-        comment_layout.addWidget(QLabel("Min comments (0 = all posts):"))
-        self.group_min_comments = QSpinBox()
-        self.group_min_comments.setMinimum(0)
-        self.group_min_comments.setMaximum(10000)
-        self.group_min_comments.setValue(0)
-        self.group_min_comments.setToolTip("Only scrape posts with at least this many comments. Set to 0 to include all posts.")
-        comment_layout.addWidget(self.group_min_comments)
+        self.group_include_comments_check = QCheckBox("Fetch comments")
+        self.group_include_comments_check.setChecked(False)
+        self.group_include_comments_check.setToolTip("When selected, fetch and save comments for each scraped post.")
+        comment_layout.addWidget(self.group_include_comments_check)
         comment_layout.addStretch()
         input_layout.addLayout(comment_layout)
 
@@ -1143,8 +1146,8 @@ class FacebookScraperUI(QMainWindow):
         urls_text = self.user_profile_urls.toPlainText().strip()
         last_24_hours_only = self.user_time_filter_check.isChecked()
         download_media = self.user_download_media_check.isChecked()
+        include_comments = self.user_include_comments_check.isChecked()
         count = None if last_24_hours_only else 10
-        min_comments = self.user_min_comments.value()
         
         if not urls_text:
             self.show_error("Please enter profile URLs")
@@ -1158,14 +1161,14 @@ class FacebookScraperUI(QMainWindow):
             return
         
         # Start scraping in background thread
-        comment_filter_msg = f" with min {min_comments} comments" if min_comments > 0 else ""
         fetch_label = "posts from last 24 hours" if last_24_hours_only else f"{count} posts"
         media_mode = "on" if download_media else "off"
-        self.log(f"Starting user posts scraper for {len(urls)} profile(s) (fetching {fetch_label} each{comment_filter_msg}, image download: {media_mode})...")
+        comment_mode = "on" if include_comments else "off"
+        self.log(f"Starting user posts scraper for {len(urls)} profile(s) (fetching {fetch_label} each, comments: {comment_mode}, image download: {media_mode})...")
         params = {
             "urls": urls,
             "count": count,
-            "min_comments": min_comments,
+            "include_comments": include_comments,
             "last_24_hours_only": last_24_hours_only,
             "download_media": download_media,
         }
@@ -1176,8 +1179,8 @@ class FacebookScraperUI(QMainWindow):
         urls_text = self.page_urls.toPlainText().strip()
         last_24_hours_only = self.page_time_filter_check.isChecked()
         download_media = self.page_download_media_check.isChecked()
+        include_comments = self.page_include_comments_check.isChecked()
         count = None if last_24_hours_only else 10
-        min_comments = self.page_min_comments.value()
         
         if not urls_text:
             self.show_error("Please enter page URLs")
@@ -1191,14 +1194,14 @@ class FacebookScraperUI(QMainWindow):
             return
         
         # Start scraping in background thread
-        comment_filter_msg = f" with min {min_comments} comments" if min_comments > 0 else ""
         fetch_label = "posts from last 24 hours" if last_24_hours_only else f"{count} posts"
         media_mode = "on" if download_media else "off"
-        self.log(f"Starting page posts scraper for {len(urls)} page(s) (fetching {fetch_label} each{comment_filter_msg}, image download: {media_mode})...")
+        comment_mode = "on" if include_comments else "off"
+        self.log(f"Starting page posts scraper for {len(urls)} page(s) (fetching {fetch_label} each, comments: {comment_mode}, image download: {media_mode})...")
         params = {
             'urls': urls,
             'count': count,
-            'min_comments': min_comments,
+            'include_comments': include_comments,
             "last_24_hours_only": last_24_hours_only,
             "download_media": download_media,
         }
@@ -1209,8 +1212,8 @@ class FacebookScraperUI(QMainWindow):
         urls_text = self.group_urls.toPlainText().strip()
         last_24_hours_only = self.group_time_filter_check.isChecked()
         download_media = self.group_download_media_check.isChecked()
+        include_comments = self.group_include_comments_check.isChecked()
         count = None if last_24_hours_only else 10
-        min_comments = self.group_min_comments.value()
         max_workers = self.group_max_workers.value()
         
         if not urls_text:
@@ -1225,14 +1228,14 @@ class FacebookScraperUI(QMainWindow):
             return
         
         # Start scraping in background thread
-        comment_filter_msg = f" with min {min_comments} comments" if min_comments > 0 else ""
         fetch_label = "posts from last 24 hours" if last_24_hours_only else f"{count} posts"
         media_mode = "on" if download_media else "off"
-        self.log(f"Starting group posts scraper for {len(urls)} group(s) with {max_workers} worker(s) (fetching {fetch_label} each{comment_filter_msg}, image download: {media_mode})...")
+        comment_mode = "on" if include_comments else "off"
+        self.log(f"Starting group posts scraper for {len(urls)} group(s) with {max_workers} worker(s) (fetching {fetch_label} each, comments: {comment_mode}, image download: {media_mode})...")
         params = {
             'urls': urls,
             'count': count,
-            'min_comments': min_comments,
+            'include_comments': include_comments,
             "last_24_hours_only": last_24_hours_only,
             "max_workers": max_workers,
             "download_media": download_media,
