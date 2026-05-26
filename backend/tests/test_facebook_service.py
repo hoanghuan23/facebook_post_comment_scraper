@@ -27,6 +27,7 @@ from backend.scraper.facebook_service import (
     _normalize_timeline_post,
 )
 from backend.scheduler.periodic_tasks import periodic_scrape_new_posts, update_recent_post_metrics
+from backend.services.schedule_service import calculate_tier
 import post_scraper
 import group_post_scraper_v2
 import comment_scraper
@@ -2713,6 +2714,63 @@ def test_get_source_schedule_stats_returns_latest_post_metrics_totals():
         db.close()
 
 
+def test_calculate_tier_counts_recent_posts_by_posted_at_even_when_untracked():
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="tier-post-time-user", email="tier-post-time-user@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="tier-post-time-group",
+            facebook_url="https://www.facebook.com/groups/tier-post-time-group",
+            source_name="Tier Posted At Source",
+        )
+        recent_time = datetime.utcnow() - timedelta(hours=1)
+
+        for index in range(7):
+            post = PostCRUD.create(
+                db,
+                source_id=source.id,
+                facebook_post_id=f"tier-recent-{index}",
+                facebook_url=f"https://www.facebook.com/posts/tier-recent-{index}",
+                posted_at=recent_time,
+            )
+            post.is_tracked = False
+
+        PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="tier-too-old",
+            facebook_url="https://www.facebook.com/posts/tier-too-old",
+            posted_at=datetime.utcnow() - timedelta(days=8),
+        )
+        db.execute(
+            text(
+                """
+                INSERT INTO analytics_cache (
+                    source_id, date, total_posts, total_likes, total_shares,
+                    total_comments, avg_likes_per_post, cached_at
+                )
+                VALUES (:source_id, :date, 0, 0, 0, 0, 0, :cached_at)
+                """
+            ),
+            {
+                "source_id": source.id,
+                "date": datetime.utcnow(),
+                "cached_at": datetime.utcnow(),
+            },
+        )
+        db.commit()
+
+        result = calculate_tier(source.id, db)
+
+        assert result["avg_posts_per_day"] == 1.0
+        assert result["tier"] == 3
+    finally:
+        db.close()
+
+
 def test_get_sources_ranking_returns_ranked_user_sources_and_tier_distribution():
     db = SessionLocal()
     try:
@@ -2760,6 +2818,28 @@ def test_get_sources_ranking_returns_ranked_user_sources_and_tier_distribution()
         for source, posts, likes, shares, comments, current_tier, override_minutes in fixtures:
             source.schedule_tier = current_tier
             source.schedule_override_minutes = override_minutes
+            if source.id in {hot_source.id, warm_source.id}:
+                for index in range(posts * 7):
+                    db.execute(
+                        text(
+                            """
+                            INSERT INTO posts (
+                                source_id, facebook_post_id, facebook_url, posted_at,
+                                is_tracked, is_deleted
+                            )
+                            VALUES (
+                                :source_id, :facebook_post_id, :facebook_url, :posted_at,
+                                0, 0
+                            )
+                            """
+                        ),
+                        {
+                            "source_id": source.id,
+                            "facebook_post_id": f"ranking-{source.id}-{index}",
+                            "facebook_url": f"https://www.facebook.com/posts/ranking-{source.id}-{index}",
+                            "posted_at": datetime.utcnow(),
+                        },
+                    )
             db.execute(
                 text(
                     """

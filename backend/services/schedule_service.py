@@ -1,8 +1,9 @@
 """
 Service layer for source scrape schedule tiers.
 
-Tier calculation intentionally uses analytics_cache only. The sources.member_count
-column remains in the schema, but it is not used to calculate suggested tiers.
+Tier calculation uses post timestamps for posting frequency and analytics_cache
+for engagement. The sources.member_count column remains in the schema, but it is
+not used to calculate suggested tiers.
 """
 
 from datetime import datetime, timedelta
@@ -16,7 +17,7 @@ TIER_CONFIG = [
         "tier": 1,
         "min_posts": 20,
         "min_avg_likes_per_post": 500,
-        "interval_minutes": 15,
+        "interval_minutes": 30,
         "label": "Hot",
     },
     {
@@ -28,20 +29,27 @@ TIER_CONFIG = [
     },
     {
         "tier": 3,
-        "min_posts": 1,
+        "min_posts": 3,
         "min_avg_likes_per_post": 0,
         "interval_minutes": 180,
         "label": "Cool",
     },
+    {
+        "tier": 4,
+        "min_posts": 1,
+        "min_avg_likes_per_post": 0,
+        "interval_minutes":720,
+        "label": "Frozen",
+    }
 ]
 
 
 def calculate_tier(source_id: int, db: Session) -> dict:
     """
-    Read analytics_cache for the last 7 days and return a suggested tier.
+    Read recent posts and analytics_cache for the last 7 days and return a suggested tier.
 
     The tier is based on:
-      - avg_posts_per_day = AVG(total_posts)
+      - avg_posts_per_day = count(posts posted in the last 7 days) / 7
       - avg_likes_per_post = AVG(avg_likes_per_post)
 
     Returns dict:
@@ -60,8 +68,13 @@ def calculate_tier(source_id: int, db: Session) -> dict:
         text(
             """
             SELECT
+                (
+                    SELECT CAST(COUNT(*) AS FLOAT) / 7
+                    FROM posts
+                    WHERE source_id = :source_id
+                      AND posted_at >= DATETIME('now', '-7 days')
+                )                          AS avg_posts,
                 COUNT(*)                   AS data_days,
-                AVG(total_posts)           AS avg_posts,
                 AVG(
                     COALESCE(
                         avg_likes_per_post,
@@ -82,7 +95,7 @@ def calculate_tier(source_id: int, db: Session) -> dict:
             "interval_minutes": None,
             "label": "Unknown",
             "reason": "Chua co du lieu analytics (analytics_cache trong)",
-            "avg_posts_per_day": 0,
+            "avg_posts_per_day": round((row.avg_posts if row else 0) or 0, 2),
             "avg_likes_per_post": 0,
             "data_days": 0,
         }
