@@ -2237,6 +2237,35 @@ def test_group_extract_media_skips_download_when_flag_disabled(monkeypatch):
     assert media["photos"][0]["saved_as"] is None
 
 
+def test_group_extract_media_handles_video_with_null_preferred_thumbnail():
+    node = {
+        "attachments": [
+            {
+                "styles": {
+                    "attachment": {
+                        "media": {
+                            "id": "background-video",
+                            "__typename": "Video",
+                            "playable_url": "https://example.com/background.mp4",
+                            "preferred_thumbnail": None,
+                        }
+                    }
+                }
+            }
+        ]
+    }
+
+    media = group_post_scraper_v2.extract_media(node, "post-background", download_media=False)
+
+    assert media["videos"] == [
+        {
+            "id": "background-video",
+            "url": "https://example.com/background.mp4",
+            "thumbnail": None,
+        }
+    ]
+
+
 def test_group_reaction_lookup_parses_detached_feedback_count_nested():
     feedback_node = {
         "id": "ZmVlZGJhY2s6abc",

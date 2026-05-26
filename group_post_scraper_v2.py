@@ -470,6 +470,17 @@ def sanitize_group_folder_name(group_name):
     return "Unknown"
 
 
+def _extract_thumbnail_uri(media_data):
+    """Return a thumbnail URI when Facebook supplies the optional nested shape."""
+    if not isinstance(media_data, dict):
+        return None
+    preferred_thumbnail = media_data.get('preferred_thumbnail')
+    if not isinstance(preferred_thumbnail, dict):
+        return None
+    image = preferred_thumbnail.get('image')
+    return image.get('uri') if isinstance(image, dict) else None
+
+
 def extract_media(node, post_id, save_dir="group_post", cookies=None, fb_dtsg=None, proxies=None, download_media=True):
     """Extract photo and video URLs from a post"""
     media = {
@@ -526,7 +537,7 @@ def extract_media(node, post_id, save_dir="group_post", cookies=None, fb_dtsg=No
                 media['videos'].append({
                     'id': single_media.get('id'),
                     'url': single_media.get('playable_url'),
-                    'thumbnail': single_media.get('preferred_thumbnail', {}).get('image', {}).get('uri')
+                    'thumbnail': _extract_thumbnail_uri(single_media)
                 })
 
         # Handle albums (multiple photos)
@@ -566,7 +577,7 @@ def extract_media(node, post_id, save_dir="group_post", cookies=None, fb_dtsg=No
                 media['videos'].append({
                     'id': photo_data.get('id'),
                     'url': photo_data.get('playable_url'),
-                    'thumbnail': photo_data.get('preferred_thumbnail', {}).get('image', {}).get('uri')
+                    'thumbnail': _extract_thumbnail_uri(photo_data)
                 })
 
         # Handle video attachments from the direct attachment media shape
@@ -575,7 +586,7 @@ def extract_media(node, post_id, save_dir="group_post", cookies=None, fb_dtsg=No
             media['videos'].append({
                 'id': video_data.get('id'),
                 'url': video_data.get('playable_url'),
-                'thumbnail': video_data.get('preferred_thumbnail', {}).get('image', {}).get('uri')
+                'thumbnail': _extract_thumbnail_uri(video_data)
             })
     
     # Fetch remaining images if we have exactly 5 photos (indicating there may be more)
