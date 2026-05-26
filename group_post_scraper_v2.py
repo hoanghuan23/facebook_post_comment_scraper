@@ -1175,6 +1175,8 @@ def fetch_posts(
 
         # Extract posts from the response array
         posts_found = 0
+        received_posts = 0
+        filtered_by_latest_cutoff = 0
         next_cursor = None
         has_next_page = False
         response_summary = _summarize_group_response(data)
@@ -1217,12 +1219,14 @@ def fetch_posts(
             
             # Process all found Story nodes
             for story_node in story_nodes:
+                received_posts += 1
                 temp_post_id = story_node.get('post_id')
                 posted_at = extract_posted_at(story_node)
                 posted_dt = _parse_iso_datetime(posted_at)
 
                 if min_posted_at_cutoff and posted_dt:
                     if posted_dt <= min_posted_at_cutoff:
+                        filtered_by_latest_cutoff += 1
                         consecutive_old_count += 1
                         print(
                             f"  Gặp post cũ hơn/equal latest cutoff:"
@@ -1355,12 +1359,18 @@ def fetch_posts(
                         next_cursor = candidate_cursor
                     has_next_page = has_next_page or candidate_has_next
         
-        print(
-            f"Tìm thấy {posts_found} post trong trang này"
-            f"(has_next_page={has_next_page}, next_cursor={'yes' if next_cursor else 'no'})"
-        )
+        if received_posts > 0 and posts_found == 0:
+            print(
+                f"Response chứa {received_posts} post nhưng 0 có post mới"
+                f"(filtered_by_latest_cutoff={filtered_by_latest_cutoff})"
+            )
+        else:
+            print(
+                f"Tìm thấy {posts_found} post mới trong trang này"
+                f"(has_next_page={has_next_page}, next_cursor={'yes' if next_cursor else 'no'})"
+            )
 
-        if posts_found == 0:
+        if received_posts == 0:
             print(
                 "Chuẩn đoán response:"
                 f" blocks={response_summary['total_blocks']},"
@@ -1419,11 +1429,15 @@ def fetch_posts(
         elif not next_cursor:
             page_stop_reason = "no_cursor"
 
-        if posts_found == 0 and on_page_diagnostic:
+        if received_posts == 0 and on_page_diagnostic:
             on_page_diagnostic(
                 {
                     "page_num": page_num,
                     "posts_found": posts_found,
+                    "received_posts": received_posts,
+                    "filtered_by_latest_cutoff": filtered_by_latest_cutoff,
+                    "consecutive_old_count": consecutive_old_count,
+                    "consecutive_old_limit": consecutive_old_limit,
                     "has_next_page": has_next_page,
                     "next_cursor": bool(next_cursor),
                     "response_summary": response_summary,

@@ -319,12 +319,16 @@ class FacebookScraperService:
         def persist_diagnostic(event: Dict[str, Any]) -> None:
             summary = event["response_summary"]
             stop_reason = event["stop_reason"]
+            received_posts = event.get("received_posts", 0)
+            if received_posts > 0 and stop_reason in {"consecutive_old", "old_post"}:
+                return
             final_line = (
                 f"Không còn trang hoặc đã đạt giới hạn. Dừng lại. reason={stop_reason}"
                 if stop_reason != "next_page"
                 else "Trang không có post, tiếp tục phân trang. reason=next_page"
             )
             message = (
+                f"Trang {event['page_num']} không chứa post trong response.\n"
                 "Chuẩn đoán response:"
                 f" blocks={summary['total_blocks']},"
                 f" group_nodes={summary['group_nodes']},"

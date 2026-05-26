@@ -1680,9 +1680,56 @@ def test_scrape_group_source_persists_empty_page_diagnostic_pipeline_log(monkeyp
         assert result.total_fetched == 0
         assert log.job_id == job.id
         assert log.log_level == "WARNING"
-        assert "Tìm thấy 0 post trong trang này(has_next_page=False, next_cursor=no)" in log.message
+        assert "Trang 1 không chứa post trong response." in log.message
         assert "blocks=1, group_nodes=0, group_feed_edges=0" in log.message
         assert "reason=no_next_page" in log.message
+    finally:
+        db.close()
+
+
+def test_scrape_group_source_does_not_persist_filtered_old_posts_diagnostic(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="old-diagnostic", email="old-diagnostic@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="old-diagnostic-group",
+            facebook_url="https://www.facebook.com/groups/old-diagnostic-group",
+            source_name="Old Diagnostic Group",
+        )
+        job = PipelineJobCRUD.create_job(db, job_type="scraper_job", source_id=source.id, status="running")
+
+        def fake_fetch_posts(limit=10, **kwargs):
+            kwargs["on_page_diagnostic"](
+                {
+                    "page_num": 27,
+                    "posts_found": 0,
+                    "received_posts": 3,
+                    "filtered_by_latest_cutoff": 3,
+                    "consecutive_old_count": 3,
+                    "consecutive_old_limit": 3,
+                    "has_next_page": False,
+                    "next_cursor": False,
+                    "response_summary": {
+                        "total_blocks": 4,
+                        "group_nodes": 1,
+                        "group_feed_edges": 1,
+                        "timeline_edges": 0,
+                        "story_nodes": 2,
+                        "page_info_blocks": 1,
+                    },
+                    "stop_reason": "consecutive_old",
+                }
+            )
+            return []
+
+        monkeypatch.setattr("backend.scraper.facebook_service.group_scraper.fetch_posts", fake_fetch_posts)
+
+        FacebookScraperService.scrape_source(db, source.id, limit=5, job_id=job.id)
+
+        assert db.query(ScraperLog).filter(ScraperLog.source_id == source.id).count() == 0
     finally:
         db.close()
 
@@ -1746,6 +1793,53 @@ def test_group_fetch_posts_emits_empty_no_next_page_diagnostic(monkeypatch):
     assert events[0]["stop_reason"] == "no_next_page"
     assert events[0]["response_summary"]["total_blocks"] == 1
     assert events[0]["response_summary"]["story_nodes"] == 0
+
+
+def test_group_fetch_posts_reports_old_filtered_posts_without_empty_diagnostic(monkeypatch, capsys):
+    events = []
+    story_nodes = [
+        {"__typename": "Story", "post_id": f"old-{index}", "posted_at": f"2026-05-25T06:1{index}:00+00:00"}
+        for index in range(3)
+    ]
+
+    class FakeResponse:
+        text = json.dumps(
+            {
+                "data": {
+                    "node": {
+                        "__typename": "Group",
+                        "group_feed": {
+                            "edges": [{"node": story} for story in story_nodes],
+                            "page_info": {"has_next_page": True, "end_cursor": "unused"},
+                        },
+                    }
+                }
+            }
+        )
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+    monkeypatch.setattr(group_post_scraper_v2, "retry_request", lambda *args, **kwargs: FakeResponse())
+    monkeypatch.setattr(group_post_scraper_v2, "extract_posted_at", lambda node: node["posted_at"])
+
+    posts = group_post_scraper_v2.fetch_posts(
+        limit=5,
+        group_id="old-group",
+        cookies={},
+        min_posted_at="2026-05-25T07:00:00+00:00",
+        consecutive_old_limit=3,
+        download_media=False,
+        on_page_diagnostic=events.append,
+    )
+    output = capsys.readouterr().out
+
+    assert posts == []
+    assert events == []
+    assert "Response chứa 3 post nhưng 0 post được giữ lại sau bộ lọc" in output
+    assert "Chuẩn đoán response:" not in output
+    assert "Đã gặp đủ số post cũ liên tiếp theo latest cutoff." in output
 
 
 def test_refresh_target_post_metrics_only_updates_target_posts(monkeypatch):
