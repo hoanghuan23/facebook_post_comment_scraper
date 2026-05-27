@@ -99,14 +99,21 @@ CREATE TABLE posts (
         tracking_until DATETIME, 
         is_deleted BOOLEAN, 
         last_metric_update DATETIME, 
+        metric_tier VARCHAR(20) NOT NULL DEFAULT 'bootstrap',
+        next_metric_update DATETIME,
+        last_engagement_velocity FLOAT,
+        cold_check_count INTEGER NOT NULL DEFAULT 0,
+        metric_scan_miss_count INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (id), 
-        FOREIGN KEY(source_id) REFERENCES sources (id)
+        FOREIGN KEY(source_id) REFERENCES sources (id),
+        CONSTRAINT ck_posts_metric_tier CHECK (metric_tier IN ('bootstrap', 'hot', 'warm', 'cold', 'expired'))
 );
 CREATE INDEX idx_post_last_update ON posts (last_metric_update);
 CREATE INDEX idx_post_source ON posts (source_id);
 CREATE INDEX idx_post_facebook_id ON posts (facebook_post_id);
 CREATE UNIQUE INDEX ix_posts_facebook_post_id ON posts (facebook_post_id);
 CREATE INDEX idx_post_posted_at ON posts (posted_at);
+CREATE INDEX idx_post_metric_due ON posts (is_tracked, next_metric_update);
 
 -- bảng analytics_cache lưu trữ kết quả tổng hợp các chỉ số tương tác (likes, shares, comments, views) của từng source theo ngày để phục vụ cho việc phân tích hiệu suất và xu hướng của các trang Facebook được theo dõi
 CREATE TABLE analytics_cache (
