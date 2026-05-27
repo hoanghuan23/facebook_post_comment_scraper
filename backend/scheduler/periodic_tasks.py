@@ -3,7 +3,7 @@ import logging
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from sqlalchemy import func
 
@@ -12,6 +12,7 @@ from backend.database.crud import AnalyticsCRUD, FacebookSessionCRUD, LogCRUD, P
 from backend.database.db import SessionLocal
 from backend.database.models import AnalyticsCache, Comment, Post, Source, SourceType
 from backend.scraper.facebook_service import FacebookScraperService
+from backend.services.schedule_service import apply_analytics_schedule, schedule_next_scrape
 
 logger = logging.getLogger("facebook_scraper")
 
@@ -119,7 +120,6 @@ async def periodic_scrape_new_posts():
             progress_index = source_index_map.get(source_id, 0)
             source_label = _format_source_label(source_id, job.get("source_name"))
             thread_label = _current_thread_label()
-            next_scrape = datetime.utcnow() + timedelta(seconds=settings.TASK_SCRAPE_NEW_POSTS_INTERVAL)
             source_started_at = time.time()
             try:
                 if job["source_type"] not in {SourceType.GROUP, SourceType.PAGE, SourceType.USER}:
@@ -131,7 +131,7 @@ async def periodic_scrape_new_posts():
                         total_due_sources,
                         job["source_type"].value,
                     )
-                    SourceCRUD.update_scrape_info(job_db, source_id, next_scrape=next_scrape)
+                    schedule_next_scrape(source_id, job_db)
                     return {"status": "skipped"}
 
                 if job["is_accessible"] is False and job["permission_checked_at"] is not None:
@@ -142,7 +142,7 @@ async def periodic_scrape_new_posts():
                         progress_index,
                         total_due_sources,
                     )
-                    SourceCRUD.update_scrape_info(job_db, source_id, next_scrape=next_scrape)
+                    schedule_next_scrape(source_id, job_db)
                     return {"status": "skipped"}
 
                 latest_posted_at = job.get("latest_posted_at")
@@ -179,7 +179,7 @@ async def periodic_scrape_new_posts():
                     posts_new=result.created_posts,
                     finished_at=datetime.utcnow(),
                 )
-                SourceCRUD.update_scrape_info(job_db, source_id, next_scrape=next_scrape)
+                schedule_next_scrape(source_id, job_db)
                 source_duration = round(time.time() - source_started_at, 3)
                 logger.info(
                     "Kết thúc scrape source: thread=%s source=%s progress=%s/%s fetched=%s created_posts=%s skipped_posts=%s filtered_by_cutoff=%s duration_seconds=%s",
@@ -215,7 +215,7 @@ async def periodic_scrape_new_posts():
                     total_due_sources,
                     exc,
                 )
-                SourceCRUD.update_scrape_info(job_db, source_id, next_scrape=next_scrape)
+                schedule_next_scrape(source_id, job_db)
                 LogCRUD.create_pipeline_log(
                     job_db,
                     message=f"Failed scraping source {source_id}",
@@ -598,6 +598,7 @@ async def generate_analytics_cache():
                 top_post_id=top_post.facebook_post_id if top_post else None,
                 growth_rate=growth_rate,
             )
+            apply_analytics_schedule(source.id, db)
             processed_sources += 1
 
         logger.info("Generated analytics cache for %s sources", processed_sources)

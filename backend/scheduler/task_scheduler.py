@@ -35,9 +35,9 @@ async def start_scheduler():
         scheduler.add_job(
             periodic_scrape_new_posts,
             'interval',
-            seconds=settings.TASK_SCRAPE_NEW_POSTS_INTERVAL,
+            seconds=settings.TASK_SCRAPE_DUE_CHECK_INTERVAL,
             id='scrape_new_posts',
-            name='Scrape new posts',
+            name='Scrape due sources',
         )
         
         scheduler.add_job(

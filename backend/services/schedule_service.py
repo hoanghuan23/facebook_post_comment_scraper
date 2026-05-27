@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from backend.config import settings
+
 
 TIER_CONFIG = [
     {
@@ -31,17 +33,21 @@ TIER_CONFIG = [
         "tier": 3,
         "min_posts": 3,
         "min_avg_likes_per_post": 0,
-        "interval_minutes": 180,
+        "interval_minutes": 360,
         "label": "Cool",
     },
     {
         "tier": 4,
         "min_posts": 1,
         "min_avg_likes_per_post": 0,
-        "interval_minutes":720,
+        "interval_minutes": 720,
         "label": "Frozen",
     }
 ]
+
+TIER_INTERVAL_MINUTES = {
+    config["tier"]: config["interval_minutes"] for config in TIER_CONFIG
+}
 
 
 def calculate_tier(source_id: int, db: Session) -> dict:
@@ -123,7 +129,9 @@ def calculate_tier(source_id: int, db: Session) -> dict:
             break
 
     if selected_tier is None:
-        reason_parts.append("duoi nguong tier hoat dong")
+        selected_tier = 4
+        interval = TIER_INTERVAL_MINUTES[selected_tier]
+        reason_parts.append("duoi nguong hoat dong; giu theo doi o tier 4")
 
     return {
         "tier": selected_tier,
@@ -136,191 +144,111 @@ def calculate_tier(source_id: int, db: Session) -> dict:
     }
 
 
-def apply_schedule(source_id: int, db: Session) -> dict:
-    """
-    Decide the effective interval (auto or override) and update sources.
+def effective_interval_seconds(schedule_tier: int | None, override_minutes: int | None) -> int:
+    """Return the scrape interval selected by override, tier, or bootstrap default."""
+    if override_minutes is not None:
+        return override_minutes * 60
+    if schedule_tier in TIER_INTERVAL_MINUTES:
+        return TIER_INTERVAL_MINUTES[schedule_tier] * 60
+    return settings.TASK_SCRAPE_NEW_POSTS_INTERVAL
 
-    This is the only function that writes schedule_tier and next_scrape.
-    """
 
+def effective_interval_minutes(schedule_tier: int | None, override_minutes: int | None) -> float:
+    """Return the effective scrape interval in minutes for API responses."""
+    return effective_interval_seconds(schedule_tier, override_minutes) / 60
+
+
+def schedule_next_scrape(source_id: int, db: Session) -> dict:
+    """Schedule the next scrape without calculating or changing analytics tier."""
     source = db.execute(
         text(
             """
-            SELECT id, source_name, is_active,
-                   schedule_tier,
-                   schedule_override_minutes
+            SELECT id, source_name, schedule_tier, schedule_override_minutes
             FROM sources
             WHERE id = :source_id
             """
         ),
         {"source_id": source_id},
     ).fetchone()
-
     if not source:
         return {"error": f"source_id={source_id} khong ton tai"}
 
-    is_overridden = source.schedule_override_minutes is not None
-    tier_result = None
-    applied_interval = None
-    applied_tier = None
-    reason = ""
-
-    if is_overridden:
-        applied_interval = source.schedule_override_minutes
-        applied_tier = None
-        reason = f"User override: {applied_interval} phut"
-        action = "overridden"
-    else:
-        tier_result = calculate_tier(source_id, db)
-        applied_tier = tier_result["tier"]
-        applied_interval = tier_result["interval_minutes"]
-        reason = tier_result["reason"]
-
-        if applied_tier is None:
-            db.execute(
-                text(
-                    """
-                    UPDATE sources
-                    SET schedule_tier = 4,
-                        is_active     = 0
-                    WHERE id = :source_id
-                    """
-                ),
-                {"source_id": source_id},
-            )
-
-            db.execute(
-                text(
-                    """
-                    INSERT INTO pipeline_logs (source_id, log_level, message, created_at)
-                    VALUES (:source_id, 'WARNING',
-                            'auto-paused: low activity - ' || :reason,
-                            CURRENT_TIMESTAMP)
-                    """
-                ),
-                {"source_id": source_id, "reason": reason},
-            )
-
-            db.commit()
-
-            return {
-                "source_id": source_id,
-                "source_name": source.source_name,
-                "action": "paused",
-                "applied_tier": 4,
-                "applied_interval_minutes": None,
-                "next_scrape": None,
-                "is_overridden": False,
-                "reason": reason,
-                "avg_posts_per_day": tier_result["avg_posts_per_day"],
-                "avg_likes_per_post": tier_result["avg_likes_per_post"],
-            }
-
-        action = "scheduled"
-
-    next_scrape = datetime.utcnow() + timedelta(minutes=applied_interval)
-
+    interval_seconds = effective_interval_seconds(
+        source.schedule_tier,
+        source.schedule_override_minutes,
+    )
+    next_scrape = datetime.utcnow() + timedelta(seconds=interval_seconds)
     db.execute(
         text(
             """
             UPDATE sources
-            SET schedule_tier = :tier,
-                next_scrape   = :next_scrape,
-                is_active     = 1
+            SET next_scrape = :next_scrape
             WHERE id = :source_id
             """
         ),
         {
-            "tier": applied_tier,
-            "next_scrape": next_scrape.strftime("%Y-%m-%d %H:%M:%S"),
             "source_id": source_id,
+            "next_scrape": next_scrape.strftime("%Y-%m-%d %H:%M:%S"),
         },
     )
-
     db.commit()
 
-    result = {
+    return {
         "source_id": source_id,
         "source_name": source.source_name,
-        "action": action,
-        "applied_tier": applied_tier,
-        "applied_interval_minutes": applied_interval,
+        "applied_tier": source.schedule_tier,
+        "applied_interval_minutes": interval_seconds / 60,
         "next_scrape": next_scrape.strftime("%Y-%m-%dT%H:%M:%S"),
-        "is_overridden": is_overridden,
-        "reason": reason,
+        "is_overridden": source.schedule_override_minutes is not None,
     }
 
-    if tier_result:
-        result.update(
-            {
-                "avg_posts_per_day": tier_result["avg_posts_per_day"],
-                "avg_likes_per_post": tier_result["avg_likes_per_post"],
-                "data_days": tier_result["data_days"],
-            }
-        )
 
-    return result
-
-
-def apply_schedule_all(user_id: int, db: Session) -> dict:
-    """
-    Run apply_schedule() for all sources of a user.
-
-    Sources with a schedule override are skipped.
-    """
-
-    sources = db.execute(
+def apply_analytics_schedule(source_id: int, db: Session) -> dict:
+    """Persist the latest analytics tier and reschedule automatic sources."""
+    source = db.execute(
         text(
             """
-            SELECT id FROM sources
-            WHERE user_id = :user_id
+            SELECT id, source_name, schedule_override_minutes
+            FROM sources
+            WHERE id = :source_id
             """
         ),
-        {"user_id": user_id},
-    ).fetchall()
+        {"source_id": source_id},
+    ).fetchone()
+    if not source:
+        return {"error": f"source_id={source_id} khong ton tai"}
 
-    summary = {
-        "processed": 0,
-        "skipped_override": 0,
-        "changes": [],
-        "no_change": 0,
-        "tier_summary": {1: 0, 2: 0, 3: 0, 4: 0},
+    tier_result = calculate_tier(source_id, db)
+    applied_tier = tier_result["tier"]
+    db.execute(
+        text(
+            """
+            UPDATE sources
+            SET schedule_tier = :tier
+            WHERE id = :source_id
+            """
+        ),
+        {"tier": applied_tier, "source_id": source_id},
+    )
+    db.commit()
+
+    schedule_result = None
+    if source.schedule_override_minutes is None:
+        schedule_result = schedule_next_scrape(source_id, db)
+
+    return {
+        "source_id": source_id,
+        "source_name": source.source_name,
+        "applied_tier": applied_tier,
+        "applied_interval_minutes": (
+            schedule_result["applied_interval_minutes"]
+            if schedule_result
+            else source.schedule_override_minutes
+        ),
+        "next_scrape": schedule_result["next_scrape"] if schedule_result else None,
+        "is_overridden": source.schedule_override_minutes is not None,
+        "reason": tier_result["reason"],
+        "avg_posts_per_day": tier_result["avg_posts_per_day"],
+        "avg_likes_per_post": tier_result["avg_likes_per_post"],
+        "data_days": tier_result["data_days"],
     }
-
-    for row in sources:
-        source = db.execute(
-            text(
-                """
-                SELECT schedule_tier, schedule_override_minutes
-                FROM sources
-                WHERE id = :id
-                """
-            ),
-            {"id": row.id},
-        ).fetchone()
-
-        if source.schedule_override_minutes is not None:
-            summary["skipped_override"] += 1
-            continue
-
-        old_tier = source.schedule_tier
-        result = apply_schedule(row.id, db)
-        new_tier = result.get("applied_tier") or 4
-
-        summary["processed"] += 1
-        summary["tier_summary"][new_tier] = summary["tier_summary"].get(new_tier, 0) + 1
-
-        if old_tier != new_tier:
-            summary["changes"].append(
-                {
-                    "source_id": row.id,
-                    "source_name": result.get("source_name"),
-                    "old_tier": old_tier,
-                    "new_tier": new_tier,
-                    "action": result.get("action"),
-                }
-            )
-        else:
-            summary["no_change"] += 1
-
-    return summary

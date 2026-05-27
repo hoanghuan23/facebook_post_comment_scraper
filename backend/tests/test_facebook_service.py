@@ -10,7 +10,6 @@ from backend.database.models import Base, ScrapeJob, ScraperLog
 from backend.database.schemas import SourceCreate, SourceUpdate
 from backend.api.routes.sources import (
     _bootstrap_scrape_source_last_24h,
-    auto_schedule_sources,
     create_source,
     get_source_schedule_stats,
     get_sources_ranking,
@@ -26,7 +25,7 @@ from backend.scraper.facebook_service import (
     _normalize_group_post,
     _normalize_timeline_post,
 )
-from backend.scheduler.periodic_tasks import periodic_scrape_new_posts, update_recent_post_metrics
+from backend.scheduler.periodic_tasks import generate_analytics_cache, periodic_scrape_new_posts, update_recent_post_metrics
 from backend.services.schedule_service import calculate_tier
 import post_scraper
 import group_post_scraper_v2
@@ -2757,7 +2756,7 @@ def test_calculate_tier_counts_recent_posts_by_posted_at_even_when_untracked():
         )
         recent_time = datetime.utcnow() - timedelta(hours=1)
 
-        for index in range(7):
+        for index in range(21):
             post = PostCRUD.create(
                 db,
                 source_id=source.id,
@@ -2794,10 +2793,94 @@ def test_calculate_tier_counts_recent_posts_by_posted_at_even_when_untracked():
 
         result = calculate_tier(source.id, db)
 
-        assert result["avg_posts_per_day"] == 1.0
+        assert result["avg_posts_per_day"] == 3.0
         assert result["tier"] == 3
     finally:
         db.close()
+
+
+def test_calculate_tier_without_analytics_does_not_assign_a_tier():
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="tier-new-user", email="tier-new-user@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="tier-new-group",
+            facebook_url="https://www.facebook.com/groups/tier-new-group",
+        )
+
+        result = calculate_tier(source.id, db)
+
+        assert result["tier"] is None
+        assert result["interval_minutes"] is None
+        assert source.schedule_tier is None
+    finally:
+        db.close()
+
+
+def test_generate_analytics_cache_assigns_tier_4_without_pausing_low_activity_source():
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="analytics-tier-user", email="analytics-tier-user@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="analytics-tier-group",
+            facebook_url="https://www.facebook.com/groups/analytics-tier-group",
+        )
+        source_id = source.id
+    finally:
+        db.close()
+
+    before = datetime.utcnow()
+    import asyncio
+    asyncio.run(generate_analytics_cache())
+
+    verify_db = SessionLocal()
+    try:
+        refreshed = SourceCRUD.get_by_id(verify_db, source_id)
+        assert refreshed.schedule_tier == 4
+        assert refreshed.is_active is True
+        assert refreshed.next_scrape >= before + timedelta(minutes=719)
+        assert refreshed.next_scrape <= datetime.utcnow() + timedelta(minutes=721)
+    finally:
+        verify_db.close()
+
+
+def test_generate_analytics_cache_updates_tier_but_preserves_override_schedule():
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="analytics-override-user", email="analytics-override-user@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="analytics-override-group",
+            facebook_url="https://www.facebook.com/groups/analytics-override-group",
+        )
+        existing_next_scrape = datetime(2026, 5, 28, 12, 0, 0)
+        source.schedule_tier = 1
+        source.schedule_override_minutes = 45
+        source.next_scrape = existing_next_scrape
+        source_id = source.id
+        db.commit()
+    finally:
+        db.close()
+
+    import asyncio
+    asyncio.run(generate_analytics_cache())
+
+    verify_db = SessionLocal()
+    try:
+        refreshed = SourceCRUD.get_by_id(verify_db, source_id)
+        assert refreshed.schedule_tier == 4
+        assert refreshed.schedule_override_minutes == 45
+        assert refreshed.next_scrape == existing_next_scrape
+    finally:
+        verify_db.close()
 
 
 def test_get_sources_ranking_returns_ranked_user_sources_and_tier_distribution():
@@ -3067,38 +3150,6 @@ def test_list_sources_filters_sorts_and_optionally_includes_schedule_stats():
         db.close()
 
 
-def test_auto_schedule_sources_returns_service_summary(monkeypatch):
-    db = SessionLocal()
-    try:
-        user = UserCRUD.create(db, username="auto-schedule-user", email="auto-schedule-user@example.com", password="secret123")
-        expected = {
-            "processed": 11,
-            "skipped_override": 1,
-            "no_change": 9,
-            "tier_summary": {1: 2, 2: 4, 3: 3, 4: 2},
-            "changes": [
-                {"source_id": 5, "old_tier": 3, "new_tier": 4, "action": "paused"},
-                {"source_id": 9, "old_tier": 2, "new_tier": 1, "action": "scheduled"},
-            ],
-        }
-        calls = []
-
-        def fake_apply_schedule_all(user_id, session):
-            calls.append((user_id, session))
-            return expected
-
-        monkeypatch.setattr("backend.api.routes.sources.apply_schedule_all", fake_apply_schedule_all)
-
-        import asyncio
-
-        result = asyncio.run(auto_schedule_sources(current_user=user, db=db))
-
-        assert result is expected
-        assert calls == [(user.id, db)]
-    finally:
-        db.close()
-
-
 def test_update_source_sets_schedule_override_and_refreshes_next_scrape(monkeypatch):
     db = SessionLocal()
     try:
@@ -3111,21 +3162,19 @@ def test_update_source_sets_schedule_override_and_refreshes_next_scrape(monkeypa
             facebook_url="https://www.facebook.com/groups/update-override-group",
             source_name="Update Override Group",
         )
+        source.schedule_tier = 2
+        db.commit()
         next_scrape = datetime(2026, 5, 14, 10, 50, 0)
         calls = []
 
-        def fake_calculate_tier(source_id, session):
-            return {"tier": 2}
-
-        def fake_apply_schedule(source_id, session):
+        def fake_schedule_next_scrape(source_id, session):
             calls.append((source_id, session))
             refreshed = SourceCRUD.get_by_id(session, source_id)
             refreshed.next_scrape = next_scrape
             session.commit()
             return {"next_scrape": next_scrape.strftime("%Y-%m-%dT%H:%M:%S")}
 
-        monkeypatch.setattr("backend.api.routes.sources.calculate_tier", fake_calculate_tier)
-        monkeypatch.setattr("backend.api.routes.sources.apply_schedule", fake_apply_schedule)
+        monkeypatch.setattr("backend.api.routes.sources.schedule_next_scrape", fake_schedule_next_scrape)
 
         import asyncio
 
@@ -3163,23 +3212,20 @@ def test_update_source_clears_schedule_override_with_null_and_refreshes_schedule
             source_name="Clear Override Group",
         )
         source.schedule_override_minutes = 30
+        source.schedule_tier = 2
         db.commit()
 
         next_scrape = datetime(2026, 5, 14, 11, 20, 0)
         calls = []
 
-        def fake_calculate_tier(source_id, session):
-            return {"tier": 2}
-
-        def fake_apply_schedule(source_id, session):
+        def fake_schedule_next_scrape(source_id, session):
             calls.append((source_id, session))
             refreshed = SourceCRUD.get_by_id(session, source_id)
             refreshed.next_scrape = next_scrape
             session.commit()
             return {"next_scrape": next_scrape.strftime("%Y-%m-%dT%H:%M:%S")}
 
-        monkeypatch.setattr("backend.api.routes.sources.calculate_tier", fake_calculate_tier)
-        monkeypatch.setattr("backend.api.routes.sources.apply_schedule", fake_apply_schedule)
+        monkeypatch.setattr("backend.api.routes.sources.schedule_next_scrape", fake_schedule_next_scrape)
 
         import asyncio
 
@@ -3204,7 +3250,7 @@ def test_update_source_clears_schedule_override_with_null_and_refreshes_schedule
         db.close()
 
 
-def test_refresh_source_appends_schedule_response(monkeypatch):
+def test_refresh_source_only_marks_source_due_without_recalculating_schedule():
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="refresh-schedule-user", email="refresh-schedule-user@example.com", password="secret123")
@@ -3216,19 +3262,8 @@ def test_refresh_source_appends_schedule_response(monkeypatch):
             facebook_url="https://www.facebook.com/groups/refresh-schedule-group",
             source_name="Refresh Schedule Group",
         )
-        calls = []
-
-        def fake_apply_schedule(source_id, session):
-            calls.append((source_id, session))
-            return {
-                "applied_tier": 1,
-                "applied_interval_minutes": 15,
-                "next_scrape": "2026-05-14T10:35:00",
-                "avg_likes_per_post": 500.0,
-                "data_days": 1,
-            }
-
-        monkeypatch.setattr("backend.api.routes.sources.apply_schedule", fake_apply_schedule)
+        source.schedule_tier = 1
+        db.commit()
 
         import asyncio
 
@@ -3239,13 +3274,12 @@ def test_refresh_source_appends_schedule_response(monkeypatch):
             "source_id": source.id,
             "next_scrape": result["next_scrape"],
             "current_tier": 1,
-            "applied_interval_minutes": 15,
-            "next_auto_scrape": "2026-05-14T10:35:00",
-            "avg_likes_per_post": 500.0,
-            "data_days": 1,
+            "applied_interval_minutes": 30.0,
+            "next_auto_scrape": None,
+            "avg_likes_per_post": None,
+            "data_days": None,
         }
         assert datetime.fromisoformat(result["next_scrape"])
-        assert calls == [(source.id, db)]
         refreshed_source = SourceCRUD.get_by_id(db, source.id)
         assert refreshed_source.next_scrape == datetime.fromisoformat(result["next_scrape"])
     finally:
@@ -3302,6 +3336,48 @@ def test_periodic_scrape_new_posts_uses_24h_window_and_latest_post_even_untracke
     assert calls[0][0] == source_id
     assert calls[0][1]["last_24_hours_only"] is True
     assert calls[0][1]["min_posted_at"] == latest_posted_at
+
+
+def test_periodic_scrape_new_posts_sets_next_scrape_from_stored_tier(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="periodic-tier-user", email="periodic-tier@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="periodic-tier-group",
+            facebook_url="https://www.facebook.com/groups/periodic-tier-group",
+        )
+        source.schedule_tier = 1
+        source.next_scrape = datetime.utcnow() - timedelta(minutes=1)
+        source_id = source.id
+        db.commit()
+    finally:
+        db.close()
+
+    monkeypatch.setattr(
+        "backend.scheduler.periodic_tasks.FacebookScraperService.scrape_source",
+        lambda *args, **kwargs: SimpleNamespace(
+            total_fetched=0,
+            created_posts=0,
+            updated_posts=0,
+            skipped_posts=0,
+            filtered_by_cutoff=0,
+        ),
+    )
+
+    before = datetime.utcnow()
+    import asyncio
+    asyncio.run(periodic_scrape_new_posts())
+
+    verify_db = SessionLocal()
+    try:
+        refreshed = SourceCRUD.get_by_id(verify_db, source_id)
+        assert refreshed.next_scrape >= before + timedelta(minutes=29)
+        assert refreshed.next_scrape <= datetime.utcnow() + timedelta(minutes=31)
+    finally:
+        verify_db.close()
 
 
 def test_periodic_scrape_new_posts_creates_done_scrape_job_without_session(monkeypatch):

@@ -33,7 +33,7 @@ from backend.database.schemas import (
     SourceUpdateResponse,
     PostResponse,
 )
-from backend.services.schedule_service import apply_schedule, apply_schedule_all, calculate_tier
+from backend.services.schedule_service import calculate_tier, effective_interval_minutes, schedule_next_scrape
 from backend.scraper.facebook_service import FacebookScraperService
 from backend.utils.facebook_url_parser import FacebookURLParser, FacebookSourceType
 from backend.utils.permission_checker import FacebookPermissionChecker, SourceAccessValidator
@@ -375,15 +375,6 @@ async def get_sources_ranking(
     )
 
 
-@router.post("/auto-schedule")
-async def auto_schedule_sources(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """Apply automatic schedule tiers to all sources for current user."""
-    return apply_schedule_all(current_user.id, db)
-
-
 @router.get("/{source_id}", response_model=SourceDetail)
 async def get_source(
     source_id: int,
@@ -463,14 +454,13 @@ async def update_source(
 
     suggested_tier = None
     if schedule_override_requested:
-        schedule_result = apply_schedule(source_id, db)
+        schedule_result = schedule_next_scrape(source_id, db)
         if schedule_result.get("error"):
             raise HTTPException(status_code=500, detail=schedule_result["error"])
         updated_source = SourceCRUD.get_by_id(db, source_id)
 
     if schedule_override_requested or updated_source.schedule_override_minutes is not None:
-        suggested = calculate_tier(source_id, db)
-        suggested_tier = suggested.get("tier") or 4
+        suggested_tier = updated_source.schedule_tier
 
     response = SourceUpdateResponse.model_validate(updated_source)
     response.is_overridden = updated_source.schedule_override_minutes is not None
@@ -509,7 +499,6 @@ async def refresh_source(
     if not source or source.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Source not found")
 
-    schedule_result = apply_schedule(source_id, db)
     next_scrape = datetime.utcnow().replace(microsecond=0)
     SourceCRUD.update_scrape_info(db, source_id, next_scrape=next_scrape)
 
@@ -517,11 +506,14 @@ async def refresh_source(
         "message": "Scrape scheduled",
         "source_id": source_id,
         "next_scrape": next_scrape.strftime("%Y-%m-%dT%H:%M:%S"),
-        "current_tier": schedule_result.get("applied_tier"),
-        "applied_interval_minutes": schedule_result.get("applied_interval_minutes"),
-        "next_auto_scrape": schedule_result.get("next_scrape"),
-        "avg_likes_per_post": schedule_result.get("avg_likes_per_post"),
-        "data_days": schedule_result.get("data_days"),
+        "current_tier": source.schedule_tier,
+        "applied_interval_minutes": effective_interval_minutes(
+            source.schedule_tier,
+            source.schedule_override_minutes,
+        ),
+        "next_auto_scrape": None,
+        "avg_likes_per_post": None,
+        "data_days": None,
     }
 
 

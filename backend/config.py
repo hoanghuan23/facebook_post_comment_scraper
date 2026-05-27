@@ -91,9 +91,10 @@ class Settings(BaseSettings):
     
     # Scheduler settings (APScheduler)
     SCHEDULER_ENABLED: bool = True
+    TASK_SCRAPE_DUE_CHECK_INTERVAL: int = 60  # Poll due sources each minute.
     
     # Task schedules (cron expressions or seconds)
-    TASK_SCRAPE_NEW_POSTS_INTERVAL: int = 3600  # mỗi 60 phút
+    TASK_SCRAPE_NEW_POSTS_INTERVAL: int = 2700  # mỗi 45 phút
     TASK_UPDATE_RECENT_METRICS_INTERVAL: int = 7200  # mỗi 120 phút
     TASK_CLEANUP_OLD_DATA_INTERVAL: int = 43200  # mỗi 12 giờ
     TASK_GENERATE_ANALYTICS_INTERVAL: int = 86400 # mỗi 24 giờ
