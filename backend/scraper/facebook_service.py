@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from backend.database.crud import CommentCRUD, FacebookSessionCRUD, LogCRUD, PostCRUD, PostMetricCRUD, SourceCRUD
 from backend.config import settings
 from backend.database.models import Source, SourceType
+from backend.services.post_metric_schedule_service import apply_metric_snapshot_schedule
 import comment_scraper
 import group_post_scraper_v2 as group_scraper
 import post_scraper as timeline_scraper
@@ -31,6 +32,7 @@ class FacebookScrapeResult:
     skipped_posts: int
     filtered_by_cutoff: int
     post_ids: List[int]
+    matched_metric_target_ids: List[str]
 
 
 def _load_json_dict(raw_value: Optional[str]) -> Dict[str, Any]:
@@ -466,6 +468,7 @@ class FacebookScraperService:
             shares=normalized_post["shares_count"],
             comments=normalized_post["comments_count"],
         )
+        apply_metric_snapshot_schedule(db, db_post.id)
         return True
 
     @staticmethod
@@ -489,6 +492,7 @@ class FacebookScraperService:
         min_posted_at: Optional[datetime] = None,
         consecutive_old_limit: Optional[int] = None,
         job_id: Optional[int] = None,
+        metric_target_post_ids: Optional[List[str]] = None,
     ) -> FacebookScrapeResult:
         cls._apply_source_auth_context(db, source)
         resolved_group_id = cls._resolve_group_id(source)
@@ -497,11 +501,13 @@ class FacebookScraperService:
             source.facebook_id = resolved_group_id
         cls._apply_group_context(source)
 
+        metric_target_set = {str(post_id) for post_id in (metric_target_post_ids or []) if post_id}
+        scan_for_metric_targets = bool(metric_target_set)
         raw_posts = cls._fetch_group_posts_with_compat(
             limit=None if last_24_hours_only else limit,
             last_24_hours_only=last_24_hours_only,
-            min_posted_at=min_posted_at,
-            consecutive_old_limit=consecutive_old_limit,
+            min_posted_at=None if scan_for_metric_targets else min_posted_at,
+            consecutive_old_limit=None if scan_for_metric_targets else consecutive_old_limit,
             group_id=source.facebook_id,
             group_name=source.source_name,
             download_media=settings.SCRAPER_DOWNLOAD_MEDIA,
@@ -514,6 +520,7 @@ class FacebookScraperService:
         skipped_posts = 0
         skipped_by_cutoff = 0
         post_ids: List[int] = []
+        matched_metric_target_ids: List[str] = []
         detected_source_name = source.source_name
 
         for raw_post in raw_posts:
@@ -524,11 +531,12 @@ class FacebookScraperService:
 
             normalized_post = _normalize_group_post(raw_post)
             cls._ensure_valid_posted_at(raw_post, normalized_post)
+            is_metric_target = str(facebook_post_id) in metric_target_set
             skip_reason = _post_cutoff_skip_reason(
                 raw_post,
                 normalized_post,
                 last_24_hours_only=last_24_hours_only,
-                min_posted_at=min_posted_at,
+                min_posted_at=None if is_metric_target else min_posted_at,
             )
             if skip_reason:
                 skipped_by_cutoff += 1
@@ -558,10 +566,13 @@ class FacebookScraperService:
                     shares=normalized_post["shares_count"],
                     comments=normalized_post["comments_count"],
                 )
+                apply_metric_snapshot_schedule(db, db_post.id)
                 cls._sync_post_comments(db, source, db_post)
             else:
                 updated_posts += 1
                 cls._save_metric_snapshot_if_changed(db, db_post, normalized_post)
+                if is_metric_target:
+                    matched_metric_target_ids.append(str(facebook_post_id))
                 if source.include_comments:
                     cls._sync_post_comments(db, source, db_post)
 
@@ -594,6 +605,7 @@ class FacebookScraperService:
             skipped_posts=skipped_posts,
             filtered_by_cutoff=skipped_by_cutoff,
             post_ids=post_ids,
+            matched_metric_target_ids=matched_metric_target_ids,
         )
 
     @classmethod
@@ -605,17 +617,20 @@ class FacebookScraperService:
         last_24_hours_only: bool = False,
         min_posted_at: Optional[datetime] = None,
         consecutive_old_limit: Optional[int] = None,
+        metric_target_post_ids: Optional[List[str]] = None,
     ) -> FacebookScrapeResult:
         cls._apply_source_auth_context(db, source)
         cls._apply_timeline_context(source)
 
         base_folder = "page_post" if source.source_type == SourceType.PAGE else "user_post"
+        metric_target_set = {str(post_id) for post_id in (metric_target_post_ids or []) if post_id}
+        scan_for_metric_targets = bool(metric_target_set)
         raw_posts = cls._fetch_timeline_posts_with_compat(
             limit=limit,
             base_folder=base_folder,
             last_24_hours_only=last_24_hours_only,
-            min_posted_at=min_posted_at,
-            consecutive_old_limit=consecutive_old_limit,
+            min_posted_at=None if scan_for_metric_targets else min_posted_at,
+            consecutive_old_limit=None if scan_for_metric_targets else consecutive_old_limit,
             download_media=settings.SCRAPER_DOWNLOAD_MEDIA,
             skip_existing_posts=False,
         )
@@ -624,6 +639,7 @@ class FacebookScraperService:
         skipped_posts = 0
         skipped_by_cutoff = 0
         post_ids: List[int] = []
+        matched_metric_target_ids: List[str] = []
         detected_source_name = source.source_name
 
         for raw_post in raw_posts:
@@ -634,11 +650,12 @@ class FacebookScraperService:
 
             normalized_post = _normalize_timeline_post(raw_post)
             cls._ensure_valid_posted_at(raw_post, normalized_post)
+            is_metric_target = str(facebook_post_id) in metric_target_set
             skip_reason = _post_cutoff_skip_reason(
                 raw_post,
                 normalized_post,
                 last_24_hours_only=last_24_hours_only,
-                min_posted_at=min_posted_at,
+                min_posted_at=None if is_metric_target else min_posted_at,
             )
             if skip_reason:
                 skipped_by_cutoff += 1
@@ -668,10 +685,13 @@ class FacebookScraperService:
                     shares=normalized_post["shares_count"],
                     comments=normalized_post["comments_count"],
                 )
+                apply_metric_snapshot_schedule(db, db_post.id)
                 cls._sync_post_comments(db, source, db_post)
             else:
                 updated_posts += 1
                 cls._save_metric_snapshot_if_changed(db, db_post, normalized_post)
+                if is_metric_target:
+                    matched_metric_target_ids.append(str(facebook_post_id))
                 if source.include_comments:
                     cls._sync_post_comments(db, source, db_post)
 
@@ -704,6 +724,7 @@ class FacebookScraperService:
             skipped_posts=skipped_posts,
             filtered_by_cutoff=skipped_by_cutoff,
             post_ids=post_ids,
+            matched_metric_target_ids=matched_metric_target_ids,
         )
 
     @classmethod
@@ -737,6 +758,7 @@ class FacebookScraperService:
                 base_folder=base_folder,
                 last_24_hours_only=False,
                 download_media=settings.SCRAPER_DOWNLOAD_MEDIA,
+                skip_existing_posts=False,
             )
             normalize_post = _normalize_timeline_post
         else:
@@ -791,6 +813,7 @@ class FacebookScraperService:
                 "skipped": 0,
                 "deleted": 0,
                 "matched_target_count": 0,
+                "matched_target_ids": [],
                 "target_posts_count": 0,
                 "pages_scanned": 0,
                 "stop_reason": "empty_targets",
@@ -896,6 +919,8 @@ class FacebookScraperService:
                 if db_post.posted_at < recent_cutoff:
                     if db_post.is_tracked:
                         db_post.is_tracked = False
+                        db_post.metric_tier = "expired"
+                        db_post.next_metric_update = None
                         db.commit()
                     continue
                 if PostCRUD.delete(db, db_post.id):
@@ -909,6 +934,7 @@ class FacebookScraperService:
             "skipped": skipped_posts,
             "deleted": deleted_posts,
             "matched_target_count": len(matched_targets),
+            "matched_target_ids": sorted(matched_targets),
             "target_posts_count": len(target_set),
             "pages_scanned": pages_scanned,
             "stop_reason": stop_reason,
@@ -926,6 +952,7 @@ class FacebookScraperService:
         min_posted_at: Optional[datetime] = None,
         consecutive_old_limit: Optional[int] = None,
         job_id: Optional[int] = None,
+        metric_target_post_ids: Optional[List[str]] = None,
     ) -> FacebookScrapeResult:
         source = SourceCRUD.get_by_id(db, source_id)
         if not source:
@@ -939,6 +966,7 @@ class FacebookScraperService:
                 min_posted_at=min_posted_at,
                 consecutive_old_limit=consecutive_old_limit,
                 job_id=job_id,
+                metric_target_post_ids=metric_target_post_ids,
             )
         if source.source_type in {SourceType.PAGE, SourceType.USER}:
             return cls.scrape_timeline_source(
@@ -948,5 +976,6 @@ class FacebookScraperService:
                 last_24_hours_only=last_24_hours_only,
                 min_posted_at=min_posted_at,
                 consecutive_old_limit=consecutive_old_limit,
+                metric_target_post_ids=metric_target_post_ids,
             )
         raise NotImplementedError(f"Facebook source type '{source.source_type.value}' is not implemented yet")

@@ -12,6 +12,7 @@ from backend.database.crud import AnalyticsCRUD, FacebookSessionCRUD, LogCRUD, P
 from backend.database.db import SessionLocal
 from backend.database.models import AnalyticsCache, Comment, Post, Source, SourceType
 from backend.scraper.facebook_service import FacebookScraperService
+from backend.services.post_metric_schedule_service import defer_metric_updates, handle_max_page_misses
 from backend.services.schedule_service import apply_analytics_schedule, schedule_next_scrape
 
 logger = logging.getLogger("facebook_scraper")
@@ -92,6 +93,15 @@ async def periodic_scrape_new_posts():
         user_ids = [source.user_id for source in due_sources]
         latest_posted_at_map = PostCRUD.get_latest_posted_at_bulk(db, source_ids, tracked_only=False)
         active_sessions_map = FacebookSessionCRUD.get_active_sessions_bulk(db, user_ids)
+        due_metric_posts = PostCRUD.get_due_metric_updates(
+            db,
+            hours=24,
+            limit=settings.SCRAPER_POSTS_BATCH_LIMIT,
+            source_ids=source_ids,
+        )
+        due_metric_targets_by_source = {}
+        for post in due_metric_posts:
+            due_metric_targets_by_source.setdefault(post.source_id, []).append(str(post.facebook_post_id))
 
         source_jobs = [
             {
@@ -102,6 +112,7 @@ async def periodic_scrape_new_posts():
                 "is_accessible": source.is_accessible,
                 "permission_checked_at": source.permission_checked_at,
                 "latest_posted_at": latest_posted_at_map.get(source.id),
+                "metric_target_post_ids": due_metric_targets_by_source.get(source.id, []),
                 "active_session_id": (
                     active_sessions_map[source.user_id].id
                     if source.user_id in active_sessions_map
@@ -121,6 +132,7 @@ async def periodic_scrape_new_posts():
             source_label = _format_source_label(source_id, job.get("source_name"))
             thread_label = _current_thread_label()
             source_started_at = time.time()
+            metric_target_post_ids = job.get("metric_target_post_ids", [])
             try:
                 if job["source_type"] not in {SourceType.GROUP, SourceType.PAGE, SourceType.USER}:
                     logger.info(
@@ -156,12 +168,13 @@ async def periodic_scrape_new_posts():
                 )
                 pipeline_job_id = pipeline_job.id
                 logger.info(
-                    "Bắt đầu scrape source: thread=%s source=%s progress=%s/%s latest_cutoff=%s",
+                    "Bắt đầu scrape source: thread=%s source=%s progress=%s/%s latest_cutoff=%s due_metric_targets=%s",
                     thread_label,
                     source_label,
                     progress_index,
                     total_due_sources,
                     latest_posted_at.isoformat() if latest_posted_at else None,
+                    len(metric_target_post_ids),
                 )
                 result = FacebookScraperService.scrape_source(
                     job_db,
@@ -171,6 +184,7 @@ async def periodic_scrape_new_posts():
                     min_posted_at=latest_posted_at,
                     consecutive_old_limit=settings.SCRAPER_CONSECUTIVE_OLD_LIMIT,
                     job_id=pipeline_job_id,
+                    metric_target_post_ids=metric_target_post_ids,
                 )
                 PipelineJobCRUD.mark_done(
                     db=job_db,
@@ -182,7 +196,7 @@ async def periodic_scrape_new_posts():
                 schedule_next_scrape(source_id, job_db)
                 source_duration = round(time.time() - source_started_at, 3)
                 logger.info(
-                    "Kết thúc scrape source: thread=%s source=%s progress=%s/%s fetched=%s created_posts=%s skipped_posts=%s filtered_by_cutoff=%s duration_seconds=%s",
+                    "Kết thúc scrape source: thread=%s source=%s progress=%s/%s fetched=%s created_posts=%s skipped_posts=%s filtered_by_cutoff=%s matched_metric_targets=%s duration_seconds=%s",
                     thread_label,
                     source_label,
                     progress_index,
@@ -191,6 +205,7 @@ async def periodic_scrape_new_posts():
                     result.created_posts,
                     result.skipped_posts,
                     result.filtered_by_cutoff,
+                    len(getattr(result, "matched_metric_target_ids", [])),
                     source_duration,
                 )
                 return {
@@ -275,7 +290,7 @@ async def periodic_scrape_new_posts():
 
 
 async def update_recent_post_metrics():
-    """Update metrics for recent posts (< 24 hours)."""
+    """Update metrics only for recent posts whose per-post schedule is due."""
     db = SessionLocal()
     started_at_ts = time.time()
     refreshed_sources = set()
@@ -285,8 +300,7 @@ async def update_recent_post_metrics():
 
     try:
         untracked_old_posts = PostCRUD.untrack_posts_older_than(db, hours=24)
-        # recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=settings.SCRAPER_MAX_WORKERS * 50)
-        recent_posts = PostCRUD.get_recent_posts(db, hours=24, limit=settings.SCRAPER_POSTS_BATCH_LIMIT)
+        recent_posts = PostCRUD.get_due_metric_updates(db, hours=24, limit=settings.SCRAPER_POSTS_BATCH_LIMIT)
         source_ids = list({post.source_id for post in recent_posts})
         target_posts_by_source = {}
         for post in recent_posts:
@@ -309,9 +323,11 @@ async def update_recent_post_metrics():
             job_db = SessionLocal()
             source_started_at = time.time()
             pipeline_job_id = None
+            target_post_ids = target_posts_by_source.get(source_id, [])
             try:
                 source = SourceCRUD.get_by_id(job_db, source_id)
                 if not source or not source.is_active:
+                    defer_metric_updates(job_db, source_id, target_post_ids)
                     return {"status": "ignored"}
                 source_label = _format_source_label(source.id, source.source_name)
                 thread_label = _current_thread_label()
@@ -324,6 +340,7 @@ async def update_recent_post_metrics():
                         progress_index,
                         total_sources,
                     )
+                    defer_metric_updates(job_db, source.id, target_post_ids)
                     return {"status": "skipped"}
                 if source.source_type not in {SourceType.GROUP, SourceType.PAGE, SourceType.USER}:
                     logger.info(
@@ -334,9 +351,9 @@ async def update_recent_post_metrics():
                         total_sources,
                         source.source_type.value,
                     )
+                    defer_metric_updates(job_db, source.id, target_post_ids)
                     return {"status": "skipped"}
 
-                target_post_ids = target_posts_by_source.get(source.id, [])
                 active_session = FacebookSessionCRUD.get_active_by_user_id(job_db, source.user_id)
                 pipeline_job = PipelineJobCRUD.create_job(
                     db=job_db,
@@ -367,6 +384,13 @@ async def update_recent_post_metrics():
                     download_media=settings.METRIC_REFRESH_DOWNLOAD_MEDIA,
                     job_id=pipeline_job_id,
                 )
+                if result.get("stop_reason") == "max_pages_reached":
+                    matched_ids = set(result.get("matched_target_ids", []))
+                    handle_max_page_misses(
+                        job_db,
+                        source.id,
+                        [post_id for post_id in target_post_ids if post_id not in matched_ids],
+                    )
                 updated_post_refs = result.get("updated_post_refs", [])
                 source_duration = round(time.time() - source_started_at, 3)
                 fetched = result["fetched"]
@@ -424,6 +448,7 @@ async def update_recent_post_metrics():
                     total_sources,
                     exc,
                 )
+                defer_metric_updates(job_db, source_id, target_post_ids)
                 LogCRUD.create_pipeline_log(
                     job_db,
                     message=f"Failed refreshing metrics for source {source_id}",

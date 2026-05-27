@@ -495,6 +495,7 @@ class PostCRUD:
     def create(db: Session, source_id: int, facebook_post_id: str, facebook_url: str,
                posted_at: datetime, content: str = None, **kwargs) -> models.Post:
         """Create a new post"""
+        now = datetime.utcnow()
         db_post = models.Post(
             source_id=source_id,
             facebook_post_id=facebook_post_id,
@@ -505,6 +506,12 @@ class PostCRUD:
             has_images=kwargs.get('has_images', False),
             has_videos=kwargs.get('has_videos', False),
             last_metric_update=kwargs.get('last_metric_update'),
+            tracking_until=kwargs.get('tracking_until', posted_at + timedelta(hours=24)),
+            metric_tier=kwargs.get('metric_tier', 'bootstrap'),
+            next_metric_update=kwargs.get('next_metric_update', now + timedelta(minutes=15)),
+            last_engagement_velocity=kwargs.get('last_engagement_velocity'),
+            cold_check_count=kwargs.get('cold_check_count', 0),
+            metric_scan_miss_count=kwargs.get('metric_scan_miss_count', 0),
         )
         db.add(db_post)
         db.commit()
@@ -605,9 +612,42 @@ class PostCRUD:
 
         for post in posts:
             post.is_tracked = False
+            post.metric_tier = "expired"
+            post.next_metric_update = None
 
         db.commit()
         return len(posts)
+
+    @staticmethod
+    def get_due_metric_updates(
+        db: Session,
+        hours: int = 24,
+        limit: int = 100,
+        source_ids: List[int] = None,
+    ) -> List[models.Post]:
+        """Get active posts whose per-post metric refresh time has arrived."""
+        now = datetime.utcnow()
+        cutoff_time = now - timedelta(hours=hours)
+        query = db.query(models.Post).filter(
+            and_(
+                models.Post.posted_at >= cutoff_time,
+                models.Post.is_tracked == True,
+                models.Post.is_deleted == False,
+                models.Post.next_metric_update.isnot(None),
+                models.Post.next_metric_update <= now,
+                or_(
+                    models.Post.tracking_until == None,
+                    models.Post.tracking_until > now,
+                ),
+            )
+        )
+        if source_ids:
+            query = query.filter(models.Post.source_id.in_(source_ids))
+        return query.order_by(
+            models.Post.next_metric_update.asc(),
+            models.Post.posted_at.desc(),
+            models.Post.id.asc(),
+        ).limit(limit).all()
     
     @staticmethod
     def get_old_posts(db: Session, days: int = 30) -> List[models.Post]:
@@ -653,11 +693,13 @@ class PostCRUD:
         
         allowed_fields = {
             'content', 'is_tracked', 'is_deleted', 'media_count', 'has_images', 'has_videos',
-            'facebook_url', 'posted_at'
+            'facebook_url', 'posted_at', 'tracking_until', 'metric_tier',
+            'next_metric_update', 'last_engagement_velocity', 'cold_check_count',
+            'metric_scan_miss_count',
         }
         
         for key, value in kwargs.items():
-            if key in allowed_fields and value is not None:
+            if key in allowed_fields:
                 setattr(post, key, value)
         
         db.commit()
@@ -709,6 +751,8 @@ class PostCRUD:
         
         post.is_tracked = False
         post.is_deleted = True
+        post.metric_tier = "expired"
+        post.next_metric_update = None
         db.commit()
         return True
     
@@ -735,13 +779,21 @@ class PostMetricCRUD:
     """CRUD operations for PostMetric model"""
     
     @staticmethod
-    def create(db: Session, post_id: int, likes: int, shares: int, comments: int) -> models.PostMetric:
+    def create(
+        db: Session,
+        post_id: int,
+        likes: int,
+        shares: int,
+        comments: int,
+        recorded_at: datetime = None,
+    ) -> models.PostMetric:
         """Create a metric snapshot"""
         db_metric = models.PostMetric(
             post_id=post_id,
             likes_count=likes,
             shares_count=shares,
             comments_count=comments,
+            recorded_at=recorded_at or datetime.utcnow(),
         )
         db.add(db_metric)
         db.commit()

@@ -428,6 +428,10 @@ async def get_source_schedule_stats(
                 "latest_shares": post.current_shares,
                 "latest_comments": post.current_comments,
                 "last_metric_update": post.last_metric_update,
+                "metric_tier": post.metric_tier,
+                "next_metric_update": post.next_metric_update,
+                "last_engagement_velocity": post.last_engagement_velocity,
+                "cold_check_count": post.cold_check_count,
             }
             for post in posts
         ],

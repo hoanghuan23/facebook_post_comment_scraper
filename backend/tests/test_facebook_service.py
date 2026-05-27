@@ -1192,6 +1192,7 @@ def test_update_recent_post_metrics_only_refreshes_sources_with_recent_posted_po
             facebook_url="https://facebook.com/posts/metrics-recent-post",
             posted_at=datetime.utcnow(),
             content="Recent posted",
+            next_metric_update=datetime.utcnow() - timedelta(minutes=1),
         )
         old_post = PostCRUD.create(
             db,
@@ -1312,6 +1313,7 @@ def test_update_recent_post_metrics_records_active_session_id(monkeypatch):
             facebook_url="https://facebook.com/posts/metrics-session-post",
             posted_at=datetime.utcnow(),
             content="Session metric",
+            next_metric_update=datetime.utcnow() - timedelta(minutes=1),
         )
         source_id = source.id
         session_id = session.id
@@ -1484,6 +1486,110 @@ def test_periodic_scrape_new_posts_logs_source_name_and_summary(monkeypatch, cap
     assert "total_new_posts_created=1" in logs
 
 
+def test_scrape_source_combines_due_metric_targets_with_new_post_discovery(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="combined-scan", email="combined-scan@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-combined-scan",
+            facebook_url="https://www.facebook.com/groups/group-combined-scan",
+            source_name="Combined Scan Group",
+        )
+        now = datetime.utcnow()
+        latest_seen = now - timedelta(minutes=10)
+        PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="latest-seen",
+            facebook_url="https://facebook.com/posts/latest-seen",
+            posted_at=latest_seen,
+        )
+        target = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="due-target",
+            facebook_url="https://facebook.com/posts/due-target",
+            posted_at=now - timedelta(hours=1),
+            next_metric_update=now - timedelta(minutes=1),
+        )
+        unrelated = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="old-not-due",
+            facebook_url="https://facebook.com/posts/old-not-due",
+            posted_at=now - timedelta(minutes=40),
+            next_metric_update=now + timedelta(hours=1),
+        )
+        PostMetricCRUD.create(db, target.id, likes=1, shares=0, comments=0)
+        PostMetricCRUD.create(db, unrelated.id, likes=1, shares=0, comments=0)
+
+        calls = []
+
+        def fake_fetch_posts(limit=20, **kwargs):
+            calls.append({"limit": limit, **kwargs})
+            return [
+                {
+                    "post_id": "brand-new",
+                    "permalink": "https://facebook.com/posts/brand-new",
+                    "message": "New",
+                    "posted_at": now,
+                    "reaction_count": 1,
+                    "share_count": 0,
+                    "comment_count": 0,
+                    "photos": [],
+                    "videos": [],
+                },
+                {
+                    "post_id": "due-target",
+                    "permalink": "https://facebook.com/posts/due-target",
+                    "message": "Due",
+                    "posted_at": now - timedelta(hours=1),
+                    "reaction_count": 10,
+                    "share_count": 0,
+                    "comment_count": 0,
+                    "photos": [],
+                    "videos": [],
+                },
+                {
+                    "post_id": "old-not-due",
+                    "permalink": "https://facebook.com/posts/old-not-due",
+                    "message": "Not due",
+                    "posted_at": now - timedelta(minutes=40),
+                    "reaction_count": 20,
+                    "share_count": 0,
+                    "comment_count": 0,
+                    "photos": [],
+                    "videos": [],
+                },
+            ]
+
+        monkeypatch.setattr("backend.scraper.facebook_service.group_scraper.fetch_posts", fake_fetch_posts)
+        monkeypatch.setattr(
+            "backend.scraper.facebook_service.comment_scraper.fetch_comments",
+            lambda feedback_id, cookies=None: ([], {"is_active": True}),
+        )
+
+        result = FacebookScraperService.scrape_source(
+            db,
+            source.id,
+            last_24_hours_only=True,
+            min_posted_at=latest_seen,
+            metric_target_post_ids=["due-target"],
+        )
+
+        assert calls[0]["min_posted_at"] is None
+        assert result.created_posts == 1
+        assert result.matched_metric_target_ids == ["due-target"]
+        assert len(PostMetricCRUD.get_by_post(db, target.id)) == 2
+        assert len(PostMetricCRUD.get_by_post(db, unrelated.id)) == 1
+        assert PostCRUD.get_by_source_and_facebook_post_id(db, source.id, "brand-new") is not None
+    finally:
+        db.close()
+
+
 def test_update_recent_post_metrics_logs_updated_post_list_capped(monkeypatch, caplog):
     db = SessionLocal()
     try:
@@ -1504,6 +1610,7 @@ def test_update_recent_post_metrics_logs_updated_post_list_capped(monkeypatch, c
             facebook_url="https://facebook.com/posts/seed-metrics-post",
             posted_at=datetime.utcnow(),
             content="Seed",
+            next_metric_update=datetime.utcnow() - timedelta(minutes=1),
         )
     finally:
         db.close()
@@ -2108,6 +2215,8 @@ def test_refresh_target_post_metrics_untracks_old_missing_targets_without_deleti
         assert result["deleted_post_refs"] == []
         assert refreshed_old_post.is_tracked is False
         assert refreshed_old_post.is_deleted is False
+        assert refreshed_old_post.metric_tier == "expired"
+        assert refreshed_old_post.next_metric_update is None
     finally:
         db.close()
 
@@ -3336,6 +3445,61 @@ def test_periodic_scrape_new_posts_uses_24h_window_and_latest_post_even_untracke
     assert calls[0][0] == source_id
     assert calls[0][1]["last_24_hours_only"] is True
     assert calls[0][1]["min_posted_at"] == latest_posted_at
+
+
+def test_periodic_scrape_new_posts_includes_due_metric_targets_for_same_source(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="periodic-combined", email="periodic-combined@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="periodic-combined-group",
+            facebook_url="https://www.facebook.com/groups/periodic-combined-group",
+            source_name="Periodic Combined Group",
+        )
+        source.next_scrape = datetime.utcnow() - timedelta(minutes=1)
+        due_posted_at = datetime.utcnow() - timedelta(minutes=30)
+        PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="periodic-due-target",
+            facebook_url="https://facebook.com/posts/periodic-due-target",
+            posted_at=due_posted_at,
+            next_metric_update=datetime.utcnow() - timedelta(minutes=1),
+        )
+        db.commit()
+        source_id = source.id
+    finally:
+        db.close()
+
+    calls = []
+
+    def fake_scrape_source(session, passed_source_id, **kwargs):
+        calls.append((passed_source_id, kwargs))
+        return SimpleNamespace(
+            total_fetched=1,
+            created_posts=0,
+            updated_posts=1,
+            skipped_posts=0,
+            filtered_by_cutoff=0,
+            matched_metric_target_ids=["periodic-due-target"],
+        )
+
+    monkeypatch.setattr(
+        "backend.scheduler.periodic_tasks.FacebookScraperService.scrape_source",
+        fake_scrape_source,
+    )
+
+    import asyncio
+    asyncio.run(periodic_scrape_new_posts())
+
+    assert len(calls) == 1
+    assert calls[0][0] == source_id
+    assert calls[0][1]["last_24_hours_only"] is True
+    assert calls[0][1]["min_posted_at"] == due_posted_at
+    assert calls[0][1]["metric_target_post_ids"] == ["periodic-due-target"]
 
 
 def test_periodic_scrape_new_posts_sets_next_scrape_from_stored_tier(monkeypatch):

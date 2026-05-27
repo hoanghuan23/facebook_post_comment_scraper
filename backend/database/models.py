@@ -152,6 +152,11 @@ class Post(Base):
     tracking_until = Column(DateTime, nullable=True)
     is_deleted = Column(Boolean, default=False)
     last_metric_update = Column(DateTime, nullable=True)
+    metric_tier = Column(String(20), nullable=False, default="bootstrap", server_default="bootstrap")
+    next_metric_update = Column(DateTime, nullable=True)
+    last_engagement_velocity = Column(Float, nullable=True)
+    cold_check_count = Column(Integer, nullable=False, default=0, server_default="0")
+    metric_scan_miss_count = Column(Integer, nullable=False, default=0, server_default="0")
 
     source = relationship("Source", back_populates="posts")
     metrics_history = relationship("PostMetric", back_populates="post", cascade="all, delete-orphan")
@@ -162,6 +167,11 @@ class Post(Base):
         Index("idx_post_facebook_id", "facebook_post_id"),
         Index("idx_post_posted_at", "posted_at"),
         Index("idx_post_last_update", "last_metric_update"),
+        Index("idx_post_metric_due", "is_tracked", "next_metric_update"),
+        CheckConstraint(
+            "metric_tier IN ('bootstrap', 'hot', 'warm', 'cold', 'expired')",
+            name="ck_posts_metric_tier",
+        ),
     )
 
 

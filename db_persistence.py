@@ -3,7 +3,7 @@ import json
 import os
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 
@@ -92,7 +92,12 @@ def _ensure_minimal_schema(conn):
             is_tracked BOOLEAN DEFAULT 1,
             tracking_until DATETIME,
             is_deleted BOOLEAN DEFAULT 0,
-            last_metric_update DATETIME
+            last_metric_update DATETIME,
+            metric_tier VARCHAR(20) NOT NULL DEFAULT 'bootstrap',
+            next_metric_update DATETIME,
+            last_engagement_velocity FLOAT,
+            cold_check_count INTEGER NOT NULL DEFAULT 0,
+            metric_scan_miss_count INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS post_metrics (
@@ -119,6 +124,34 @@ def _ensure_minimal_schema(conn):
             last_updated DATETIME,
             depth_level INTEGER DEFAULT 0
         );
+        """
+    )
+    post_columns = {row[1] for row in conn.execute("PRAGMA table_info(posts)").fetchall()}
+    additions = {
+        "metric_tier": "VARCHAR(20) NOT NULL DEFAULT 'bootstrap'",
+        "next_metric_update": "DATETIME",
+        "last_engagement_velocity": "FLOAT",
+        "cold_check_count": "INTEGER NOT NULL DEFAULT 0",
+        "metric_scan_miss_count": "INTEGER NOT NULL DEFAULT 0",
+    }
+    for column_name, column_sql in additions.items():
+        if column_name not in post_columns:
+            conn.execute(f"ALTER TABLE posts ADD COLUMN {column_name} {column_sql}")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_post_metric_due ON posts (is_tracked, next_metric_update)")
+    conn.execute(
+        """
+        UPDATE posts
+        SET tracking_until = COALESCE(tracking_until, datetime(posted_at, '+24 hours')),
+            metric_tier = COALESCE(metric_tier, 'bootstrap'),
+            next_metric_update = COALESCE(next_metric_update, datetime('now'))
+        WHERE is_tracked = 1 AND is_deleted = 0 AND posted_at >= datetime('now', '-24 hours')
+        """
+    )
+    conn.execute(
+        """
+        UPDATE posts
+        SET is_tracked = 0, metric_tier = 'expired', next_metric_update = NULL
+        WHERE is_tracked = 1 AND is_deleted = 0 AND posted_at < datetime('now', '-24 hours')
         """
     )
 
@@ -211,6 +244,12 @@ def _upsert_post(conn, source_id, post_data):
     media_count = len(photos) + len(videos)
     posted_at = _parse_datetime(post_data.get("posted_at"))
     now = _utc_now()
+    tracking_until = (
+        datetime.fromisoformat(posted_at) + timedelta(hours=24)
+    ).isoformat(sep=" ")
+    next_metric_update = (
+        datetime.fromisoformat(now) + timedelta(minutes=15)
+    ).isoformat(sep=" ")
 
     row = conn.execute(
         "SELECT id FROM posts WHERE facebook_post_id = ?",
@@ -224,7 +263,10 @@ def _upsert_post(conn, source_id, post_data):
             UPDATE posts
             SET source_id = ?, facebook_url = ?, content = ?, media_count = ?,
                 has_images = ?, has_videos = ?, posted_at = ?, is_tracked = 1,
-                is_deleted = 0, last_metric_update = ?
+                is_deleted = 0, last_metric_update = ?,
+                tracking_until = COALESCE(tracking_until, ?),
+                metric_tier = COALESCE(metric_tier, 'bootstrap'),
+                next_metric_update = COALESCE(next_metric_update, ?)
             WHERE id = ?
             """,
             (
@@ -236,6 +278,8 @@ def _upsert_post(conn, source_id, post_data):
                 bool(videos),
                 posted_at,
                 now,
+                tracking_until,
+                next_metric_update,
                 db_post_id,
             ),
         )
@@ -246,9 +290,10 @@ def _upsert_post(conn, source_id, post_data):
         INSERT INTO posts (
             source_id, facebook_post_id, facebook_url, content, media_count,
             has_images, has_videos, posted_at, created_at, is_tracked, is_deleted,
-            last_metric_update
+            last_metric_update, tracking_until, metric_tier, next_metric_update,
+            cold_check_count, metric_scan_miss_count
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, 'bootstrap', ?, 0, 0)
         """,
         (
             source_id,
@@ -261,6 +306,8 @@ def _upsert_post(conn, source_id, post_data):
             posted_at,
             now,
             now,
+            tracking_until,
+            next_metric_update,
         ),
     )
     return cur.lastrowid, True

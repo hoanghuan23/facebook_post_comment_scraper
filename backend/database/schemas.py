@@ -152,6 +152,10 @@ class SourcePostLatestMetrics(BaseModel):
     latest_shares: int = 0
     latest_comments: int = 0
     last_metric_update: Optional[datetime] = None
+    metric_tier: str = "bootstrap"
+    next_metric_update: Optional[datetime] = None
+    last_engagement_velocity: Optional[float] = None
+    cold_check_count: int = 0
 
 
 class SourceAnalyticsStatsResponse(BaseModel):
@@ -232,6 +236,10 @@ class PostResponse(BaseModel):
     has_videos: bool
     last_metric_update: Optional[datetime]
     metrics_update_count: int
+    metric_tier: str
+    next_metric_update: Optional[datetime]
+    last_engagement_velocity: Optional[float]
+    cold_check_count: int
     
     class Config:
         from_attributes = True
