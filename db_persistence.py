@@ -198,10 +198,11 @@ def _source_identity(post_type, post_data):
     return source_type, facebook_id[:50], url[:255], name
 
 
-def _upsert_source(conn, post_type, post_data):
+def _upsert_source(conn, post_type, post_data, include_comments=None):
     user_id = _default_user_id(conn)
     source_type, facebook_id, facebook_url, source_name = _source_identity(post_type, post_data)
     now = _utc_now()
+    include_comments_value = 1 if include_comments else 0
 
     row = conn.execute(
         "SELECT id FROM sources WHERE user_id = ? AND facebook_id = ?",
@@ -214,10 +215,10 @@ def _upsert_source(conn, post_type, post_data):
             """
             UPDATE sources
             SET source_type = ?, facebook_url = ?, source_name = ?, is_active = 1,
-                is_accessible = 1, last_scraped = ?
+                include_comments = ?, is_accessible = 1, last_scraped = ?
             WHERE id = ?
             """,
-            (source_type, facebook_url, source_name, now, source_id),
+            (source_type, facebook_url, source_name, include_comments_value, now, source_id),
         )
         return source_id
 
@@ -228,9 +229,18 @@ def _upsert_source(conn, post_type, post_data):
             is_active, include_comments, permission_status,
             is_accessible, created_at, last_scraped
         )
-        VALUES (?, ?, ?, ?, ?, 1, 1, 'granted', 1, ?, ?)
+        VALUES (?, ?, ?, ?, ?, 1, ?, 'granted', 1, ?, ?)
         """,
-        (user_id, source_type, facebook_id, facebook_url, source_name, now, now),
+        (
+            user_id,
+            source_type,
+            facebook_id,
+            facebook_url,
+            source_name,
+            include_comments_value,
+            now,
+            now,
+        ),
     )
     return cur.lastrowid
 
@@ -427,7 +437,7 @@ def _upsert_comments(conn, db_post_id, facebook_post_id, comments_data):
     return saved
 
 
-def save_scraped_post_to_db(post_type, post_data, comments_data):
+def save_scraped_post_to_db(post_type, post_data, comments_data, include_comments=None):
     """Persist one scraped post JSON payload to the backend SQLite database."""
     if post_type not in {"group_post", "page_post", "user_post"}:
         return None
@@ -438,7 +448,9 @@ def save_scraped_post_to_db(post_type, post_data, comments_data):
         conn = _connect()
         try:
             _ensure_minimal_schema(conn)
-            source_id = _upsert_source(conn, post_type, post_data)
+            if include_comments is None:
+                include_comments = bool(comments_data)
+            source_id = _upsert_source(conn, post_type, post_data, include_comments)
             db_post_id, insert_metric = _upsert_post(conn, source_id, post_data)
             _insert_metric_if_needed(conn, db_post_id, post_data, insert_metric)
             comments_saved = _upsert_comments(conn, db_post_id, str(post_data["post_id"]), comments_data)

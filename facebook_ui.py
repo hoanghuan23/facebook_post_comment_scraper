@@ -525,13 +525,25 @@ class ScraperThread(QThread):
                             comments = []
                             if include_comments:
                                 comments, _ = fetch_comments_for_post(post_id, cookies=self.cookies)
-                            save_post_data("user_post", post_id, post, comments)
+                            save_post_data(
+                                "user_post",
+                                post_id,
+                                post,
+                                comments,
+                                include_comments=include_comments,
+                            )
                             self.log(f"      ✓ Saved to user_post/{post_id}/{post_id}.json")
                             if include_comments:
                                 time.sleep(1)
                         except Exception as e:
                             self.log(f"      ❌ Error fetching comments: {e}")
-                            save_post_data("user_post", post_id, post, [])
+                            save_post_data(
+                                "user_post",
+                                post_id,
+                                post,
+                                [],
+                                include_comments=include_comments,
+                            )
 
                 fetch_label = "posts from last 24 hours" if last_24_hours_only else f"{count} posts"
                 self.log(f"  Fetching {fetch_label} from user {user_id} (batch size: {batch_size})...")
@@ -615,14 +627,26 @@ class ScraperThread(QThread):
                             comments = []
                             if include_comments:
                                 comments, _ = fetch_comments_for_post(post_id, cookies=self.cookies)
-                            save_post_data("page_post", post_id, post, comments)
+                            save_post_data(
+                                "page_post",
+                                post_id,
+                                post,
+                                comments,
+                                include_comments=include_comments,
+                            )
                             self.log(f"      ✓ Saved to page_post/{post_id}/{post_id}.json")
                             if include_comments:
                                 time.sleep(1)  # Be nice to the server
                         except Exception as e:
                             self.log(f"      ❌ Error fetching comments: {e}")
                             # Save post data even if comments fail
-                            save_post_data("page_post", post_id, post, [])
+                            save_post_data(
+                                "page_post",
+                                post_id,
+                                post,
+                                [],
+                                include_comments=include_comments,
+                            )
                 
                 fetch_label = "posts from last 24 hours" if last_24_hours_only else f"{count} posts"
                 self.log(f"  Fetching {fetch_label} from page {page_id} (batch size: {batch_size})...")
@@ -707,14 +731,26 @@ class ScraperThread(QThread):
                             comments = []
                             if include_comments:
                                 comments, _ = fetch_comments_for_post(post_id, cookies=self.cookies)
-                            save_post_data("group_post", post_id, post, comments)
+                            save_post_data(
+                                "group_post",
+                                post_id,
+                                post,
+                                comments,
+                                include_comments=include_comments,
+                            )
                             self.log(f"      ✓ Saved to group_post/{post_id}/{post_id}.json")
                             if include_comments:
                                 time.sleep(1)  # Be nice to the server
                         except Exception as e:
                             self.log(f"      ❌ Error fetching comments: {e}")
                             # Save post data even if comments fail
-                            save_post_data("group_post", post_id, post, [])
+                            save_post_data(
+                                "group_post",
+                                post_id,
+                                post,
+                                [],
+                                include_comments=include_comments,
+                            )
                 
                 fetch_label = "posts from last 24 hours" if last_24_hours_only else f"{count} posts"
                 self.log(f"  Fetching {fetch_label} from group {group_id} (batch size: {batch_size})...")
@@ -792,13 +828,25 @@ class ScraperThread(QThread):
                                 fb_dtsg=self.fb_dtsg,
                                 proxies=self.proxies,
                             )
-                        save_post_data("group_post", post_id, post, comments)
+                        save_post_data(
+                            "group_post",
+                            post_id,
+                            post,
+                            comments,
+                            include_comments=include_comments,
+                        )
                         self.log(f"{prefix} Saved post {post_id}")
                         if include_comments:
                             time.sleep(1)
                     except Exception as e:
                         self.log(f"{prefix} Error fetching comments for {post_id}: {e}")
-                        save_post_data("group_post", post_id, post, [])
+                        save_post_data(
+                            "group_post",
+                            post_id,
+                            post,
+                            [],
+                            include_comments=include_comments,
+                        )
 
             try:
                 fetch_label = "posts from last 24 hours" if last_24_hours_only else f"{count} posts"

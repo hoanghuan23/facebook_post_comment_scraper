@@ -237,7 +237,7 @@ def fetch_comments_for_post(post_id, cookies=None, fb_dtsg=None, proxies=None):
     return all_data, post_info
 
 
-def save_post_data(post_type, post_id, post_data, comments_data):
+def save_post_data(post_type, post_id, post_data, comments_data, include_comments=None):
     """Save post and comments data in organized folder structure"""
     # For simple_post type, save directly under post_id (no intermediate name folder)
     if post_type == "simple_post":
@@ -276,7 +276,12 @@ def save_post_data(post_type, post_id, post_data, comments_data):
         json.dump(combined_data, f, ensure_ascii=False, indent=2)
     db_result = None
     try:
-        db_result = save_scraped_post_to_db(post_type, post_data, comments_data)
+        db_result = save_scraped_post_to_db(
+            post_type,
+            post_data,
+            comments_data,
+            include_comments=include_comments,
+        )
         if db_result:
             print(f"  Saved to DB: {db_result['db_path']} (post_id={db_result['post_id']})")
     except Exception as e:
