@@ -143,10 +143,10 @@ def apply_metric_snapshot_schedule(
         p90 = _nearest_rank_percentile(source_velocities, 0.90)
 
     is_hot = velocity >= HOT_VELOCITY_THRESHOLD or (
-        velocity > 0 and p90 is not None and velocity >= p90
+        velocity > 0 and p90 is not None and p90 > 0 and velocity >= p90
     )
     is_warm = velocity >= WARM_VELOCITY_THRESHOLD or (
-        velocity > 0 and p70 is not None and velocity >= p70
+        velocity > 0 and p70 is not None and p70 > 0 and velocity >= p70
     )
     if is_hot:
         next_tier = HOT
