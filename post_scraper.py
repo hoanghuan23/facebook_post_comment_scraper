@@ -14,7 +14,6 @@ from utils.facebook_extractor import (
     extract_comment_count,
     extract_reaction_count,
     extract_share_count,
-    is_reel_or_video_post,
     extract_posted_at,
     extract_author,
     make_scraped_at,
@@ -394,6 +393,84 @@ def extract_permalink(node):
     except Exception:
         return None
 
+def _find_timeline_page_info(timeline_block, cleaned_data):
+    """Find pagination metadata across known Facebook response shapes."""
+    if isinstance(timeline_block, dict):
+        node = timeline_block.get("node") or {}
+        if isinstance(node, dict):
+            timeline = node.get("timeline_list_feed_units") or {}
+            if isinstance(timeline, dict) and isinstance(timeline.get("page_info"), dict):
+                return timeline["page_info"]
+
+    for block in cleaned_data or []:
+        if not isinstance(block, dict):
+            continue
+        if isinstance(block.get("page_info"), dict):
+            return block["page_info"]
+
+        node = block.get("node") or {}
+        if not isinstance(node, dict):
+            continue
+        timeline = node.get("timeline_list_feed_units") or {}
+        if isinstance(timeline, dict) and isinstance(timeline.get("page_info"), dict):
+            return timeline["page_info"]
+
+    return {}
+
+
+def _summarize_timeline_response(data):
+    """Build a compact diagnostic summary for unexpected empty timeline responses."""
+    summary = {
+        "total_blocks": 0,
+        "top_level_keys": {},
+        "node_typenames": {},
+        "timeline_edges": 0,
+        "story_nodes": 0,
+        "page_info_blocks": 0,
+        "errors": [],
+    }
+
+    def _bump(bucket, key):
+        if not key:
+            key = "<empty>"
+        bucket[key] = bucket.get(key, 0) + 1
+
+    for item in data or []:
+        if not isinstance(item, dict):
+            continue
+        summary["total_blocks"] += 1
+        for key in item.keys():
+            _bump(summary["top_level_keys"], str(key))
+
+        if item.get("error") is not None or item.get("errorSummary") or item.get("errorDescription"):
+            summary["errors"].append(
+                {
+                    "error": item.get("error"),
+                    "errorSummary": item.get("errorSummary"),
+                    "errorDescription": item.get("errorDescription"),
+                    "isNotCritical": item.get("isNotCritical"),
+                }
+            )
+
+        node = item.get("node")
+        if not isinstance(node, dict):
+            if isinstance(item.get("page_info"), dict):
+                summary["page_info_blocks"] += 1
+            continue
+
+        node_typename = node.get("__typename") or "<missing>"
+        _bump(summary["node_typenames"], node_typename)
+        if node_typename == "Story":
+            summary["story_nodes"] += 1
+
+        timeline = node.get("timeline_list_feed_units") or {}
+        edges = timeline.get("edges") or []
+        if isinstance(edges, list):
+            summary["timeline_edges"] += len(edges)
+        if isinstance(timeline.get("page_info"), dict):
+            summary["page_info_blocks"] += 1
+
+    return summary
 
 # Global counter for tracking image indices per post
 _image_counters = {}
@@ -596,7 +673,6 @@ def fetch_posts(
             r = retry_request(GRAPHQL_URL, BASE_HEADERS, payload, PROXIES)
             # with open("response.txt", "w", encoding="utf-8") as f:
             #     f.write(r.text)
-            print("Ma trang thai:", r.status_code)
             cleaned_data = parse_fb_response(r.text)
             
             if cleaned_data and len(cleaned_data) > 0:
@@ -685,14 +761,28 @@ def fetch_posts(
                         story_nodes.append(edge_node)
         
         print(f"Tìm thấy {len(story_nodes)} post trong trang {page_num}")
+        if not story_nodes:
+            response_summary = _summarize_timeline_response(cleaned_data)
+            print(
+                "Chuan doan response:"
+                f" blocks={response_summary['total_blocks']},"
+                f" timeline_edges={response_summary['timeline_edges']},"
+                f" story_nodes={response_summary['story_nodes']},"
+                f" page_info_blocks={response_summary['page_info_blocks']}"
+            )
+            if response_summary["node_typenames"]:
+                print(f"  node typenames: {response_summary['node_typenames']}")
+            if response_summary["errors"]:
+                for idx, err in enumerate(response_summary["errors"], start=1):
+                    print(
+                        f"  GraphQL error #{idx}: code={err.get('error')},"
+                        f" summary={err.get('errorSummary')},"
+                        f" description={err.get('errorDescription')},"
+                        f" isNotCritical={err.get('isNotCritical')}"
+                    )
         
         # Process all collected Story nodes
         for node in story_nodes:
-            # Skip reels and video posts
-            if is_reel_or_video_post(node):
-                print(f"Bỏ qua bài reel/video")
-                continue
-
             post_id = node.get("post_id")
             if not post_id:
                 continue
@@ -742,7 +832,7 @@ def fetch_posts(
             if not PAGE_NAME:
                 PAGE_NAME = extract_page_name(node)
                 if PAGE_NAME:
-                    print(f"ðŸ“‚ Ten page: {PAGE_NAME}")
+                    print(f"Tên page: {PAGE_NAME}")
             
             # Check if post already exists
             temp_page_name = PAGE_NAME or extract_page_name(node)
@@ -808,7 +898,7 @@ def fetch_posts(
             # Check if we should process this batch
             if batch_size > 0 and len(batch_posts) >= batch_size and on_batch_complete:
                 total_label = limit if limit is not None else "24h"
-                print(f"\n“¦ Hoàn tất: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
+                print(f"Hoàn tất: {len(batch_posts)} posts. Total: {len(all_posts)}/{total_label}")
                 on_batch_complete(batch_posts, len(all_posts), limit)
                 batch_posts = []  # Reset batch
             
@@ -826,17 +916,9 @@ def fetch_posts(
             print("Đã gặp post cũ hơn 24h. Dừng phân trang.")
             break
 
-        # update cursor - get page_info from timeline_block or find it in cleaned_data
-        page_info = timeline_block["node"]["timeline_list_feed_units"].get("page_info")
-        
-        # If not in timeline_block, search for it in cleaned_data array
-        if not page_info:
-            for block in cleaned_data:
-                if isinstance(block, dict) and "page_info" in block:
-                    page_info = block["page_info"]
-                    break
-        
-        page_info = page_info or {}
+        # Update cursor. Some Facebook responses return Story nodes without a
+        # timeline_list_feed_units block, so pagination metadata is best-effort.
+        page_info = _find_timeline_page_info(timeline_block, cleaned_data)
         cursor = page_info.get("end_cursor")
 
         if not cursor:

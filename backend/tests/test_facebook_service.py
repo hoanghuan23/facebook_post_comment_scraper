@@ -583,6 +583,144 @@ def test_scrape_page_source_creates_post(monkeypatch):
     finally:
         db.close()
 
+def test_scrape_page_source_resolves_slug_id_before_fetch(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="page-slug-user", email="page-slug-user@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="page",
+            facebook_id="page-slug",
+            facebook_url="https://www.facebook.com/page-slug",
+            source_name="Page Slug",
+        )
+        FacebookSessionCRUD.upsert_active_for_user(
+            db=db,
+            user_id=user.id,
+            fb_cookies='{"c_user":"123"}',
+            fb_dtsg="token",
+            fb_user_agent="browser-agent-from-api-session",
+        )
+        calls = []
+
+        monkeypatch.setattr("main.extract_user_id_from_url", lambda url, cookies=None: "123456789")
+
+        def fake_fetch_posts(limit=20, **kwargs):
+            calls.append({"limit": limit, **kwargs})
+            assert post_scraper.USER_ID == "123456789"
+            assert post_scraper.PAGE_NAME is None
+            assert post_scraper.BASE_HEADERS["user-agent"] == "Mozilla/5.0"
+            assert post_scraper.BASE_HEADERS["referer"] == "https://www.facebook.com/profile.php?id=123456789"
+            return [
+                {
+                    "post_id": "resolved-page-post",
+                    "permalink": "https://facebook.com/page/posts/resolved-page-post",
+                    "text": "Resolved page post",
+                    "posted_at": datetime.utcnow(),
+                    "reaction_count": 1,
+                    "share_count": 0,
+                    "comment_count": 0,
+                    "page_name": "Resolved Page",
+                    "media": [],
+                }
+            ]
+
+        monkeypatch.setattr("backend.scraper.facebook_service.timeline_scraper.fetch_posts", fake_fetch_posts)
+
+        result = FacebookScraperService.scrape_source(db, source.id, last_24_hours_only=True)
+        refreshed_source = SourceCRUD.get_by_id(db, source.id)
+
+        assert result.created_posts == 1
+        assert refreshed_source.facebook_id == "123456789"
+        assert calls[0]["limit"] is None
+    finally:
+        db.close()
+
+
+def test_timeline_fetch_posts_handles_standalone_story_without_timeline_page_info(monkeypatch):
+    creation_time = int(datetime.utcnow().timestamp())
+    story = {
+        "__typename": "Story",
+        "post_id": "standalone-story-1",
+        "creation_time": creation_time,
+        "comet_sections": {
+            "content": {
+                "story": {
+                    "message": {"text": "Standalone story"},
+                    "actors": [{"name": "Standalone Page", "__typename": "Page"}],
+                }
+            }
+        },
+        "feedback": {"id": "feedback-standalone-story-1"},
+        "attachments": [],
+    }
+
+    class FakeResponse:
+        status_code = 200
+        text = json.dumps({"data": {"node": story}})
+
+    monkeypatch.setattr(post_scraper, "PAGE_NAME", None)
+    monkeypatch.setattr(post_scraper, "WRITE_DEBUG_FILES", False)
+    monkeypatch.setattr(post_scraper, "retry_request", lambda *args, **kwargs: FakeResponse())
+
+    posts = post_scraper.fetch_posts(
+        limit=None,
+        last_24_hours_only=True,
+        download_media=False,
+        skip_existing_posts=False,
+    )
+
+    assert [post["post_id"] for post in posts] == ["standalone-story-1"]
+
+
+def test_timeline_fetch_posts_includes_video_stories_by_default(monkeypatch):
+    creation_time = int(datetime.utcnow().timestamp())
+    story = {
+        "__typename": "Story",
+        "post_id": "video-story-1",
+        "creation_time": creation_time,
+        "comet_sections": {
+            "content": {
+                "story": {
+                    "message": {"text": "Video story"},
+                    "actors": [{"name": "Video Page", "__typename": "Page"}],
+                }
+            }
+        },
+        "feedback": {"id": "feedback-video-story-1"},
+        "attachments": [
+            {
+                "styles": {
+                    "attachment": {
+                        "media": {
+                            "__typename": "Video",
+                            "playable_url": "https://example.test/video.mp4",
+                        }
+                    }
+                }
+            }
+        ],
+    }
+
+    class FakeResponse:
+        status_code = 200
+        text = json.dumps({"data": {"node": story}})
+
+    monkeypatch.setattr(post_scraper, "PAGE_NAME", None)
+    monkeypatch.setattr(post_scraper, "WRITE_DEBUG_FILES", False)
+    monkeypatch.setattr(post_scraper, "retry_request", lambda *args, **kwargs: FakeResponse())
+
+    posts = post_scraper.fetch_posts(
+        limit=None,
+        last_24_hours_only=True,
+        download_media=False,
+        skip_existing_posts=False,
+    )
+
+    assert [post["post_id"] for post in posts] == ["video-story-1"]
+    assert posts[0]["media"] == [{"type": "video", "url": "https://example.test/video.mp4"}]
+
 
 def test_refresh_recent_post_metrics_updates_existing_group_post(monkeypatch):
     db = SessionLocal()

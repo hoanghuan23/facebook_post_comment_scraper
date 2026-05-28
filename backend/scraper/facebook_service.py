@@ -395,10 +395,42 @@ class FacebookScraperService:
     @staticmethod
     def _apply_timeline_context(source: Source) -> None:
         timeline_scraper.USER_ID = source.facebook_id
-        timeline_scraper.PAGE_NAME = source.source_name
+        # Match facebook_ui.py behavior for Page/User timeline scraping. The
+        # timeline query is sensitive to request context; UI leaves PAGE_NAME
+        # unset and uses post_scraper.py's simple default user-agent.
+        timeline_scraper.PAGE_NAME = None
         timeline_scraper.COOKIES = group_scraper.COOKIES
         timeline_scraper.FB_DTSG = group_scraper.FB_DTSG
         timeline_scraper.WRITE_DEBUG_FILES = settings.SCRAPER_WRITE_DEBUG_FILES
+        timeline_scraper.BASE_HEADERS["user-agent"] = "Mozilla/5.0"
+        timeline_scraper.BASE_HEADERS["referer"] = f"https://www.facebook.com/profile.php?id={source.facebook_id}"
+
+    @staticmethod
+    def _resolve_timeline_id(source: Source) -> str:
+        """Resolve page/user slug URLs to the numeric id expected by the timeline GraphQL query."""
+        facebook_id = str(source.facebook_id or "").strip()
+        if not facebook_id:
+            return facebook_id
+        if facebook_id.isdigit():
+            return facebook_id
+
+        try:
+            from main import extract_user_id_from_url
+
+            resolved_id = extract_user_id_from_url(
+                source.facebook_url,
+                cookies=timeline_scraper.COOKIES or None,
+            )
+            if resolved_id:
+                return str(resolved_id).strip()
+        except Exception as exc:
+            logger.warning(
+                "Failed to resolve timeline id from URL for source %s (%s): %s",
+                source.id,
+                source.facebook_url,
+                exc,
+            )
+        return facebook_id
 
     @staticmethod
     def _apply_comment_context() -> None:
@@ -620,7 +652,11 @@ class FacebookScraperService:
         metric_target_post_ids: Optional[List[str]] = None,
     ) -> FacebookScrapeResult:
         cls._apply_source_auth_context(db, source)
-        cls._apply_timeline_context(source)
+        resolved_timeline_id = cls._resolve_timeline_id(source)
+        if resolved_timeline_id and resolved_timeline_id != source.facebook_id:
+            source.facebook_id = resolved_timeline_id
+            db.commit()
+            db.refresh(source)
 
         base_folder = "page_post" if source.source_type == SourceType.PAGE else "user_post"
         metric_target_set = {str(post_id) for post_id in (metric_target_post_ids or []) if post_id}
@@ -751,6 +787,11 @@ class FacebookScraperService:
             )
             normalize_post = _normalize_group_post
         elif source.source_type in {SourceType.PAGE, SourceType.USER}:
+            resolved_timeline_id = cls._resolve_timeline_id(source)
+            if resolved_timeline_id and resolved_timeline_id != source.facebook_id:
+                source.facebook_id = resolved_timeline_id
+                db.commit()
+                db.refresh(source)
             cls._apply_timeline_context(source)
             base_folder = "page_post" if source.source_type == SourceType.PAGE else "user_post"
             fetched_posts = cls._fetch_timeline_posts_with_compat(
@@ -839,6 +880,11 @@ class FacebookScraperService:
             )
             normalize_post = _normalize_group_post
         elif source.source_type in {SourceType.PAGE, SourceType.USER}:
+            resolved_timeline_id = cls._resolve_timeline_id(source)
+            if resolved_timeline_id and resolved_timeline_id != source.facebook_id:
+                source.facebook_id = resolved_timeline_id
+                db.commit()
+                db.refresh(source)
             cls._apply_timeline_context(source)
             base_folder = "page_post" if source.source_type == SourceType.PAGE else "user_post"
             fetched_posts = cls._fetch_timeline_posts_with_compat(
