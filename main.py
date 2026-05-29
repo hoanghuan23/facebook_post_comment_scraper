@@ -62,7 +62,7 @@ def extract_user_id_from_url(url, cookies=None):
                 print(f"Found User ID: {user_id}")
                 return user_id
         
-        print("User ID not found")
+        print("User ID not found") 
         return None
     
     except Exception as e:
@@ -83,7 +83,7 @@ def extract_group_id_from_url(url, cookies=None):
         match = re.search(pattern, url)
         if match:
             group_id = match.group(1)
-            print(f"  âœ… Found Group ID in URL: {group_id}")
+            print(f"Found Group ID in URL: {group_id}")
             return group_id
     
     # If no ID in URL, fetch the page and search in HTML

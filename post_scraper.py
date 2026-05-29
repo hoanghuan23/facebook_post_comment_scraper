@@ -24,7 +24,7 @@ WRITE_DEBUG_FILES = os.getenv("SCRAPER_WRITE_DEBUG_FILES", "false").lower() == "
 
 # ========= CONFIG (FILL THESE) =========
 USER_ID = "100019577483175"   # profile / page id
-# USER_ID = "100015055006523" # id profile cÃ´ng anh
+# USER_ID = "100015055006523" # id profile cong anh
 PAGE_NAME = None  # Will be extracted automatically
 DOC_ID = "25430544756617998" # ProfileCometTimelineFeedRefetchQuery
 

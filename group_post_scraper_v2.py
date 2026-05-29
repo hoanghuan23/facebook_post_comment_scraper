@@ -23,7 +23,7 @@ from utils.facebook_extractor import (
 
 GRAPHQL_URL = "https://www.facebook.com/api/graphql/"
 WRITE_DEBUG_FILES = os.getenv("SCRAPER_WRITE_DEBUG_FILES", "false").lower() == "true"
-WRITE_POST_FILES = os.getenv("SCRAPER_WRITE_POST_FILES", "true").lower() == "true"
+WRITE_POST_FILES = os.getenv("SCRAPER_WRITE_POST_FILES", "false").lower() == "true"
 
 # ========= CONFIG (FILL THESE) =========
 GROUP_ID = "361726451351144"  # group id
