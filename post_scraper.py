@@ -20,7 +20,7 @@ from utils.facebook_extractor import (
 )
 
 GRAPHQL_URL = "https://www.facebook.com/api/graphql/"
-WRITE_DEBUG_FILES = os.getenv("SCRAPER_WRITE_DEBUG_FILES", "true").lower() == "true"
+WRITE_DEBUG_FILES = os.getenv("SCRAPER_WRITE_DEBUG_FILES", "false").lower() == "true"
 
 # ========= CONFIG (FILL THESE) =========
 USER_ID = "100019577483175"   # profile / page id
@@ -764,7 +764,7 @@ def fetch_posts(
         if not story_nodes:
             response_summary = _summarize_timeline_response(cleaned_data)
             print(
-                "Chuan doan response:"
+                "Chuẩn đoán response:"
                 f" blocks={response_summary['total_blocks']},"
                 f" timeline_edges={response_summary['timeline_edges']},"
                 f" story_nodes={response_summary['story_nodes']},"

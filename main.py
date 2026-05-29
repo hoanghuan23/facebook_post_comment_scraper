@@ -33,7 +33,7 @@ def extract_user_id_from_url(url, cookies=None):
         match = re.search(pattern, url)
         if match:
             user_id = match.group(1)
-            print(f"  âœ… Found User ID in URL: {user_id}")
+            print(f"Found User ID in URL: {user_id}")
             return user_id
     
     # If no ID in URL, fetch the page and search in HTML
@@ -59,7 +59,7 @@ def extract_user_id_from_url(url, cookies=None):
             match = re.search(pattern, html)
             if match:
                 user_id = match.group(1)
-                print(f"  âœ… Found User ID: {user_id}")
+                print(f"Found User ID: {user_id}")
                 return user_id
         
         print("User ID not found")
