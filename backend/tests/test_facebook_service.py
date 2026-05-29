@@ -2010,6 +2010,43 @@ def test_refresh_recent_post_metrics_passes_download_media_flag_to_timeline_fetc
         db.close()
 
 
+def test_scrape_timeline_source_applies_resolved_source_id_before_fetch(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="timeline-context", email="timeline-context@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="page",
+            facebook_id="topcomments.vn",
+            facebook_url="https://www.facebook.com/topcomments.vn",
+            source_name="Top Comments",
+        )
+
+        calls = []
+        post_scraper.USER_ID = "100019577483175"
+
+        monkeypatch.setattr(
+            FacebookScraperService,
+            "_resolve_timeline_id",
+            staticmethod(lambda source: "777612993"),
+        )
+
+        def fake_fetch_posts(limit=10, **kwargs):
+            calls.append({"user_id": post_scraper.USER_ID, "referer": post_scraper.BASE_HEADERS["referer"], **kwargs})
+            return []
+
+        monkeypatch.setattr("backend.scraper.facebook_service.timeline_scraper.fetch_posts", fake_fetch_posts)
+
+        FacebookScraperService.scrape_source(db, source.id, limit=5)
+
+        assert calls
+        assert calls[0]["user_id"] == "777612993"
+        assert calls[0]["referer"] == "https://www.facebook.com/profile.php?id=777612993"
+    finally:
+        db.close()
+
+
 def test_group_fetch_posts_emits_empty_no_next_page_diagnostic(monkeypatch):
     events = []
 

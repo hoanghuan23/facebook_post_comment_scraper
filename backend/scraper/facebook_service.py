@@ -658,6 +658,7 @@ class FacebookScraperService:
             db.commit()
             db.refresh(source)
 
+        cls._apply_timeline_context(source)
         base_folder = "page_post" if source.source_type == SourceType.PAGE else "user_post"
         metric_target_set = {str(post_id) for post_id in (metric_target_post_ids or []) if post_id}
         scan_for_metric_targets = bool(metric_target_set)
