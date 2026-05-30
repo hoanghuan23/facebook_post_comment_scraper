@@ -207,6 +207,12 @@ def _create_single_source(
         is_accessible=is_accessible,
         permission_checked_at=datetime.utcnow() if source_data.check_access else None,
     )
+    SourceCRUD.update_scrape_info(
+        db,
+        source.id,
+        next_scrape=datetime.utcnow() + timedelta(seconds=settings.TASK_SCRAPE_NEW_POSTS_INTERVAL),
+    )
+    db.refresh(source)
 
     background_tasks.add_task(_bootstrap_scrape_source_last_24h, source.id)
 

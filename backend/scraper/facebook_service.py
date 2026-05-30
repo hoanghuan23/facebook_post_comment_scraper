@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from backend.database.crud import CommentCRUD, FacebookSessionCRUD, LogCRUD, PostCRUD, PostMetricCRUD, SourceCRUD
 from backend.config import settings
 from backend.database.models import Source, SourceType
-from backend.services.post_metric_schedule_service import apply_metric_snapshot_schedule
+from backend.services.post_metric_schedule_service import BOOTSTRAP_MINUTES, apply_metric_snapshot_schedule
 import comment_scraper
 import group_post_scraper_v2 as group_scraper
 import post_scraper as timeline_scraper
@@ -486,6 +486,12 @@ class FacebookScraperService:
 
     @staticmethod
     def _save_metric_snapshot_if_changed(db: Session, db_post, normalized_post: Dict[str, Any]) -> bool:
+        latest_metric = PostMetricCRUD.get_latest_metric(db, db_post.id)
+        if latest_metric and latest_metric.recorded_at:
+            elapsed = datetime.utcnow() - latest_metric.recorded_at
+            if elapsed < timedelta(minutes=BOOTSTRAP_MINUTES):
+                return False
+
         PostCRUD.update_metrics(
             db=db,
             post_id=db_post.id,
@@ -951,28 +957,22 @@ class FacebookScraperService:
                 else:
                     stop_reason = "source_exhausted"
 
-        can_mark_missing_deleted = (
+        can_handle_missing_targets = (
             scanned_count > 0
             and stop_reason == "source_exhausted"
         )
-        if can_mark_missing_deleted:
-            recent_cutoff = datetime.utcnow() - timedelta(hours=24)
+        if can_handle_missing_targets:
             for missing_post_id in sorted(target_set - matched_targets):
                 db_post = PostCRUD.get_by_source_and_facebook_post_id(
                     db, source.id, missing_post_id
                 )
                 if not db_post:
                     continue
-                if db_post.posted_at < recent_cutoff:
-                    if db_post.is_tracked:
-                        db_post.is_tracked = False
-                        db_post.metric_tier = "expired"
-                        db_post.next_metric_update = None
-                        db.commit()
-                    continue
-                if PostCRUD.delete(db, db_post.id):
-                    deleted_posts += 1
-                    deleted_post_refs.append(str(db_post.facebook_post_id or db_post.id))
+                if db_post.is_tracked:
+                    db_post.is_tracked = False
+                    db_post.metric_tier = "expired"
+                    db_post.next_metric_update = None
+                    db.commit()
 
         pages_scanned = (scanned_count + post_per_page - 1) // post_per_page if scanned_count > 0 else 0
         return {

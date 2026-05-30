@@ -778,6 +778,54 @@ def test_refresh_recent_post_metrics_updates_existing_group_post(monkeypatch):
         db.close()
 
 
+def test_metric_snapshot_too_close_keeps_post_in_bootstrap():
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="close-metric", email="close-metric@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="close-metric-group",
+            facebook_url="https://www.facebook.com/groups/close-metric-group",
+            source_name="Close Metric Group",
+        )
+        post = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="close-metric-post",
+            facebook_url="https://facebook.com/posts/close-metric-post",
+            posted_at=datetime.utcnow(),
+            content="Fresh post",
+        )
+        PostMetricCRUD.create(
+            db,
+            post.id,
+            likes=10,
+            shares=1,
+            comments=2,
+            recorded_at=datetime.utcnow(),
+        )
+
+        saved = FacebookScraperService._save_metric_snapshot_if_changed(
+            db,
+            post,
+            {
+                "likes_count": 10,
+                "shares_count": 1,
+                "comments_count": 2,
+            },
+        )
+        refreshed_post = PostCRUD.get_by_id(db, post.id)
+
+        assert saved is False
+        assert len(PostMetricCRUD.get_by_post(db, post.id)) == 1
+        assert refreshed_post.metric_tier == "bootstrap"
+        assert refreshed_post.cold_check_count == 0
+    finally:
+        db.close()
+
+
 def test_scrape_group_source_saves_only_top_level_comments_when_replies_enabled(monkeypatch):
     db = SessionLocal()
     try:
@@ -2279,7 +2327,7 @@ def test_refresh_target_post_metrics_returns_max_pages_stop_reason(monkeypatch):
         db.close()
 
 
-def test_refresh_target_post_metrics_marks_recent_missing_targets_deleted(monkeypatch):
+def test_refresh_target_post_metrics_expires_recent_missing_targets_without_deleting(monkeypatch):
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="target-deleted", email="target-deleted@example.com", password="secret123")
@@ -2331,10 +2379,12 @@ def test_refresh_target_post_metrics_marks_recent_missing_targets_deleted(monkey
 
         assert result["stop_reason"] == "source_exhausted"
         assert result["matched_target_count"] == 0
-        assert result["deleted"] == 1
-        assert result["deleted_post_refs"] == ["missing-target"]
+        assert result["deleted"] == 0
+        assert result["deleted_post_refs"] == []
         assert refreshed_missing_post.is_tracked is False
-        assert refreshed_missing_post.is_deleted is True
+        assert refreshed_missing_post.is_deleted is False
+        assert refreshed_missing_post.metric_tier == "expired"
+        assert refreshed_missing_post.next_metric_update is None
     finally:
         db.close()
 
@@ -2756,6 +2806,8 @@ def test_create_source_enqueues_background_bootstrap_scrape(monkeypatch):
         assert len(result.created) == 1
         created_source = result.created[0]
         assert created_source.id is not None
+        db_source = SourceCRUD.get_by_id(db, created_source.id)
+        assert db_source.next_scrape is not None
         assert len(added_tasks) == 1
         task_func, task_args, task_kwargs = added_tasks[0]
         assert task_func.__name__ == "_bootstrap_scrape_source_last_24h"
@@ -3620,6 +3672,50 @@ def test_periodic_scrape_new_posts_uses_24h_window_and_latest_post_even_untracke
     assert calls[0][0] == source_id
     assert calls[0][1]["last_24_hours_only"] is True
     assert calls[0][1]["min_posted_at"] == latest_posted_at
+
+
+def test_periodic_scrape_new_posts_skips_source_with_running_scrape_job(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="periodic-running-user", email="periodic-running@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="periodic-running-group",
+            facebook_url="https://www.facebook.com/groups/periodic-running-group",
+            source_name="Periodic Running Group",
+        )
+        PipelineJobCRUD.create_job(
+            db,
+            job_type="scrape_24h",
+            source_id=source.id,
+            status="running",
+        )
+    finally:
+        db.close()
+
+    calls = []
+
+    def fake_scrape_source(session, passed_source_id, **kwargs):
+        calls.append((passed_source_id, kwargs))
+        return SimpleNamespace(
+            total_fetched=0,
+            created_posts=0,
+            updated_posts=0,
+            skipped_posts=0,
+            filtered_by_cutoff=0,
+        )
+
+    monkeypatch.setattr(
+        "backend.scheduler.periodic_tasks.FacebookScraperService.scrape_source",
+        fake_scrape_source,
+    )
+
+    import asyncio
+    asyncio.run(periodic_scrape_new_posts())
+
+    assert calls == []
 
 
 def test_periodic_scrape_new_posts_includes_due_metric_targets_for_same_source(monkeypatch):

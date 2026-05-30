@@ -10,7 +10,7 @@ from sqlalchemy import func
 from backend.config import settings
 from backend.database.crud import AnalyticsCRUD, FacebookSessionCRUD, LogCRUD, PipelineJobCRUD, PostCRUD, SourceCRUD
 from backend.database.db import SessionLocal
-from backend.database.models import AnalyticsCache, Comment, Post, Source, SourceType
+from backend.database.models import AnalyticsCache, Comment, PipelineJob, Post, Source, SourceType
 from backend.scraper.facebook_service import FacebookScraperService
 from backend.services.post_metric_schedule_service import defer_metric_updates, handle_max_page_misses
 from backend.services.schedule_service import apply_analytics_schedule, schedule_next_scrape
@@ -90,6 +90,31 @@ async def periodic_scrape_new_posts():
             return
 
         source_ids = [source.id for source in due_sources]
+        running_scrape_source_ids = {
+            source_id
+            for (source_id,) in db.query(PipelineJob.source_id)
+            .filter(
+                PipelineJob.source_id.in_(source_ids),
+                PipelineJob.status == "running",
+                PipelineJob.job_type.in_(["scrape_24h", "scraper_job"]),
+            )
+            .all()
+            if source_id is not None
+        }
+        if running_scrape_source_ids:
+            logger.info(
+                "Bỏ qua %s source đang có scrape job chạy: source_ids=%s",
+                len(running_scrape_source_ids),
+                sorted(running_scrape_source_ids),
+            )
+            due_sources = [source for source in due_sources if source.id not in running_scrape_source_ids]
+            source_ids = [source.id for source in due_sources]
+            total_due_sources = len(due_sources)
+            if not due_sources:
+                logger.info("Kết thúc periodic_scrape_new_posts: all due sources already running")
+                _finish_task_log(db, task_log, 0, started_at_ts)
+                return
+
         user_ids = [source.user_id for source in due_sources]
         latest_posted_at_map = PostCRUD.get_latest_posted_at_bulk(db, source_ids, tracked_only=False)
         active_sessions_map = FacebookSessionCRUD.get_active_sessions_bulk(db, user_ids)
