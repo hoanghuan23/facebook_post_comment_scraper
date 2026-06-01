@@ -209,7 +209,7 @@ def handle_max_page_misses(
     now = datetime.utcnow()
     for post in posts:
         post.metric_scan_miss_count = (post.metric_scan_miss_count or 0) + 1
-        if post.metric_scan_miss_count >= 2:
+        if post.metric_scan_miss_count >= 3:
             expire_post(post)
         else:
             post.metric_tier = COLD

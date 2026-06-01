@@ -2327,7 +2327,7 @@ def test_refresh_target_post_metrics_returns_max_pages_stop_reason(monkeypatch):
         db.close()
 
 
-def test_refresh_target_post_metrics_expires_recent_missing_targets_without_deleting(monkeypatch):
+def test_refresh_target_post_metrics_records_recent_missing_targets_without_deleting(monkeypatch):
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="target-deleted", email="target-deleted@example.com", password="secret123")
@@ -2381,15 +2381,16 @@ def test_refresh_target_post_metrics_expires_recent_missing_targets_without_dele
         assert result["matched_target_count"] == 0
         assert result["deleted"] == 0
         assert result["deleted_post_refs"] == []
-        assert refreshed_missing_post.is_tracked is False
+        assert refreshed_missing_post.is_tracked is True
         assert refreshed_missing_post.is_deleted is False
-        assert refreshed_missing_post.metric_tier == "expired"
-        assert refreshed_missing_post.next_metric_update is None
+        assert refreshed_missing_post.metric_tier == "cold"
+        assert refreshed_missing_post.metric_scan_miss_count == 1
+        assert refreshed_missing_post.next_metric_update is not None
     finally:
         db.close()
 
 
-def test_refresh_target_post_metrics_untracks_old_missing_targets_without_deleting(monkeypatch):
+def test_refresh_target_post_metrics_records_old_missing_targets_without_deleting(monkeypatch):
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="target-old-missing", email="target-old-missing@example.com", password="secret123")
@@ -2438,10 +2439,11 @@ def test_refresh_target_post_metrics_untracks_old_missing_targets_without_deleti
 
         assert result["deleted"] == 0
         assert result["deleted_post_refs"] == []
-        assert refreshed_old_post.is_tracked is False
+        assert refreshed_old_post.is_tracked is True
         assert refreshed_old_post.is_deleted is False
-        assert refreshed_old_post.metric_tier == "expired"
-        assert refreshed_old_post.next_metric_update is None
+        assert refreshed_old_post.metric_tier == "cold"
+        assert refreshed_old_post.metric_scan_miss_count == 1
+        assert refreshed_old_post.next_metric_update is not None
     finally:
         db.close()
 

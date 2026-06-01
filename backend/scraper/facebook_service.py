@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from backend.database.crud import CommentCRUD, FacebookSessionCRUD, LogCRUD, PostCRUD, PostMetricCRUD, SourceCRUD
 from backend.config import settings
 from backend.database.models import Source, SourceType
-from backend.services.post_metric_schedule_service import apply_metric_snapshot_schedule
+from backend.services.post_metric_schedule_service import apply_metric_snapshot_schedule, handle_max_page_misses
 import comment_scraper
 import group_post_scraper_v2 as group_scraper
 import post_scraper as timeline_scraper
@@ -956,17 +956,11 @@ class FacebookScraperService:
             and stop_reason == "source_exhausted"
         )
         if can_handle_missing_targets:
-            for missing_post_id in sorted(target_set - matched_targets):
-                db_post = PostCRUD.get_by_source_and_facebook_post_id(
-                    db, source.id, missing_post_id
-                )
-                if not db_post:
-                    continue
-                if db_post.is_tracked:
-                    db_post.is_tracked = False
-                    db_post.metric_tier = "expired"
-                    db_post.next_metric_update = None
-                    db.commit()
+            handle_max_page_misses(
+                db,
+                source.id,
+                sorted(target_set - matched_targets),
+            )
 
         pages_scanned = (scanned_count + post_per_page - 1) // post_per_page if scanned_count > 0 else 0
         return {
