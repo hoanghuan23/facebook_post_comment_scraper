@@ -778,7 +778,7 @@ def test_refresh_recent_post_metrics_updates_existing_group_post(monkeypatch):
         db.close()
 
 
-def test_metric_snapshot_too_close_keeps_post_in_bootstrap():
+def test_metric_snapshot_too_close_still_saves_and_reschedules():
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="close-metric", email="close-metric@example.com", password="secret123")
@@ -818,10 +818,10 @@ def test_metric_snapshot_too_close_keeps_post_in_bootstrap():
         )
         refreshed_post = PostCRUD.get_by_id(db, post.id)
 
-        assert saved is False
-        assert len(PostMetricCRUD.get_by_post(db, post.id)) == 1
-        assert refreshed_post.metric_tier == "bootstrap"
-        assert refreshed_post.cold_check_count == 0
+        assert saved is True
+        assert len(PostMetricCRUD.get_by_post(db, post.id)) == 2
+        assert refreshed_post.metric_tier == "cold"
+        assert refreshed_post.cold_check_count == 1
     finally:
         db.close()
 

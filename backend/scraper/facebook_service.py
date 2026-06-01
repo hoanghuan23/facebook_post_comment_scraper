@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from backend.database.crud import CommentCRUD, FacebookSessionCRUD, LogCRUD, PostCRUD, PostMetricCRUD, SourceCRUD
 from backend.config import settings
 from backend.database.models import Source, SourceType
-from backend.services.post_metric_schedule_service import BOOTSTRAP_MINUTES, apply_metric_snapshot_schedule
+from backend.services.post_metric_schedule_service import apply_metric_snapshot_schedule
 import comment_scraper
 import group_post_scraper_v2 as group_scraper
 import post_scraper as timeline_scraper
@@ -486,12 +486,6 @@ class FacebookScraperService:
 
     @staticmethod
     def _save_metric_snapshot_if_changed(db: Session, db_post, normalized_post: Dict[str, Any]) -> bool:
-        latest_metric = PostMetricCRUD.get_latest_metric(db, db_post.id)
-        if latest_metric and latest_metric.recorded_at:
-            elapsed = datetime.utcnow() - latest_metric.recorded_at
-            if elapsed < timedelta(minutes=BOOTSTRAP_MINUTES):
-                return False
-
         PostCRUD.update_metrics(
             db=db,
             post_id=db_post.id,
