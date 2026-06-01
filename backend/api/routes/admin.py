@@ -275,7 +275,7 @@ async def run_task_manually(
             if task_name == "update_metrics":
                 pipeline_job = PipelineJobCRUD.create_job(
                     db=db,
-                    job_type="post_metric",
+                    job_type="update_metric",
                     source_id=source_id,
                     status="running",
                     started_at=datetime.utcnow(),

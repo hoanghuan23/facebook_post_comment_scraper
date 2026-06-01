@@ -4,7 +4,10 @@ from sqlalchemy import text
 
 from backend.database.crud import PostCRUD, PostMetricCRUD, SourceCRUD, UserCRUD
 from backend.database.db import SessionLocal, engine
-from backend.database.migrations import migrate_post_metric_scheduling_columns
+from backend.database.migrations import (
+    migrate_pipeline_job_type_update_metric,
+    migrate_post_metric_scheduling_columns,
+)
 from backend.database.models import Base, Post
 from backend.database.schemas import PostResponse
 from backend.services.post_metric_schedule_service import (
@@ -266,3 +269,74 @@ def test_metric_scheduling_migration_backfills_legacy_posts_idempotently():
         assert old.next_metric_update is None
     finally:
         db.close()
+
+
+def test_migrate_pipeline_job_type_update_metric_rebuilds_sqlite_constraint():
+    Base.metadata.drop_all(bind=engine)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE pipeline_jobs (
+                    id INTEGER PRIMARY KEY,
+                    job_type VARCHAR(20) NOT NULL DEFAULT 'scraper_job'
+                        CHECK (job_type IN ('scrape_24h', 'scraper_job', 'post_metric', 'analytics')),
+                    source_id INTEGER,
+                    session_id INTEGER,
+                    status VARCHAR(10) NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending', 'running', 'done', 'failed')),
+                    posts_found INTEGER NOT NULL DEFAULT 0,
+                    posts_new INTEGER NOT NULL DEFAULT 0,
+                    items_total INTEGER NOT NULL DEFAULT 0,
+                    items_updated INTEGER NOT NULL DEFAULT 0,
+                    items_failed INTEGER NOT NULL DEFAULT 0,
+                    error_message TEXT,
+                    started_at DATETIME,
+                    finished_at DATETIME
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO pipeline_jobs (
+                    id, job_type, status, posts_found, posts_new,
+                    items_total, items_updated, items_failed
+                ) VALUES
+                    (1, 'post_metric', 'done', 3, 2, 3, 2, 0),
+                    (2, 'scraper_job', 'running', 0, 0, 0, 0, 0)
+                """
+            )
+        )
+
+    migrate_pipeline_job_type_update_metric()
+    migrate_pipeline_job_type_update_metric()
+
+    with engine.begin() as conn:
+        job_types = conn.execute(text("SELECT id, job_type FROM pipeline_jobs ORDER BY id")).all()
+        create_sql = conn.execute(
+            text(
+                """
+                SELECT sql
+                FROM sqlite_master
+                WHERE type = 'table'
+                  AND name = 'pipeline_jobs'
+                """
+            )
+        ).scalar()
+        conn.execute(
+            text(
+                """
+                INSERT INTO pipeline_jobs (
+                    id, job_type, status, posts_found, posts_new,
+                    items_total, items_updated, items_failed
+                ) VALUES
+                    (3, 'update_metric', 'pending', 0, 0, 0, 0, 0)
+                """
+            )
+        )
+
+    assert job_types == [(1, "update_metric"), (2, "scraper_job")]
+    assert "update_metric" in create_sql
+    assert "post_metric" not in create_sql

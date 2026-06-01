@@ -1539,7 +1539,7 @@ def test_update_recent_post_metrics_records_active_session_id(monkeypatch):
     try:
         job = (
             verify_db.query(ScrapeJob)
-            .filter(ScrapeJob.job_type == "post_metric", ScrapeJob.source_id == source_id)
+            .filter(ScrapeJob.job_type == "update_metric", ScrapeJob.source_id == source_id)
             .order_by(ScrapeJob.id.desc())
             .first()
         )

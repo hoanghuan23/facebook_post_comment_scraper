@@ -358,7 +358,7 @@ async def update_recent_post_metrics():
                 active_session = FacebookSessionCRUD.get_active_by_user_id(job_db, source.user_id)
                 pipeline_job = PipelineJobCRUD.create_job(
                     db=job_db,
-                    job_type="post_metric",
+                    job_type="update_metric",
                     source_id=source.id,
                     session_id=active_session.id if active_session else None,
                     status="running",

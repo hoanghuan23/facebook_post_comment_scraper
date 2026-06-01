@@ -56,9 +56,13 @@ def init_db():
     """Initialize database tables"""
     # Create all tables
     Base.metadata.create_all(bind=engine)
-    from backend.database.migrations import migrate_post_metric_scheduling_columns
+    from backend.database.migrations import (
+        migrate_pipeline_job_type_update_metric,
+        migrate_post_metric_scheduling_columns,
+    )
 
     migrate_post_metric_scheduling_columns()
+    migrate_pipeline_job_type_update_metric()
     print("Database tables created/verified")
 
 

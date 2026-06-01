@@ -345,7 +345,7 @@ class PipelineJob(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "job_type IN ('scrape_24h', 'scraper_job', 'post_metric', 'analytics')",
+            "job_type IN ('scrape_24h', 'scraper_job', 'update_metric', 'analytics')",
             name="ck_pipeline_jobs_type",
         ),
         CheckConstraint(

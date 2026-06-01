@@ -77,6 +77,132 @@ def migrate_post_metric_scheduling_columns() -> None:
             )
 
 
+def migrate_pipeline_job_type_update_metric() -> None:
+    """Rename the metric refresh pipeline job type from post_metric to update_metric."""
+    inspector = inspect(engine)
+    if not inspector.has_table("pipeline_jobs"):
+        return
+
+    if engine.dialect.name == "sqlite":
+        with engine.begin() as conn:
+            create_sql = (
+                conn.execute(
+                    text(
+                        """
+                        SELECT sql
+                        FROM sqlite_master
+                        WHERE type = 'table'
+                          AND name = 'pipeline_jobs'
+                        """
+                    )
+                ).scalar()
+                or ""
+            )
+            needs_rebuild = "'post_metric'" in create_sql or '"post_metric"' in create_sql
+            if needs_rebuild:
+                conn.execute(text("DROP TABLE IF EXISTS pipeline_jobs_new"))
+                conn.execute(
+                    text(
+                        """
+                        CREATE TABLE pipeline_jobs_new (
+                            id INTEGER PRIMARY KEY,
+                            job_type VARCHAR(20) NOT NULL DEFAULT 'scraper_job'
+                                CHECK (job_type IN ('scrape_24h', 'scraper_job', 'update_metric', 'analytics')),
+                            source_id INTEGER REFERENCES sources(id) ON DELETE SET NULL,
+                            session_id INTEGER REFERENCES facebook_sessions(id) ON DELETE SET NULL,
+                            status VARCHAR(10) NOT NULL DEFAULT 'pending'
+                                CHECK (status IN ('pending', 'running', 'done', 'failed')),
+                            posts_found INTEGER NOT NULL DEFAULT 0,
+                            posts_new INTEGER NOT NULL DEFAULT 0,
+                            items_total INTEGER NOT NULL DEFAULT 0,
+                            items_updated INTEGER NOT NULL DEFAULT 0,
+                            items_failed INTEGER NOT NULL DEFAULT 0,
+                            error_message TEXT,
+                            started_at DATETIME,
+                            finished_at DATETIME
+                        )
+                        """
+                    )
+                )
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO pipeline_jobs_new (
+                            id, job_type, source_id, session_id, status,
+                            posts_found, posts_new, items_total, items_updated, items_failed,
+                            error_message, started_at, finished_at
+                        )
+                        SELECT
+                            id,
+                            CASE WHEN job_type = 'post_metric' THEN 'update_metric' ELSE job_type END,
+                            source_id, session_id, status,
+                            posts_found, posts_new, items_total, items_updated, items_failed,
+                            error_message, started_at, finished_at
+                        FROM pipeline_jobs
+                        """
+                    )
+                )
+                conn.execute(text("DROP TABLE pipeline_jobs"))
+                conn.execute(text("ALTER TABLE pipeline_jobs_new RENAME TO pipeline_jobs"))
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_source_time "
+                        "ON pipeline_jobs (source_id, started_at)"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_type_status "
+                        "ON pipeline_jobs (job_type, status, started_at)"
+                    )
+                )
+            else:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE pipeline_jobs
+                        SET job_type = 'update_metric'
+                        WHERE job_type = 'post_metric'
+                        """
+                    )
+                )
+        return
+
+    if engine.dialect.name == "postgresql":
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE pipeline_jobs DROP CONSTRAINT IF EXISTS ck_pipeline_jobs_type"))
+            conn.execute(
+                text(
+                    """
+                    UPDATE pipeline_jobs
+                    SET job_type = 'update_metric'
+                    WHERE job_type = 'post_metric'
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    ALTER TABLE pipeline_jobs
+                    ADD CONSTRAINT ck_pipeline_jobs_type
+                    CHECK (job_type IN ('scrape_24h', 'scraper_job', 'update_metric', 'analytics'))
+                    """
+                )
+            )
+        return
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE pipeline_jobs
+                SET job_type = 'update_metric'
+                WHERE job_type = 'post_metric'
+                """
+            )
+        )
+
+
 def _reset_sqlite_sequence(conn, table_name: str) -> None:
     try:
         conn.execute(text("DELETE FROM sqlite_sequence WHERE name = :table_name"), {"table_name": table_name})
@@ -162,5 +288,6 @@ def migrate_legacy_scraper_tables(drop_legacy_tables: bool = False) -> None:
 
 if __name__ == "__main__":
     migrate_post_metric_scheduling_columns()
+    migrate_pipeline_job_type_update_metric()
     migrate_legacy_scraper_tables(drop_legacy_tables=False)
     print("Legacy scraper table migration completed.")

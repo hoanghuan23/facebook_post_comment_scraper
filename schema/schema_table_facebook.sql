@@ -171,12 +171,12 @@ CREATE TABLE comments (
 CREATE INDEX idx_comment_facebook_id ON comments (facebook_comment_id);
 CREATE INDEX idx_comment_post ON comments (post_id);
 
--- bảng pipeline_jobs theo dõi toàn bộ pipeline (scrape_24h, scraper_job, post_metric, analytics)
+-- bảng pipeline_jobs theo dõi toàn bộ pipeline (scrape_24h, scraper_job, update_metric, analytics)
 
 CREATE TABLE pipeline_jobs (
     id              INTEGER PRIMARY KEY,
     job_type        VARCHAR(20) NOT NULL DEFAULT 'scraper_job'
-                    CHECK (job_type IN ('scrape_24h', 'scraper_job', 'post_metric', 'analytics')),
+                    CHECK (job_type IN ('scrape_24h', 'scraper_job', 'update_metric', 'analytics')),
 
     source_id       INTEGER REFERENCES sources(id) ON DELETE SET NULL,
     session_id      INTEGER REFERENCES facebook_sessions(id) ON DELETE SET NULL,
