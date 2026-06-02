@@ -180,15 +180,18 @@ class PostMetric(Base):
 
     id = Column(Integer, primary_key=True)
     post_id = Column(Integer, ForeignKey("posts.id"), nullable=False)
+    job_id = Column(Integer, ForeignKey("pipeline_jobs.id", ondelete="SET NULL"), nullable=True)
     likes_count = Column(Integer, default=0)
     shares_count = Column(Integer, default=0)
     comments_count = Column(Integer, default=0)
     recorded_at = Column(DateTime, default=datetime.utcnow, index=True)
 
     post = relationship("Post", back_populates="metrics_history")
+    job = relationship("PipelineJob", back_populates="metric_snapshots")
 
     __table_args__ = (
         Index("idx_metric_post_date", "post_id", "recorded_at"),
+        Index("idx_post_metrics_job_time", "job_id", "recorded_at"),
     )
 
     @property
@@ -342,6 +345,7 @@ class PipelineJob(Base):
     source = relationship("Source")
     session = relationship("FacebookSession")
     logs = relationship("PipelineLog", back_populates="job")
+    metric_snapshots = relationship("PostMetric", back_populates="job")
 
     __table_args__ = (
         CheckConstraint(

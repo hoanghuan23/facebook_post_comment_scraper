@@ -786,10 +786,12 @@ class PostMetricCRUD:
         shares: int,
         comments: int,
         recorded_at: datetime = None,
+        job_id: Optional[int] = None,
     ) -> models.PostMetric:
         """Create a metric snapshot"""
         db_metric = models.PostMetric(
             post_id=post_id,
+            job_id=job_id,
             likes_count=likes,
             shares_count=shares,
             comments_count=comments,

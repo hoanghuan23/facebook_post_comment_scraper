@@ -485,7 +485,12 @@ class FacebookScraperService:
         return saved_count
 
     @staticmethod
-    def _save_metric_snapshot_if_changed(db: Session, db_post, normalized_post: Dict[str, Any]) -> bool:
+    def _save_metric_snapshot_if_changed(
+        db: Session,
+        db_post,
+        normalized_post: Dict[str, Any],
+        job_id: Optional[int] = None,
+    ) -> bool:
         PostCRUD.update_metrics(
             db=db,
             post_id=db_post.id,
@@ -496,6 +501,7 @@ class FacebookScraperService:
         PostMetricCRUD.create(
             db=db,
             post_id=db_post.id,
+            job_id=job_id,
             likes=normalized_post["likes_count"],
             shares=normalized_post["shares_count"],
             comments=normalized_post["comments_count"],
@@ -594,6 +600,7 @@ class FacebookScraperService:
                 PostMetricCRUD.create(
                     db=db,
                     post_id=db_post.id,
+                    job_id=job_id,
                     likes=normalized_post["likes_count"],
                     shares=normalized_post["shares_count"],
                     comments=normalized_post["comments_count"],
@@ -602,7 +609,7 @@ class FacebookScraperService:
                 cls._sync_post_comments(db, source, db_post)
             else:
                 updated_posts += 1
-                cls._save_metric_snapshot_if_changed(db, db_post, normalized_post)
+                cls._save_metric_snapshot_if_changed(db, db_post, normalized_post, job_id=job_id)
                 if is_metric_target:
                     matched_metric_target_ids.append(str(facebook_post_id))
                 if source.include_comments:
@@ -650,6 +657,7 @@ class FacebookScraperService:
         min_posted_at: Optional[datetime] = None,
         consecutive_old_limit: Optional[int] = None,
         metric_target_post_ids: Optional[List[str]] = None,
+        job_id: Optional[int] = None,
     ) -> FacebookScrapeResult:
         cls._apply_source_auth_context(db, source)
         resolved_timeline_id = cls._resolve_timeline_id(source)
@@ -718,6 +726,7 @@ class FacebookScraperService:
                 PostMetricCRUD.create(
                     db=db,
                     post_id=db_post.id,
+                    job_id=job_id,
                     likes=normalized_post["likes_count"],
                     shares=normalized_post["shares_count"],
                     comments=normalized_post["comments_count"],
@@ -726,7 +735,7 @@ class FacebookScraperService:
                 cls._sync_post_comments(db, source, db_post)
             else:
                 updated_posts += 1
-                cls._save_metric_snapshot_if_changed(db, db_post, normalized_post)
+                cls._save_metric_snapshot_if_changed(db, db_post, normalized_post, job_id=job_id)
                 if is_metric_target:
                     matched_metric_target_ids.append(str(facebook_post_id))
                 if source.include_comments:
@@ -821,7 +830,7 @@ class FacebookScraperService:
                 continue
 
             normalized_post = normalize_post(raw_post)
-            if cls._save_metric_snapshot_if_changed(db, db_post, normalized_post):
+            if cls._save_metric_snapshot_if_changed(db, db_post, normalized_post, job_id=job_id):
                 updated_posts += 1
                 updated_post_refs.append(str(db_post.facebook_post_id or db_post.id))
             if source.include_comments:
@@ -931,7 +940,7 @@ class FacebookScraperService:
 
             matched_targets.add(facebook_post_id)
             normalized_post = normalize_post(raw_post)
-            if cls._save_metric_snapshot_if_changed(db, db_post, normalized_post):
+            if cls._save_metric_snapshot_if_changed(db, db_post, normalized_post, job_id=job_id):
                 updated_posts += 1
                 updated_post_refs.append(str(db_post.facebook_post_id or db_post.id))
             if source.include_comments:
@@ -1011,6 +1020,7 @@ class FacebookScraperService:
                 last_24_hours_only=last_24_hours_only,
                 min_posted_at=min_posted_at,
                 consecutive_old_limit=consecutive_old_limit,
+                job_id=job_id,
                 metric_target_post_ids=metric_target_post_ids,
             )
         raise NotImplementedError(f"Facebook source type '{source.source_type.value}' is not implemented yet")

@@ -138,15 +138,18 @@ CREATE INDEX idx_analytics_source_date ON analytics_cache (source_id, date);
 CREATE TABLE post_metrics (
         id INTEGER NOT NULL, 
         post_id INTEGER NOT NULL, 
+        job_id INTEGER,
         likes_count INTEGER, 
         shares_count INTEGER, 
         comments_count INTEGER, 
         recorded_at DATETIME, 
         PRIMARY KEY (id), 
-        FOREIGN KEY(post_id) REFERENCES posts (id)
+        FOREIGN KEY(post_id) REFERENCES posts (id),
+        FOREIGN KEY(job_id) REFERENCES pipeline_jobs (id) ON DELETE SET NULL
 );
 CREATE INDEX ix_post_metrics_recorded_at ON post_metrics (recorded_at);
 CREATE INDEX idx_metric_post_date ON post_metrics (post_id, recorded_at);
+CREATE INDEX idx_post_metrics_job_time ON post_metrics (job_id, recorded_at);
 
 -- bảng comments lưu trữ tất cả bình luận và phản hồi trên các bài đăng của Facebook, bao gồm cả thông tin về người bình luận, nội dung bình luận, số lượt thích và số lượng phản hồi để phục vụ cho việc phân tích tương tác chi tiết
 CREATE TABLE comments (

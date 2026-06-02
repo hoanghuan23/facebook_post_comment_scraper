@@ -103,11 +103,15 @@ def _ensure_minimal_schema(conn):
         CREATE TABLE IF NOT EXISTS post_metrics (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             post_id INTEGER NOT NULL REFERENCES posts(id),
+            job_id INTEGER,
             likes_count INTEGER DEFAULT 0,
             shares_count INTEGER DEFAULT 0,
             comments_count INTEGER DEFAULT 0,
             recorded_at DATETIME
         );
+
+        CREATE INDEX IF NOT EXISTS idx_post_metrics_job_time
+            ON post_metrics (job_id, recorded_at);
 
         CREATE TABLE IF NOT EXISTS comments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

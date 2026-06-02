@@ -203,6 +203,31 @@ def migrate_pipeline_job_type_update_metric() -> None:
         )
 
 
+def migrate_post_metric_job_id_column() -> None:
+    """Link metric snapshots to the pipeline job that created them."""
+    inspector = inspect(engine)
+    if not inspector.has_table("post_metrics"):
+        return
+
+    has_pipeline_jobs = inspector.has_table("pipeline_jobs")
+    existing_columns = {column["name"] for column in inspector.get_columns("post_metrics")}
+    with engine.begin() as conn:
+        if "job_id" not in existing_columns:
+            definition = (
+                "INTEGER REFERENCES pipeline_jobs(id) ON DELETE SET NULL"
+                if has_pipeline_jobs
+                else "INTEGER"
+            )
+            conn.execute(text(f"ALTER TABLE post_metrics ADD COLUMN job_id {definition}"))
+
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_post_metrics_job_time "
+                "ON post_metrics (job_id, recorded_at)"
+            )
+        )
+
+
 def _reset_sqlite_sequence(conn, table_name: str) -> None:
     try:
         conn.execute(text("DELETE FROM sqlite_sequence WHERE name = :table_name"), {"table_name": table_name})
@@ -289,5 +314,6 @@ def migrate_legacy_scraper_tables(drop_legacy_tables: bool = False) -> None:
 if __name__ == "__main__":
     migrate_post_metric_scheduling_columns()
     migrate_pipeline_job_type_update_metric()
+    migrate_post_metric_job_id_column()
     migrate_legacy_scraper_tables(drop_legacy_tables=False)
     print("Legacy scraper table migration completed.")

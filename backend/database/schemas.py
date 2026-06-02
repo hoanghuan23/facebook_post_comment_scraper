@@ -201,6 +201,7 @@ class PostCreate(BaseModel):
 
 class PostMetricSnapshot(BaseModel):
     """Single metric snapshot"""
+    job_id: Optional[int] = None
     likes_count: int
     shares_count: int
     comments_count: int

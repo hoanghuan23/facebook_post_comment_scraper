@@ -6,6 +6,7 @@ from backend.database.crud import PostCRUD, PostMetricCRUD, SourceCRUD, UserCRUD
 from backend.database.db import SessionLocal, engine
 from backend.database.migrations import (
     migrate_pipeline_job_type_update_metric,
+    migrate_post_metric_job_id_column,
     migrate_post_metric_scheduling_columns,
 )
 from backend.database.models import Base, Post
@@ -178,7 +179,7 @@ def test_post_api_schema_exposes_metric_schedule_fields():
         db.close()
 
 
- def test_three_max_page_misses_stop_tracking_post():
+def test_three_max_page_misses_stop_tracking_post():
     db = SessionLocal()
     try:
         now = datetime.utcnow()
@@ -346,3 +347,64 @@ def test_migrate_pipeline_job_type_update_metric_rebuilds_sqlite_constraint():
     assert job_types == [(1, "update_metric"), (2, "scraper_job")]
     assert "update_metric" in create_sql
     assert "post_metric" not in create_sql
+
+
+def test_migrate_post_metric_job_id_column_adds_nullable_job_link_idempotently():
+    Base.metadata.drop_all(bind=engine)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE pipeline_jobs (
+                    id INTEGER PRIMARY KEY,
+                    job_type VARCHAR(20) NOT NULL DEFAULT 'scraper_job',
+                    status VARCHAR(10) NOT NULL DEFAULT 'pending'
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE post_metrics (
+                    id INTEGER PRIMARY KEY,
+                    post_id INTEGER NOT NULL,
+                    likes_count INTEGER,
+                    shares_count INTEGER,
+                    comments_count INTEGER,
+                    recorded_at DATETIME
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO post_metrics (
+                    id, post_id, likes_count, shares_count, comments_count, recorded_at
+                ) VALUES (
+                    1, 10, 1, 2, 3, CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+
+    migrate_post_metric_job_id_column()
+    migrate_post_metric_job_id_column()
+
+    with engine.begin() as conn:
+        columns = {
+            row[1]
+            for row in conn.execute(text("PRAGMA table_info(post_metrics)")).all()
+        }
+        indexes = {
+            row[1]
+            for row in conn.execute(text("PRAGMA index_list(post_metrics)")).all()
+        }
+        legacy_job_id = conn.execute(
+            text("SELECT job_id FROM post_metrics WHERE id = 1")
+        ).scalar()
+
+    assert "job_id" in columns
+    assert "idx_post_metrics_job_time" in indexes
+    assert legacy_job_id is None

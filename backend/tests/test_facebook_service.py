@@ -6,7 +6,7 @@ from fastapi import BackgroundTasks
 from sqlalchemy import text
 from backend.database.crud import CommentCRUD, FacebookSessionCRUD, PipelineJobCRUD, PostCRUD, PostMetricCRUD, SourceCRUD, UserCRUD
 from backend.database.db import SessionLocal, engine
-from backend.database.models import Base, ScrapeJob, ScraperLog
+from backend.database.models import Base, PostMetric, ScrapeJob, ScraperLog
 from backend.database.schemas import SourceCreate, SourceUpdate
 from backend.api.routes.sources import (
     _bootstrap_scrape_source_last_24h,
@@ -765,7 +765,18 @@ def test_refresh_recent_post_metrics_updates_existing_group_post(monkeypatch):
             ],
         )
 
-        result = FacebookScraperService.refresh_recent_post_metrics(db, source, limit=5)
+        pipeline_job = PipelineJobCRUD.create_job(
+            db=db,
+            job_type="update_metric",
+            source_id=source.id,
+            status="running",
+        )
+        result = FacebookScraperService.refresh_recent_post_metrics(
+            db,
+            source,
+            limit=5,
+            job_id=pipeline_job.id,
+        )
         refreshed_post = PostCRUD.get_by_id(db, post.id)
 
         assert result["updated"] == 1
@@ -773,6 +784,7 @@ def test_refresh_recent_post_metrics_updates_existing_group_post(monkeypatch):
         assert refreshed_post.current_shares == 4
         assert refreshed_post.current_comments == 9
         assert len(refreshed_post.metrics_history) == 1
+        assert refreshed_post.metrics_history[0].job_id == pipeline_job.id
         assert refreshed_post.last_metric_update is not None
     finally:
         db.close()
@@ -2215,6 +2227,12 @@ def test_refresh_target_post_metrics_only_updates_target_posts(monkeypatch):
             ],
         )
 
+        pipeline_job = PipelineJobCRUD.create_job(
+            db=db,
+            job_type="update_metric",
+            source_id=source.id,
+            status="running",
+        )
         result = FacebookScraperService.refresh_target_post_metrics(
             db,
             source,
@@ -2223,13 +2241,25 @@ def test_refresh_target_post_metrics_only_updates_target_posts(monkeypatch):
             stop_when_all_found=True,
             last_24_hours_only=True,
             download_media=False,
+            job_id=pipeline_job.id,
+        )
+        completed_job = PipelineJobCRUD.mark_done(
+            db=db,
+            job_id=pipeline_job.id,
+            posts_found=result["fetched"],
+            posts_new=result["updated"],
+            items_total=result["fetched"],
+            items_updated=result["updated"],
         )
         refreshed_target = PostCRUD.get_by_id(db, target_post.id)
+        snapshot_count = db.query(PostMetric).filter(PostMetric.job_id == pipeline_job.id).count()
 
         assert result["updated"] == 1
         assert result["matched_target_count"] == 1
         assert result["target_posts_count"] == 1
         assert refreshed_target.current_likes == 9
+        assert refreshed_target.metrics_history[-1].job_id == pipeline_job.id
+        assert snapshot_count == completed_job.items_updated
     finally:
         db.close()
 
