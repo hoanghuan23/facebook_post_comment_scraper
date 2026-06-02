@@ -178,7 +178,7 @@ def test_post_api_schema_exposes_metric_schedule_fields():
         db.close()
 
 
-def test_two_max_page_misses_stop_tracking_post():
+ def test_three_max_page_misses_stop_tracking_post():
     db = SessionLocal()
     try:
         now = datetime.utcnow()
@@ -192,9 +192,15 @@ def test_two_max_page_misses_stop_tracking_post():
 
         handle_max_page_misses(db, post.source_id, [post.facebook_post_id])
         twice = PostCRUD.get_by_id(db, post.id)
-        assert twice.metric_tier == EXPIRED
+        assert twice.metric_tier == COLD
         assert twice.metric_scan_miss_count == 2
-        assert twice.is_tracked is False
+        assert twice.is_tracked is True
+
+        handle_max_page_misses(db, post.source_id, [post.facebook_post_id])
+        third = PostCRUD.get_by_id(db, post.id)
+        assert third.metric_tier == EXPIRED
+        assert third.metric_scan_miss_count == 3
+        assert third.is_tracked is False
     finally:
         db.close()
 
