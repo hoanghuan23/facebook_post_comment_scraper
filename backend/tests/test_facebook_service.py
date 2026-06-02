@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 import json
+import sqlite3
 
 from fastapi import BackgroundTasks
 from sqlalchemy import text
@@ -30,6 +31,7 @@ from backend.services.schedule_service import calculate_tier
 import post_scraper
 import group_post_scraper_v2
 import comment_scraper
+import db_persistence
 
 
 def setup_function():
@@ -326,7 +328,7 @@ def test_scrape_group_source_creates_posts_and_metrics(monkeypatch):
                     "reaction_count": 5,
                     "share_count": 1,
                     "comment_count": 3,
-                    "group_name": "Tracked Group",
+                    "group_name": "Tracked Group From Feed",
                     "photos": [],
                     "videos": [],
                 }
@@ -346,8 +348,9 @@ def test_scrape_group_source_creates_posts_and_metrics(monkeypatch):
         assert len(created_post.metrics_history) == 1
 
         refreshed_source = SourceCRUD.get_by_id(db, source.id)
-        assert refreshed_source.source_name == "Tracked Group"
+        assert refreshed_source.source_name == "Initial Name"
         assert refreshed_source.last_scraped is not None
+        assert result.source_name == "Initial Name"
     finally:
         db.close()
 
@@ -551,7 +554,7 @@ def test_scrape_page_source_creates_post(monkeypatch):
             source_type="page",
             facebook_id="page-123",
             facebook_url="https://www.facebook.com/page-123",
-            source_name="Page Source",
+            source_name="VTV Thoi Tiet",
         )
 
         monkeypatch.setattr(
@@ -565,7 +568,7 @@ def test_scrape_page_source_creates_post(monkeypatch):
                     "reaction_count": 12,
                     "share_count": 5,
                     "comment_count": 8,
-                    "page_name": "Fetched Page",
+                    "page_name": "Otofun",
                     "media": [{"type": "photo"}],
                 }
             ],
@@ -579,9 +582,174 @@ def test_scrape_page_source_creates_post(monkeypatch):
         assert created_post is not None
         assert created_post.current_likes == 12
         assert len(created_post.metrics_history) == 1
-        assert SourceCRUD.get_by_id(db, source.id).source_name == "Fetched Page"
+        assert SourceCRUD.get_by_id(db, source.id).source_name == "VTV Thoi Tiet"
+        assert result.source_name == "VTV Thoi Tiet"
     finally:
         db.close()
+
+
+def test_scrape_page_source_fills_missing_source_name_from_feed(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="missing-page-name", email="missing-page-name@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="page",
+            facebook_id="page-missing-name",
+            facebook_url="https://www.facebook.com/baomoi",
+            source_name=None,
+        )
+
+        monkeypatch.setattr(
+            "backend.scraper.facebook_service.timeline_scraper.fetch_posts",
+            lambda limit=20, base_folder="page_post": [
+                {
+                    "post_id": "missing-page-name-post",
+                    "permalink": "https://facebook.com/baomoi/posts/missing-page-name-post",
+                    "text": "Page post",
+                    "posted_at": datetime(2026, 1, 2, 9, 0, 0),
+                    "reaction_count": 12,
+                    "share_count": 5,
+                    "comment_count": 8,
+                    "page_name": "Bao Moi",
+                    "media": [],
+                }
+            ],
+        )
+
+        result = FacebookScraperService.scrape_source(db, source.id, limit=5)
+
+        assert SourceCRUD.get_by_id(db, source.id).source_name == "Bao Moi"
+        assert result.source_name == "Bao Moi"
+    finally:
+        db.close()
+
+
+def test_scrape_group_source_fills_unknown_source_name_from_feed(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="unknown-group-name", email="unknown-group-name@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-unknown-name",
+            facebook_url="https://www.facebook.com/groups/group-unknown-name",
+            source_name="Unknown",
+        )
+
+        monkeypatch.setattr(
+            "backend.scraper.facebook_service.group_scraper.fetch_posts",
+            lambda limit=20: [
+                {
+                    "post_id": "unknown-group-name-post",
+                    "group_link": "https://www.facebook.com/groups/group-unknown-name/",
+                    "permalink": "https://facebook.com/groups/group-unknown-name/posts/unknown-group-name-post",
+                    "message": "Group post",
+                    "posted_at": datetime(2026, 1, 2, 9, 0, 0),
+                    "reaction_count": 4,
+                    "share_count": 1,
+                    "comment_count": 2,
+                    "group_name": "Fetched Group",
+                    "photos": [],
+                    "videos": [],
+                }
+            ],
+        )
+
+        result = FacebookScraperService.scrape_source(db, source.id, limit=5)
+
+        assert SourceCRUD.get_by_id(db, source.id).source_name == "Fetched Group"
+        assert result.source_name == "Fetched Group"
+    finally:
+        db.close()
+
+
+def test_legacy_db_persistence_does_not_overwrite_existing_source_name(monkeypatch, tmp_path):
+    db_path = tmp_path / "legacy-facebook.db"
+    monkeypatch.setattr(db_persistence, "DB_PATH", str(db_path))
+
+    db_persistence.save_scraped_post_to_db(
+        "page_post",
+        {
+            "post_id": "legacy-post-1",
+            "facebook_id": "legacy-page",
+            "source_url": "https://www.facebook.com/legacy-page",
+            "permalink": "https://www.facebook.com/legacy-page/posts/legacy-post-1",
+            "page_name": "Correct Page",
+            "text": "First post",
+            "posted_at": datetime(2026, 1, 1, 9, 0, 0).isoformat(),
+        },
+        [],
+    )
+    db_persistence.save_scraped_post_to_db(
+        "page_post",
+        {
+            "post_id": "legacy-post-2",
+            "facebook_id": "legacy-page",
+            "source_url": "https://www.facebook.com/legacy-page",
+            "permalink": "https://www.facebook.com/legacy-page/posts/legacy-post-2",
+            "page_name": "Wrong Page",
+            "text": "Second post",
+            "posted_at": datetime(2026, 1, 1, 10, 0, 0).isoformat(),
+        },
+        [],
+    )
+
+    conn = sqlite3.connect(db_path)
+    try:
+        source_name = conn.execute(
+            "SELECT source_name FROM sources WHERE facebook_id = ?",
+            ("legacy-page",),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert source_name == "Correct Page"
+
+
+def test_legacy_db_persistence_fills_unknown_existing_source_name(monkeypatch, tmp_path):
+    db_path = tmp_path / "legacy-facebook-unknown.db"
+    monkeypatch.setattr(db_persistence, "DB_PATH", str(db_path))
+
+    db_persistence.save_scraped_post_to_db(
+        "page_post",
+        {
+            "post_id": "legacy-unknown-post-1",
+            "facebook_id": "legacy-unknown-page",
+            "source_url": "https://www.facebook.com/legacy-unknown-page",
+            "permalink": "https://www.facebook.com/legacy-unknown-page/posts/legacy-unknown-post-1",
+            "page_name": "Unknown",
+            "text": "First post",
+            "posted_at": datetime(2026, 1, 1, 9, 0, 0).isoformat(),
+        },
+        [],
+    )
+    db_persistence.save_scraped_post_to_db(
+        "page_post",
+        {
+            "post_id": "legacy-unknown-post-2",
+            "facebook_id": "legacy-unknown-page",
+            "source_url": "https://www.facebook.com/legacy-unknown-page",
+            "permalink": "https://www.facebook.com/legacy-unknown-page/posts/legacy-unknown-post-2",
+            "page_name": "Filled Page",
+            "text": "Second post",
+            "posted_at": datetime(2026, 1, 1, 10, 0, 0).isoformat(),
+        },
+        [],
+    )
+
+    conn = sqlite3.connect(db_path)
+    try:
+        source_name = conn.execute(
+            "SELECT source_name FROM sources WHERE facebook_id = ?",
+            ("legacy-unknown-page",),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert source_name == "Filled Page"
 
 def test_scrape_page_source_resolves_slug_id_before_fetch(monkeypatch):
     db = SessionLocal()

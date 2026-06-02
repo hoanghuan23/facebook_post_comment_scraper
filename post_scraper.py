@@ -619,7 +619,7 @@ def fetch_posts(
         min_posted_at: When set, skip posts at or before this timestamp.
         consecutive_old_limit: Stop pagination after this many consecutive posts are at or before min_posted_at.
     """
-    global PAGE_NAME
+    request_page_name = PAGE_NAME
     all_posts = []
     batch_posts = []
     cursor = None
@@ -828,14 +828,14 @@ def fetch_posts(
             # Extract reaction count
             reaction_count = extract_reaction_count(node)
             
-            # Extract page name from first post if not set
-            if not PAGE_NAME:
-                PAGE_NAME = extract_page_name(node)
-                if PAGE_NAME:
-                    print(f"Tên page: {PAGE_NAME}")
+            # Extract page name from first post if not set for this fetch call.
+            if not request_page_name:
+                request_page_name = extract_page_name(node)
+                if request_page_name:
+                    print(f"Tên page: {request_page_name}")
             
             # Check if post already exists
-            temp_page_name = PAGE_NAME or extract_page_name(node)
+            temp_page_name = request_page_name or extract_page_name(node)
             if skip_existing_posts and temp_page_name:
                 temp_name_folder = sanitize_page_folder_name(temp_page_name)
                 if post_already_exists(post_id, base_folder, temp_name_folder):
@@ -862,7 +862,7 @@ def fetch_posts(
                 "comment_count": comment_count,
                 "reaction_count": reaction_count,
                 "share_count": share_count,
-                "page_name": PAGE_NAME,
+                "page_name": request_page_name,
                 # Added metadata fields (best-effort)
                 "posted_at": posted_at,
                 "scraped_at": make_scraped_at(),
@@ -875,7 +875,7 @@ def fetch_posts(
             }
             
             # Sanitize page name folder
-            name_folder = sanitize_page_folder_name(PAGE_NAME)
+            name_folder = sanitize_page_folder_name(request_page_name)
             
             # Prepare save directory for media
             media_save_dir = os.path.join(base_folder, name_folder)

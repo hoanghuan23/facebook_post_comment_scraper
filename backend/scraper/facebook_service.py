@@ -198,6 +198,11 @@ def _post_cutoff_skip_reason(
     return None
 
 
+def _is_missing_source_name(value: Optional[str]) -> bool:
+    candidate = str(value or "").strip()
+    return not candidate or candidate.lower() == "unknown"
+
+
 class FacebookScraperService:
     """Bridge existing Facebook scraper scripts into backend storage flows."""
 
@@ -510,6 +515,21 @@ class FacebookScraperService:
         return True
 
     @staticmethod
+    def _fill_missing_source_name(db: Session, source: Source, detected_source_name: Optional[str]) -> None:
+        if not _is_missing_source_name(source.source_name):
+            return
+        if _is_missing_source_name(detected_source_name):
+            return
+
+        updated_source = SourceCRUD.update(
+            db,
+            source.id,
+            source_name=str(detected_source_name).strip(),
+        )
+        if updated_source:
+            source.source_name = updated_source.source_name
+
+    @staticmethod
     def _ensure_valid_posted_at(raw_post: Dict[str, Any], normalized_post: Dict[str, Any]) -> None:
         if isinstance(normalized_post.get("posted_at"), datetime):
             return
@@ -559,13 +579,16 @@ class FacebookScraperService:
         skipped_by_cutoff = 0
         post_ids: List[int] = []
         matched_metric_target_ids: List[str] = []
-        detected_source_name = source.source_name
+        detected_source_name = None
 
         for raw_post in raw_posts:
             facebook_post_id = raw_post.get("post_id")
             if not facebook_post_id:
                 skipped_posts += 1
                 continue
+
+            if raw_post.get("group_name"):
+                detected_source_name = raw_post["group_name"]
 
             normalized_post = _normalize_group_post(raw_post)
             cls._ensure_valid_posted_at(raw_post, normalized_post)
@@ -615,16 +638,12 @@ class FacebookScraperService:
                 if source.include_comments:
                     cls._sync_post_comments(db, source, db_post)
 
-            if raw_post.get("group_name"):
-                detected_source_name = raw_post["group_name"]
-
         SourceCRUD.update_scrape_info(
             db,
             source.id,
             last_scraped=datetime.utcnow(),
         )
-        if detected_source_name and detected_source_name != source.source_name:
-            SourceCRUD.update(db, source.id, source_name=detected_source_name)
+        cls._fill_missing_source_name(db, source, detected_source_name)
 
         logger.info(
             "Hoàn tất scrape source group: source_id=%s fetched=%s created=%s updated=%s skipped=%s filtered_by_cutoff=%s",
@@ -637,7 +656,7 @@ class FacebookScraperService:
         )
         return FacebookScrapeResult(
             source_id=source.id,
-            source_name=detected_source_name,
+            source_name=source.source_name,
             total_fetched=len(raw_posts),
             created_posts=created_posts,
             updated_posts=updated_posts,
@@ -685,13 +704,16 @@ class FacebookScraperService:
         skipped_by_cutoff = 0
         post_ids: List[int] = []
         matched_metric_target_ids: List[str] = []
-        detected_source_name = source.source_name
+        detected_source_name = None
 
         for raw_post in raw_posts:
             facebook_post_id = raw_post.get("post_id")
             if not facebook_post_id:
                 skipped_posts += 1
                 continue
+
+            if raw_post.get("page_name"):
+                detected_source_name = raw_post["page_name"]
 
             normalized_post = _normalize_timeline_post(raw_post)
             cls._ensure_valid_posted_at(raw_post, normalized_post)
@@ -741,16 +763,12 @@ class FacebookScraperService:
                 if source.include_comments:
                     cls._sync_post_comments(db, source, db_post)
 
-            if raw_post.get("page_name"):
-                detected_source_name = raw_post["page_name"]
-
         SourceCRUD.update_scrape_info(
             db,
             source.id,
             last_scraped=datetime.utcnow(),
         )
-        if detected_source_name and detected_source_name != source.source_name:
-            SourceCRUD.update(db, source.id, source_name=detected_source_name)
+        cls._fill_missing_source_name(db, source, detected_source_name)
 
         logger.info(
             "Hoàn tất scrape source timeline: source_id=%s fetched=%s created=%s updated=%s skipped=%s filtered_by_cutoff=%s",
@@ -763,7 +781,7 @@ class FacebookScraperService:
         )
         return FacebookScrapeResult(
             source_id=source.id,
-            source_name=detected_source_name,
+            source_name=source.source_name,
             total_fetched=len(raw_posts),
             created_posts=created_posts,
             updated_posts=updated_posts,

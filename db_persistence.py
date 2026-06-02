@@ -218,7 +218,13 @@ def _upsert_source(conn, post_type, post_data, include_comments=None):
         conn.execute(
             """
             UPDATE sources
-            SET source_type = ?, facebook_url = ?, source_name = ?, is_active = 1,
+            SET source_type = ?, facebook_url = ?,
+                source_name = CASE
+                    WHEN source_name IS NULL OR TRIM(source_name) = '' OR LOWER(TRIM(source_name)) = 'unknown'
+                    THEN ?
+                    ELSE source_name
+                END,
+                is_active = 1,
                 include_comments = ?, is_accessible = 1, last_scraped = ?
             WHERE id = ?
             """,

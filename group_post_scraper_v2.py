@@ -1023,8 +1023,6 @@ def fetch_posts(
         stop_when_targets_found: Stop pagination once all target_post_ids have been seen.
         on_page_diagnostic: Optional callback receiving details for pages with no extracted posts.
     """
-    global GROUP_NAME
-    use_global_group_name = group_id is None and group_name is None
     request_group_id = group_id or GROUP_ID
     request_group_name = GROUP_NAME if group_name is None else group_name
     request_cookies = COOKIES if cookies is None else cookies
@@ -1267,8 +1265,6 @@ def fetch_posts(
                 # Extract group name from first post if not set
                 if not request_group_name:
                     request_group_name = extract_group_name(story_node)
-                    if use_global_group_name:
-                        GROUP_NAME = request_group_name
                     if request_group_name:
                         print(f"Tên group: {request_group_name}")
                 
