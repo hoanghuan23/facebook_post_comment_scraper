@@ -1729,6 +1729,73 @@ def test_update_recent_post_metrics_records_active_session_id(monkeypatch):
         verify_db.close()
 
 
+def test_update_recent_post_metrics_increases_max_pages_for_sources_with_missed_targets(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(
+            db,
+            username="metrics-missed-depth",
+            email="metrics-missed-depth@example.com",
+            password="secret123",
+        )
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="group-metrics-missed-depth",
+            facebook_url="https://www.facebook.com/groups/group-metrics-missed-depth",
+            source_name="Metrics Missed Depth Group",
+        )
+        PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="metrics-missed-depth-post",
+            facebook_url="https://facebook.com/posts/metrics-missed-depth-post",
+            posted_at=datetime.utcnow(),
+            content="Missed metric depth",
+            next_metric_update=datetime.utcnow() - timedelta(minutes=1),
+            metric_scan_miss_count=1,
+        )
+    finally:
+        db.close()
+
+    calls = []
+
+    def fake_refresh_target_post_metrics(
+        _db,
+        _source,
+        target_post_ids,
+        max_pages=20,
+        stop_when_all_found=True,
+        last_24_hours_only=True,
+        download_media=False,
+        job_id=None,
+    ):
+        calls.append(max_pages)
+        return {
+            "fetched": 1,
+            "updated": 1,
+            "skipped": 0,
+            "matched_target_count": len(target_post_ids),
+            "target_posts_count": len(target_post_ids),
+            "pages_scanned": 1,
+            "stop_reason": "all_targets_found",
+            "updated_post_refs": target_post_ids,
+        }
+
+    monkeypatch.setattr("backend.scheduler.periodic_tasks.settings.METRIC_REFRESH_MAX_PAGES", 30)
+    monkeypatch.setattr("backend.scheduler.periodic_tasks.settings.SCRAPER_MAX_24H_PAGES", 50)
+    monkeypatch.setattr(
+        "backend.scheduler.periodic_tasks.FacebookScraperService.refresh_target_post_metrics",
+        fake_refresh_target_post_metrics,
+    )
+
+    import asyncio
+    asyncio.run(update_recent_post_metrics())
+
+    assert calls == [50]
+
+
 def test_periodic_scrape_new_posts_uses_latest_db_post_as_cutoff(monkeypatch):
     db = SessionLocal()
     try:
@@ -2581,14 +2648,14 @@ def test_refresh_target_post_metrics_records_recent_missing_targets_without_dele
         assert result["deleted_post_refs"] == []
         assert refreshed_missing_post.is_tracked is True
         assert refreshed_missing_post.is_deleted is False
-        assert refreshed_missing_post.metric_tier == "cold"
+        assert refreshed_missing_post.metric_tier == "bootstrap"
         assert refreshed_missing_post.metric_scan_miss_count == 1
         assert refreshed_missing_post.next_metric_update is not None
     finally:
         db.close()
 
 
-def test_refresh_target_post_metrics_records_old_missing_targets_without_deleting(monkeypatch):
+def test_refresh_target_post_metrics_expires_old_missing_targets(monkeypatch):
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="target-old-missing", email="target-old-missing@example.com", password="secret123")
@@ -2637,11 +2704,11 @@ def test_refresh_target_post_metrics_records_old_missing_targets_without_deletin
 
         assert result["deleted"] == 0
         assert result["deleted_post_refs"] == []
-        assert refreshed_old_post.is_tracked is True
+        assert refreshed_old_post.is_tracked is False
         assert refreshed_old_post.is_deleted is False
-        assert refreshed_old_post.metric_tier == "cold"
+        assert refreshed_old_post.metric_tier == "expired"
         assert refreshed_old_post.metric_scan_miss_count == 1
-        assert refreshed_old_post.next_metric_update is not None
+        assert refreshed_old_post.next_metric_update is None
     finally:
         db.close()
 

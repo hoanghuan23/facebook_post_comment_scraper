@@ -17,6 +17,7 @@ TRACKING_HOURS = 24
 BOOTSTRAP_MINUTES = 15
 RETRY_MINUTES = 15
 COLD_RECHECK_MINUTES = 120
+MISS_RETRY_MINUTES = (15, 30, 60)
 MIN_SOURCE_BASELINE_POSTS = 10
 SOURCE_BASELINE_DAYS = 7
 HOT_VELOCITY_THRESHOLD = 100.0
@@ -75,6 +76,10 @@ def _tracking_deadline(post: Post) -> datetime:
     return post.tracking_until or (post.posted_at + timedelta(hours=TRACKING_HOURS))
 
 
+def _tracking_expired(post: Post, now: datetime) -> bool:
+    return now >= _tracking_deadline(post) or now >= post.posted_at + timedelta(hours=TRACKING_HOURS)
+
+
 def expire_post(post: Post) -> None:
     post.metric_tier = EXPIRED
     post.is_tracked = False
@@ -97,6 +102,16 @@ def _next_interval_minutes(tier: str, age_hours: float) -> int:
     return COLD_RECHECK_MINUTES
 
 
+def _miss_retry_at(post: Post, now: datetime) -> datetime:
+    miss_count = max(post.metric_scan_miss_count or 1, 1)
+    interval = MISS_RETRY_MINUTES[min(miss_count, len(MISS_RETRY_MINUTES)) - 1]
+    candidate = now + timedelta(minutes=interval)
+    latest_retry_at = _tracking_deadline(post) - timedelta(minutes=1)
+    if latest_retry_at <= now:
+        return now
+    return min(candidate, latest_retry_at)
+
+
 def apply_metric_snapshot_schedule(
     db: Session,
     post_id: int,
@@ -109,7 +124,7 @@ def apply_metric_snapshot_schedule(
         return None
 
     post.tracking_until = _tracking_deadline(post)
-    if now >= post.tracking_until or now >= post.posted_at + timedelta(hours=TRACKING_HOURS):
+    if _tracking_expired(post, now):
         expire_post(post)
         db.commit()
         db.refresh(post)
@@ -197,6 +212,7 @@ def handle_max_page_misses(
     db: Session,
     source_id: int,
     facebook_post_ids: Iterable[str],
+    now: Optional[datetime] = None,
 ) -> None:
     post_ids = {str(post_id) for post_id in facebook_post_ids if post_id}
     if not post_ids:
@@ -206,12 +222,41 @@ def handle_max_page_misses(
         Post.facebook_post_id.in_(post_ids),
         Post.is_tracked.is_(True),
     ).all()
-    now = datetime.utcnow()
+    now = now or datetime.utcnow()
     for post in posts:
         post.metric_scan_miss_count = (post.metric_scan_miss_count or 0) + 1
-        if post.metric_scan_miss_count >= 3:
+        if _tracking_expired(post, now):
             expire_post(post)
         else:
-            post.metric_tier = COLD
-            post.next_metric_update = now + timedelta(minutes=COLD_RECHECK_MINUTES)
+            if post.metric_tier not in {BOOTSTRAP, HOT, WARM, COLD}:
+                post.metric_tier = COLD
+            post.next_metric_update = _miss_retry_at(post, now)
     db.commit()
+
+
+def recover_recent_expired_metric_misses(
+    db: Session,
+    now: Optional[datetime] = None,
+) -> int:
+    """Restore recent posts that were expired only because repeated feed scans missed them."""
+    now = now or datetime.utcnow()
+    cutoff_time = now - timedelta(hours=TRACKING_HOURS)
+    posts = db.query(Post).filter(
+        Post.posted_at >= cutoff_time,
+        Post.metric_tier == EXPIRED,
+        Post.metric_scan_miss_count >= 3,
+        Post.is_deleted.is_(False),
+        Post.is_tracked.is_(False),
+    ).all()
+
+    recovered = 0
+    for post in posts:
+        if _tracking_expired(post, now):
+            continue
+        post.is_tracked = True
+        post.metric_tier = COLD
+        post.next_metric_update = now
+        recovered += 1
+
+    db.commit()
+    return recovered

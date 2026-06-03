@@ -12,11 +12,14 @@ from backend.database.migrations import (
 from backend.database.models import Base, Post
 from backend.database.schemas import PostResponse
 from backend.services.post_metric_schedule_service import (
+    BOOTSTRAP,
     COLD,
     EXPIRED,
     HOT,
+    WARM,
     apply_metric_snapshot_schedule,
     handle_max_page_misses,
+    recover_recent_expired_metric_misses,
 )
 
 
@@ -179,29 +182,151 @@ def test_post_api_schema_exposes_metric_schedule_fields():
         db.close()
 
 
-def test_three_max_page_misses_stop_tracking_post():
+def test_four_max_page_misses_keep_recent_post_tracked_with_backoff():
     db = SessionLocal()
     try:
-        now = datetime.utcnow()
-        post = _post(db, "missed-post", now - timedelta(minutes=30))
+        base = datetime.utcnow().replace(microsecond=0)
+        post = _post(db, "missed-post", base - timedelta(minutes=30))
+        PostCRUD.update(db, post.id, metric_tier=COLD)
 
-        handle_max_page_misses(db, post.source_id, [post.facebook_post_id])
+        handle_max_page_misses(db, post.source_id, [post.facebook_post_id], now=base)
         once = PostCRUD.get_by_id(db, post.id)
         assert once.metric_tier == COLD
         assert once.metric_scan_miss_count == 1
         assert once.is_tracked is True
+        assert once.next_metric_update == base + timedelta(minutes=15)
 
-        handle_max_page_misses(db, post.source_id, [post.facebook_post_id])
+        handle_max_page_misses(db, post.source_id, [post.facebook_post_id], now=base)
         twice = PostCRUD.get_by_id(db, post.id)
         assert twice.metric_tier == COLD
         assert twice.metric_scan_miss_count == 2
         assert twice.is_tracked is True
+        assert twice.next_metric_update == base + timedelta(minutes=30)
+
+        handle_max_page_misses(db, post.source_id, [post.facebook_post_id], now=base)
+        third = PostCRUD.get_by_id(db, post.id)
+        assert third.metric_tier == COLD
+        assert third.metric_scan_miss_count == 3
+        assert third.is_tracked is True
+        assert third.next_metric_update == base + timedelta(minutes=60)
+
+        handle_max_page_misses(db, post.source_id, [post.facebook_post_id], now=base)
+        fourth = PostCRUD.get_by_id(db, post.id)
+        assert fourth.metric_tier == COLD
+        assert fourth.metric_scan_miss_count == 4
+        assert fourth.is_tracked is True
+        assert fourth.next_metric_update == base + timedelta(minutes=60)
+    finally:
+        db.close()
+
+
+def test_max_page_miss_preserves_active_metric_tier():
+    db = SessionLocal()
+    try:
+        base = datetime.utcnow().replace(microsecond=0)
+        for tier in (BOOTSTRAP, HOT, WARM):
+            post = _post(db, f"missed-{tier}", base - timedelta(minutes=30))
+            PostCRUD.update(db, post.id, metric_tier=tier)
+
+            handle_max_page_misses(db, post.source_id, [post.facebook_post_id], now=base)
+            refreshed = PostCRUD.get_by_id(db, post.id)
+
+            assert refreshed.metric_tier == tier
+            assert refreshed.metric_scan_miss_count == 1
+            assert refreshed.is_tracked is True
+    finally:
+        db.close()
+
+
+def test_max_page_miss_retry_does_not_schedule_after_tracking_deadline():
+    db = SessionLocal()
+    try:
+        base = datetime.utcnow().replace(microsecond=0)
+        post = _post(db, "missed-deadline-cap", base - timedelta(minutes=30))
+        PostCRUD.update(db, post.id, tracking_until=base + timedelta(minutes=10))
+
+        handle_max_page_misses(db, post.source_id, [post.facebook_post_id], now=base)
+        refreshed = PostCRUD.get_by_id(db, post.id)
+
+        assert refreshed.next_metric_update == base + timedelta(minutes=9)
+        assert refreshed.is_tracked is True
+    finally:
+        db.close()
+
+
+def test_max_page_miss_expires_post_after_tracking_deadline():
+    db = SessionLocal()
+    try:
+        now = datetime.utcnow()
+        post = _post(db, "missed-expired-post", now - timedelta(hours=25))
 
         handle_max_page_misses(db, post.source_id, [post.facebook_post_id])
-        third = PostCRUD.get_by_id(db, post.id)
-        assert third.metric_tier == EXPIRED
-        assert third.metric_scan_miss_count == 3
-        assert third.is_tracked is False
+        refreshed = PostCRUD.get_by_id(db, post.id)
+
+        assert refreshed.metric_tier == EXPIRED
+        assert refreshed.metric_scan_miss_count == 1
+        assert refreshed.is_tracked is False
+        assert refreshed.next_metric_update is None
+    finally:
+        db.close()
+
+
+def test_recover_recent_expired_metric_misses_only_restores_recent_miss_expired_posts():
+    db = SessionLocal()
+    try:
+        now = datetime.utcnow().replace(microsecond=0)
+        recoverable = _post(db, "recoverable-miss", now - timedelta(hours=1))
+        old = _post(db, "old-miss", now - timedelta(hours=25))
+        low_miss = _post(db, "low-miss", now - timedelta(hours=1))
+        deleted = _post(db, "deleted-miss", now - timedelta(hours=1))
+
+        PostCRUD.update(
+            db,
+            recoverable.id,
+            is_tracked=False,
+            metric_tier=EXPIRED,
+            metric_scan_miss_count=3,
+            next_metric_update=None,
+        )
+        PostCRUD.update(
+            db,
+            old.id,
+            is_tracked=False,
+            metric_tier=EXPIRED,
+            metric_scan_miss_count=3,
+            next_metric_update=None,
+        )
+        PostCRUD.update(
+            db,
+            low_miss.id,
+            is_tracked=False,
+            metric_tier=EXPIRED,
+            metric_scan_miss_count=2,
+            next_metric_update=None,
+        )
+        PostCRUD.update(
+            db,
+            deleted.id,
+            is_tracked=False,
+            is_deleted=True,
+            metric_tier=EXPIRED,
+            metric_scan_miss_count=3,
+            next_metric_update=None,
+        )
+
+        recovered_count = recover_recent_expired_metric_misses(db, now=now)
+
+        recovered = PostCRUD.get_by_id(db, recoverable.id)
+        still_old = PostCRUD.get_by_id(db, old.id)
+        still_low_miss = PostCRUD.get_by_id(db, low_miss.id)
+        still_deleted = PostCRUD.get_by_id(db, deleted.id)
+        assert recovered_count == 1
+        assert recovered.is_tracked is True
+        assert recovered.metric_tier == COLD
+        assert recovered.next_metric_update == now
+        assert still_old.is_tracked is False
+        assert still_low_miss.is_tracked is False
+        assert still_deleted.is_tracked is False
     finally:
         db.close()
 
