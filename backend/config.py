@@ -85,6 +85,11 @@ class Settings(BaseSettings):
     METRIC_REFRESH_MAX_PAGES: int = 30 # giới hạn số trang cần quét khi refresh metrics 
     METRIC_REFRESH_USE_24H_WINDOW: bool = True
     METRIC_REFRESH_DOWNLOAD_MEDIA: bool = False
+    DIRECT_METRIC_FETCH_ENABLED: bool = True
+    DIRECT_METRIC_TIMEOUT: int = 20
+    DIRECT_METRIC_JITTER_MIN_SECONDS: float = 1.0
+    DIRECT_METRIC_JITTER_MAX_SECONDS: float = 2.5
+    DIRECT_METRIC_DUMP_HTML: bool = False
 
     SCRAPER_SOURCE_BATCH_LIMIT: int = 100 # giới hạn số nguồn cần quét task scarpe_new_posts
     SCRAPER_POSTS_BATCH_LIMIT : int = 500 # giới hạ số bài viết cần quét task update_recent_metrics

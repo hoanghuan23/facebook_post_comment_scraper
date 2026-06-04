@@ -26,6 +26,7 @@ from backend.scraper.facebook_service import (
     _normalize_group_post,
     _normalize_timeline_post,
 )
+from backend.scraper import direct_post_metrics
 from backend.scheduler.periodic_tasks import generate_analytics_cache, periodic_scrape_new_posts, update_recent_post_metrics
 from backend.services.schedule_service import calculate_tier
 import post_scraper
@@ -1578,14 +1579,10 @@ def test_update_recent_post_metrics_only_refreshes_sources_with_recent_posted_po
 
     calls = []
 
-    def fake_refresh_target_post_metrics(
+    def fake_refresh_target_post_metrics_direct(
         _db,
         source,
         target_post_ids,
-        max_pages=20,
-        stop_when_all_found=True,
-        last_24_hours_only=True,
-        download_media=False,
         job_id=None,
     ):
         calls.append((source.id, target_post_ids))
@@ -1593,6 +1590,7 @@ def test_update_recent_post_metrics_only_refreshes_sources_with_recent_posted_po
             "fetched": 1,
             "updated": 1,
             "skipped": 0,
+            "failed": 0,
             "matched_target_count": len(target_post_ids),
             "target_posts_count": len(target_post_ids),
             "pages_scanned": 1,
@@ -1600,8 +1598,8 @@ def test_update_recent_post_metrics_only_refreshes_sources_with_recent_posted_po
         }
 
     monkeypatch.setattr(
-        "backend.scheduler.periodic_tasks.FacebookScraperService.refresh_target_post_metrics",
-        fake_refresh_target_post_metrics,
+        "backend.scheduler.periodic_tasks.FacebookScraperService.refresh_target_post_metrics_direct",
+        fake_refresh_target_post_metrics_direct,
     )
 
     import asyncio
@@ -1686,20 +1684,17 @@ def test_update_recent_post_metrics_records_active_session_id(monkeypatch):
     finally:
         db.close()
 
-    def fake_refresh_target_post_metrics(
+    def fake_refresh_target_post_metrics_direct(
         _db,
         _source,
         target_post_ids,
-        max_pages=20,
-        stop_when_all_found=True,
-        last_24_hours_only=True,
-        download_media=False,
         job_id=None,
     ):
         return {
             "fetched": 1,
             "updated": 1,
             "skipped": 0,
+            "failed": 0,
             "matched_target_count": len(target_post_ids),
             "target_posts_count": len(target_post_ids),
             "pages_scanned": 1,
@@ -1708,8 +1703,8 @@ def test_update_recent_post_metrics_records_active_session_id(monkeypatch):
         }
 
     monkeypatch.setattr(
-        "backend.scheduler.periodic_tasks.FacebookScraperService.refresh_target_post_metrics",
-        fake_refresh_target_post_metrics,
+        "backend.scheduler.periodic_tasks.FacebookScraperService.refresh_target_post_metrics_direct",
+        fake_refresh_target_post_metrics_direct,
     )
 
     import asyncio
@@ -1729,7 +1724,7 @@ def test_update_recent_post_metrics_records_active_session_id(monkeypatch):
         verify_db.close()
 
 
-def test_update_recent_post_metrics_increases_max_pages_for_sources_with_missed_targets(monkeypatch):
+def test_update_recent_post_metrics_uses_direct_refresh_for_sources_with_missed_targets(monkeypatch):
     db = SessionLocal()
     try:
         user = UserCRUD.create(
@@ -1761,21 +1756,18 @@ def test_update_recent_post_metrics_increases_max_pages_for_sources_with_missed_
 
     calls = []
 
-    def fake_refresh_target_post_metrics(
+    def fake_refresh_target_post_metrics_direct(
         _db,
         _source,
         target_post_ids,
-        max_pages=20,
-        stop_when_all_found=True,
-        last_24_hours_only=True,
-        download_media=False,
         job_id=None,
     ):
-        calls.append(max_pages)
+        calls.append(target_post_ids)
         return {
             "fetched": 1,
             "updated": 1,
             "skipped": 0,
+            "failed": 0,
             "matched_target_count": len(target_post_ids),
             "target_posts_count": len(target_post_ids),
             "pages_scanned": 1,
@@ -1783,17 +1775,15 @@ def test_update_recent_post_metrics_increases_max_pages_for_sources_with_missed_
             "updated_post_refs": target_post_ids,
         }
 
-    monkeypatch.setattr("backend.scheduler.periodic_tasks.settings.METRIC_REFRESH_MAX_PAGES", 30)
-    monkeypatch.setattr("backend.scheduler.periodic_tasks.settings.SCRAPER_MAX_24H_PAGES", 50)
     monkeypatch.setattr(
-        "backend.scheduler.periodic_tasks.FacebookScraperService.refresh_target_post_metrics",
-        fake_refresh_target_post_metrics,
+        "backend.scheduler.periodic_tasks.FacebookScraperService.refresh_target_post_metrics_direct",
+        fake_refresh_target_post_metrics_direct,
     )
 
     import asyncio
     asyncio.run(update_recent_post_metrics())
 
-    assert calls == [50]
+    assert calls == [["metrics-missed-depth-post"]]
 
 
 def test_periodic_scrape_new_posts_uses_latest_db_post_as_cutoff(monkeypatch):
@@ -2048,14 +2038,10 @@ def test_update_recent_post_metrics_logs_updated_post_list_capped(monkeypatch, c
     finally:
         db.close()
 
-    def fake_refresh_target_post_metrics(
+    def fake_refresh_target_post_metrics_direct(
         _db,
         _source,
         target_post_ids,
-        max_pages=20,
-        stop_when_all_found=True,
-        last_24_hours_only=True,
-        download_media=False,
         job_id=None,
     ):
         refs = [f"post-{idx}" for idx in range(1, 13)]
@@ -2063,16 +2049,17 @@ def test_update_recent_post_metrics_logs_updated_post_list_capped(monkeypatch, c
             "fetched": 20,
             "updated": 12,
             "skipped": 8,
+            "failed": 0,
             "matched_target_count": len(target_post_ids),
             "target_posts_count": len(target_post_ids),
-            "pages_scanned": 7,
+            "pages_scanned": 0,
             "stop_reason": "all_targets_found",
             "updated_post_refs": refs,
         }
 
     monkeypatch.setattr(
-        "backend.scheduler.periodic_tasks.FacebookScraperService.refresh_target_post_metrics",
-        fake_refresh_target_post_metrics,
+        "backend.scheduler.periodic_tasks.FacebookScraperService.refresh_target_post_metrics_direct",
+        fake_refresh_target_post_metrics_direct,
     )
 
     import asyncio
@@ -2081,7 +2068,7 @@ def test_update_recent_post_metrics_logs_updated_post_list_capped(monkeypatch, c
 
     logs = caplog.text
     assert "stop_reason=all_targets_found" in logs
-    assert "pages_scanned=7" in logs
+    assert "pages_scanned=0" in logs
     assert "fetch_to_update_ratio=1.667" in logs
     assert "Bắt đầu cập nhật metric source" in logs
     assert f"Log Metrics Group (id={source_id})" in logs
@@ -2417,6 +2404,237 @@ def test_group_fetch_posts_reports_old_filtered_posts_without_empty_diagnostic(m
     assert "Response chứa 3 post nhưng 0 post được giữ lại sau bộ lọc" in output
     assert "Chuẩn đoán response:" not in output
     assert "Đã gặp đủ số post cũ liên tiếp theo latest cutoff." in output
+
+
+def test_direct_post_metrics_parser_reads_targeted_comet_counts():
+    html = """
+    <html><head><title>Post</title></head><body>
+    <script>
+    {"post_id":"direct-target-1","comet_ufi_summary_and_actions_renderer":{},
+     "reaction_count":{"count":17},
+     "comments":{"total_count":4},
+     "share_count":{"count":2}}
+    </script>
+    </body></html>
+    """
+
+    result = direct_post_metrics.parse_html_metrics(
+        html,
+        "direct-target-1",
+        "https://www.facebook.com/groups/g/posts/direct-target-1",
+        "unit",
+    )
+
+    assert result.has_metric_signal is True
+    assert result.likes == 17
+    assert result.comments == 4
+    assert result.shares == 2
+
+
+def test_direct_post_metrics_parser_accepts_targeted_zero_counts():
+    html = """
+    <html><head><title>Zero Post</title></head><body>
+    <script>
+    {"post_id":"zero-target-1","comet_ufi_summary_and_actions_renderer":{},
+     "reaction_count":{"count":0},
+     "comments":{"total_count":0},
+     "share_count":{"count":0}}
+    </script>
+    </body></html>
+    """
+
+    result = direct_post_metrics.parse_html_metrics(
+        html,
+        "zero-target-1",
+        "https://www.facebook.com/groups/g/posts/zero-target-1",
+        "unit",
+    )
+
+    assert result.has_metric_signal is True
+    assert result.likes == 0
+    assert result.comments == 0
+    assert result.shares == 0
+
+
+def test_refresh_target_post_metrics_direct_updates_target_snapshot_and_uses_session(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="direct-metric-user", email="direct-metric-user@example.com", password="secret123")
+        FacebookSessionCRUD.upsert_active_for_user(
+            db=db,
+            user_id=user.id,
+            fb_cookies='{"c_user":"direct-session"}',
+        )
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="direct-group",
+            facebook_url="https://www.facebook.com/groups/direct-group",
+            source_name="Direct Group",
+        )
+        post = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="direct-post-1",
+            facebook_url="https://www.facebook.com/groups/direct-group/posts/direct-post-1",
+            posted_at=datetime.utcnow(),
+            content="Direct target",
+            next_metric_update=datetime.utcnow() - timedelta(minutes=1),
+        )
+        job = PipelineJobCRUD.create_job(
+            db=db,
+            job_type="update_metric",
+            source_id=source.id,
+            status="running",
+        )
+        calls = []
+
+        def fake_smart_fetch(cookies_raw, post_id, **kwargs):
+            calls.append({"cookies_raw": cookies_raw, "post_id": post_id, **kwargs})
+            return direct_post_metrics.DirectPostMetric(
+                post_id=post_id,
+                source_url=kwargs["original_url"],
+                likes=11,
+                comments=3,
+                shares=1,
+                has_metric_signal=True,
+                fetch_method="unit/direct",
+            )
+
+        monkeypatch.setattr("backend.scraper.facebook_service.direct_post_metrics.smart_fetch", fake_smart_fetch)
+
+        result = FacebookScraperService.refresh_target_post_metrics_direct(
+            db,
+            source,
+            target_post_ids=["direct-post-1"],
+            job_id=job.id,
+        )
+        refreshed = PostCRUD.get_by_id(db, post.id)
+
+        assert result["updated"] == 1
+        assert result["matched_target_ids"] == ["direct-post-1"]
+        assert refreshed.current_likes == 11
+        assert refreshed.current_comments == 3
+        assert refreshed.current_shares == 1
+        assert refreshed.metrics_history[-1].job_id == job.id
+        assert calls[0]["cookies_raw"] == '{"c_user":"direct-session"}'
+        assert calls[0]["group_id"] == "direct-group"
+    finally:
+        db.close()
+
+
+def test_refresh_target_post_metrics_direct_defers_remaining_on_rate_limit(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="direct-rate-user", email="direct-rate-user@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="direct-rate-group",
+            facebook_url="https://www.facebook.com/groups/direct-rate-group",
+            source_name="Direct Rate Group",
+        )
+        first = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="direct-rate-1",
+            facebook_url="https://www.facebook.com/groups/direct-rate-group/posts/direct-rate-1",
+            posted_at=datetime.utcnow(),
+            content="Rate one",
+            next_metric_update=datetime.utcnow() - timedelta(minutes=1),
+        )
+        second = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="direct-rate-2",
+            facebook_url="https://www.facebook.com/groups/direct-rate-group/posts/direct-rate-2",
+            posted_at=datetime.utcnow(),
+            content="Rate two",
+            next_metric_update=datetime.utcnow() - timedelta(minutes=1),
+        )
+
+        def fake_smart_fetch(_cookies_raw, post_id, **_kwargs):
+            return direct_post_metrics.DirectPostMetric(
+                post_id=post_id,
+                source_url="https://facebook.com",
+                is_rate_limited=True,
+                fetch_method="unit/rate",
+            )
+
+        monkeypatch.setattr("backend.scraper.facebook_service.direct_post_metrics.smart_fetch", fake_smart_fetch)
+
+        result = FacebookScraperService.refresh_target_post_metrics_direct(
+            db,
+            source,
+            target_post_ids=["direct-rate-1", "direct-rate-2"],
+        )
+        refreshed_first = PostCRUD.get_by_id(db, first.id)
+        refreshed_second = PostCRUD.get_by_id(db, second.id)
+
+        assert result["stop_reason"] == "rate_limited"
+        assert result["failed"] == 1
+        assert result["updated"] == 0
+        assert refreshed_first.is_deleted is False
+        assert refreshed_second.is_deleted is False
+        assert refreshed_first.next_metric_update > datetime.utcnow()
+        assert refreshed_second.next_metric_update > datetime.utcnow()
+    finally:
+        db.close()
+
+
+def test_refresh_target_post_metrics_direct_soft_deletes_on_third_metric_miss(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="direct-miss-user", email="direct-miss-user@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="direct-miss-group",
+            facebook_url="https://www.facebook.com/groups/direct-miss-group",
+            source_name="Direct Miss Group",
+        )
+        post = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="direct-miss-3",
+            facebook_url="https://www.facebook.com/groups/direct-miss-group/posts/direct-miss-3",
+            posted_at=datetime.utcnow(),
+            content="Miss three",
+            next_metric_update=datetime.utcnow() - timedelta(minutes=1),
+            metric_scan_miss_count=2,
+        )
+
+        def fake_smart_fetch(_cookies_raw, post_id, **_kwargs):
+            return direct_post_metrics.DirectPostMetric(
+                post_id=post_id,
+                source_url="https://facebook.com",
+                is_not_found=True,
+                fetch_method="unit/not-found",
+            )
+
+        monkeypatch.setattr("backend.scraper.facebook_service.direct_post_metrics.smart_fetch", fake_smart_fetch)
+
+        result = FacebookScraperService.refresh_target_post_metrics_direct(
+            db,
+            source,
+            target_post_ids=["direct-miss-3"],
+        )
+        refreshed = PostCRUD.get_by_id(db, post.id)
+
+        assert result["stop_reason"] == "partial_miss"
+        assert result["failed"] == 1
+        assert result["deleted"] == 1
+        assert result["deleted_post_refs"] == ["direct-miss-3"]
+        assert refreshed.metric_scan_miss_count == 3
+        assert refreshed.is_tracked is False
+        assert refreshed.is_deleted is True
+        assert refreshed.metric_tier == "expired"
+        assert refreshed.next_metric_update is None
+    finally:
+        db.close()
 
 
 def test_refresh_target_post_metrics_only_updates_target_posts(monkeypatch):

@@ -18,6 +18,7 @@ BOOTSTRAP_MINUTES = 15
 RETRY_MINUTES = 15
 COLD_RECHECK_MINUTES = 120
 MISS_RETRY_MINUTES = (15, 30, 60)
+MAX_METRIC_SCAN_MISSES = 3
 MIN_SOURCE_BASELINE_POSTS = 10
 SOURCE_BASELINE_DAYS = 7
 HOT_VELOCITY_THRESHOLD = 100.0
@@ -83,6 +84,13 @@ def _tracking_expired(post: Post, now: datetime) -> bool:
 def expire_post(post: Post) -> None:
     post.metric_tier = EXPIRED
     post.is_tracked = False
+    post.next_metric_update = None
+
+
+def delete_missed_post(post: Post) -> None:
+    post.is_tracked = False
+    post.is_deleted = True
+    post.metric_tier = EXPIRED
     post.next_metric_update = None
 
 
@@ -213,25 +221,30 @@ def handle_max_page_misses(
     source_id: int,
     facebook_post_ids: Iterable[str],
     now: Optional[datetime] = None,
-) -> None:
+) -> list[str]:
     post_ids = {str(post_id) for post_id in facebook_post_ids if post_id}
     if not post_ids:
-        return
+        return []
     posts = db.query(Post).filter(
         Post.source_id == source_id,
         Post.facebook_post_id.in_(post_ids),
         Post.is_tracked.is_(True),
     ).all()
     now = now or datetime.utcnow()
+    deleted_post_ids: list[str] = []
     for post in posts:
         post.metric_scan_miss_count = (post.metric_scan_miss_count or 0) + 1
-        if _tracking_expired(post, now):
+        if post.metric_scan_miss_count >= MAX_METRIC_SCAN_MISSES:
+            delete_missed_post(post)
+            deleted_post_ids.append(str(post.facebook_post_id or post.id))
+        elif _tracking_expired(post, now):
             expire_post(post)
         else:
             if post.metric_tier not in {BOOTSTRAP, HOT, WARM, COLD}:
                 post.metric_tier = COLD
             post.next_metric_update = _miss_retry_at(post, now)
     db.commit()
+    return deleted_post_ids
 
 
 def recover_recent_expired_metric_misses(

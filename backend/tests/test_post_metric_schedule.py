@@ -182,40 +182,46 @@ def test_post_api_schema_exposes_metric_schedule_fields():
         db.close()
 
 
-def test_four_max_page_misses_keep_recent_post_tracked_with_backoff():
+def test_third_max_page_miss_soft_deletes_recent_post():
     db = SessionLocal()
     try:
         base = datetime.utcnow().replace(microsecond=0)
         post = _post(db, "missed-post", base - timedelta(minutes=30))
         PostCRUD.update(db, post.id, metric_tier=COLD)
 
-        handle_max_page_misses(db, post.source_id, [post.facebook_post_id], now=base)
+        first_deleted_refs = handle_max_page_misses(db, post.source_id, [post.facebook_post_id], now=base)
         once = PostCRUD.get_by_id(db, post.id)
+        assert first_deleted_refs == []
         assert once.metric_tier == COLD
         assert once.metric_scan_miss_count == 1
         assert once.is_tracked is True
         assert once.next_metric_update == base + timedelta(minutes=15)
 
-        handle_max_page_misses(db, post.source_id, [post.facebook_post_id], now=base)
+        second_deleted_refs = handle_max_page_misses(db, post.source_id, [post.facebook_post_id], now=base)
         twice = PostCRUD.get_by_id(db, post.id)
+        assert second_deleted_refs == []
         assert twice.metric_tier == COLD
         assert twice.metric_scan_miss_count == 2
         assert twice.is_tracked is True
         assert twice.next_metric_update == base + timedelta(minutes=30)
 
-        handle_max_page_misses(db, post.source_id, [post.facebook_post_id], now=base)
+        third_deleted_refs = handle_max_page_misses(db, post.source_id, [post.facebook_post_id], now=base)
         third = PostCRUD.get_by_id(db, post.id)
-        assert third.metric_tier == COLD
+        assert third_deleted_refs == ["missed-post"]
+        assert third.metric_tier == EXPIRED
         assert third.metric_scan_miss_count == 3
-        assert third.is_tracked is True
-        assert third.next_metric_update == base + timedelta(minutes=60)
+        assert third.is_tracked is False
+        assert third.is_deleted is True
+        assert third.next_metric_update is None
 
-        handle_max_page_misses(db, post.source_id, [post.facebook_post_id], now=base)
+        fourth_deleted_refs = handle_max_page_misses(db, post.source_id, [post.facebook_post_id], now=base)
         fourth = PostCRUD.get_by_id(db, post.id)
-        assert fourth.metric_tier == COLD
-        assert fourth.metric_scan_miss_count == 4
-        assert fourth.is_tracked is True
-        assert fourth.next_metric_update == base + timedelta(minutes=60)
+        assert fourth_deleted_refs == []
+        assert fourth.metric_tier == EXPIRED
+        assert fourth.metric_scan_miss_count == 3
+        assert fourth.is_tracked is False
+        assert fourth.is_deleted is True
+        assert fourth.next_metric_update is None
     finally:
         db.close()
 

@@ -304,11 +304,8 @@ async def update_recent_post_metrics():
         recent_posts = PostCRUD.get_due_metric_updates(db, hours=24, limit=settings.SCRAPER_POSTS_BATCH_LIMIT)
         source_ids = list({post.source_id for post in recent_posts})
         target_posts_by_source = {}
-        source_has_metric_misses = {}
         for post in recent_posts:
             target_posts_by_source.setdefault(post.source_id, []).append(str(post.facebook_post_id))
-            if (post.metric_scan_miss_count or 0) >= 1:
-                source_has_metric_misses[post.source_id] = True
         logger.info(
             "Bắt đầu update_recent_post_metrics: recent_posts_count=%s candidate_source_count=%s untracked_old_posts=%s",
             len(recent_posts),
@@ -329,11 +326,6 @@ async def update_recent_post_metrics():
             pipeline_job_id = None
             target_post_ids = target_posts_by_source.get(source_id, [])
             metric_max_pages = settings.METRIC_REFRESH_MAX_PAGES
-            if source_has_metric_misses.get(source_id):
-                metric_max_pages = min(
-                    settings.SCRAPER_MAX_24H_PAGES,
-                    settings.METRIC_REFRESH_MAX_PAGES * 2,
-                )
             try:
                 source = SourceCRUD.get_by_id(job_db, source_id)
                 if not source or not source.is_active:
@@ -384,23 +376,31 @@ async def update_recent_post_metrics():
                     metric_max_pages,
                     settings.METRIC_REFRESH_USE_24H_WINDOW,
                 )
-                result = FacebookScraperService.refresh_target_post_metrics(
-                    job_db,
-                    source,
-                    target_post_ids=target_post_ids,
-                    max_pages=metric_max_pages,
-                    stop_when_all_found=True,
-                    last_24_hours_only=settings.METRIC_REFRESH_USE_24H_WINDOW,
-                    download_media=settings.METRIC_REFRESH_DOWNLOAD_MEDIA,
-                    job_id=pipeline_job_id,
-                )
-                if result.get("stop_reason") == "max_pages_reached":
-                    matched_ids = set(result.get("matched_target_ids", []))
-                    handle_max_page_misses(
+                if settings.DIRECT_METRIC_FETCH_ENABLED:
+                    result = FacebookScraperService.refresh_target_post_metrics_direct(
                         job_db,
-                        source.id,
-                        [post_id for post_id in target_post_ids if post_id not in matched_ids],
+                        source,
+                        target_post_ids=target_post_ids,
+                        job_id=pipeline_job_id,
                     )
+                else:
+                    result = FacebookScraperService.refresh_target_post_metrics(
+                        job_db,
+                        source,
+                        target_post_ids=target_post_ids,
+                        max_pages=metric_max_pages,
+                        stop_when_all_found=True,
+                        last_24_hours_only=settings.METRIC_REFRESH_USE_24H_WINDOW,
+                        download_media=settings.METRIC_REFRESH_DOWNLOAD_MEDIA,
+                        job_id=pipeline_job_id,
+                    )
+                    if result.get("stop_reason") == "max_pages_reached":
+                        matched_ids = set(result.get("matched_target_ids", []))
+                        handle_max_page_misses(
+                            job_db,
+                            source.id,
+                            [post_id for post_id in target_post_ids if post_id not in matched_ids],
+                        )
                 updated_post_refs = result.get("updated_post_refs", [])
                 source_duration = round(time.time() - source_started_at, 3)
                 fetched = result["fetched"]

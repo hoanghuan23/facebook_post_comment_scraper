@@ -13,7 +13,12 @@ from sqlalchemy.orm import Session
 from backend.database.crud import CommentCRUD, FacebookSessionCRUD, LogCRUD, PostCRUD, PostMetricCRUD, SourceCRUD
 from backend.config import settings
 from backend.database.models import Source, SourceType
-from backend.services.post_metric_schedule_service import apply_metric_snapshot_schedule, handle_max_page_misses
+from backend.scraper import direct_post_metrics
+from backend.services.post_metric_schedule_service import (
+    apply_metric_snapshot_schedule,
+    defer_metric_updates,
+    handle_max_page_misses,
+)
 import comment_scraper
 import group_post_scraper_v2 as group_scraper
 import post_scraper as timeline_scraper
@@ -862,6 +867,138 @@ class FacebookScraperService:
         }
 
     @classmethod
+    def refresh_target_post_metrics_direct(
+        cls,
+        db: Session,
+        source: Source,
+        target_post_ids: List[str],
+        job_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        target_ids = list(dict.fromkeys(str(post_id) for post_id in target_post_ids if post_id))
+        if not target_ids:
+            return {
+                "fetched": 0,
+                "updated": 0,
+                "skipped": 0,
+                "failed": 0,
+                "deleted": 0,
+                "matched_target_count": 0,
+                "matched_target_ids": [],
+                "target_posts_count": 0,
+                "pages_scanned": 0,
+                "stop_reason": "empty_targets",
+                "updated_post_refs": [],
+                "deleted_post_refs": [],
+            }
+
+        active_session = FacebookSessionCRUD.get_active_by_user_id(db, source.user_id)
+        cookies_raw = active_session.fb_cookies if active_session and active_session.fb_cookies else ""
+
+        fetched = 0
+        updated = 0
+        skipped = 0
+        failed = 0
+        deleted = 0
+        matched_targets: set[str] = set()
+        updated_post_refs: List[str] = []
+        deleted_post_refs: List[str] = []
+        stop_reason = "completed"
+
+        for index, target_post_id in enumerate(target_ids):
+            db_post = PostCRUD.get_by_source_and_facebook_post_id(db, source.id, target_post_id)
+            if not db_post:
+                skipped += 1
+                continue
+
+            group_id = direct_post_metrics.extract_group_id(db_post.facebook_url)
+            if not group_id and source.source_type == SourceType.GROUP:
+                group_id = str(source.facebook_id or "").strip() or None
+
+            result = direct_post_metrics.smart_fetch(
+                cookies_raw,
+                str(db_post.facebook_post_id),
+                original_url=db_post.facebook_url,
+                group_id=group_id,
+                timeout=settings.DIRECT_METRIC_TIMEOUT,
+                jitter_min_seconds=settings.DIRECT_METRIC_JITTER_MIN_SECONDS,
+                jitter_max_seconds=settings.DIRECT_METRIC_JITTER_MAX_SECONDS,
+                dump_html=settings.DIRECT_METRIC_DUMP_HTML,
+            )
+            fetched += 1
+
+            if result.is_rate_limited or result.is_login_required:
+                failed += 1
+                stop_reason = "rate_limited" if result.is_rate_limited else "login_required"
+                defer_metric_updates(db, source.id, target_ids[index:])
+                logger.warning(
+                    "Direct metric refresh stopped: source_id=%s post_id=%s reason=%s method=%s",
+                    source.id,
+                    target_post_id,
+                    stop_reason,
+                    result.fetch_method,
+                )
+                break
+
+            if result.is_not_found or result.error_message or not result.has_metric_signal:
+                failed += 1
+                deleted_refs = handle_max_page_misses(db, source.id, [target_post_id])
+                deleted += len(deleted_refs)
+                deleted_post_refs.extend(deleted_refs)
+                logger.info(
+                    "Direct metric refresh missed target: source_id=%s post_id=%s not_found=%s has_metric_signal=%s error=%s method=%s",
+                    source.id,
+                    target_post_id,
+                    result.is_not_found,
+                    result.has_metric_signal,
+                    result.error_message,
+                    result.fetch_method,
+                )
+                continue
+
+            normalized_post = {
+                "likes_count": result.likes,
+                "shares_count": result.shares,
+                "comments_count": result.comments,
+            }
+            if cls._save_metric_snapshot_if_changed(db, db_post, normalized_post, job_id=job_id):
+                updated += 1
+                matched_targets.add(target_post_id)
+                updated_post_refs.append(str(db_post.facebook_post_id or db_post.id))
+
+            logger.info(
+                "Direct metric refreshed: source_id=%s post_id=%s likes=%s comments=%s shares=%s method=%s",
+                source.id,
+                target_post_id,
+                result.likes,
+                result.comments,
+                result.shares,
+                result.fetch_method,
+            )
+
+        if stop_reason == "completed":
+            if len(matched_targets) == len(target_ids):
+                stop_reason = "all_targets_found"
+            elif failed:
+                stop_reason = "partial_miss"
+            else:
+                stop_reason = "completed"
+
+        return {
+            "fetched": fetched,
+            "updated": updated,
+            "skipped": skipped,
+            "failed": failed,
+            "deleted": deleted,
+            "matched_target_count": len(matched_targets),
+            "matched_target_ids": sorted(matched_targets),
+            "target_posts_count": len(target_ids),
+            "pages_scanned": 0,
+            "stop_reason": stop_reason,
+            "updated_post_refs": updated_post_refs,
+            "deleted_post_refs": deleted_post_refs,
+        }
+
+    @classmethod
     def refresh_target_post_metrics(
         cls,
         db: Session,
@@ -983,11 +1120,12 @@ class FacebookScraperService:
             and stop_reason == "source_exhausted"
         )
         if can_handle_missing_targets:
-            handle_max_page_misses(
+            deleted_post_refs = handle_max_page_misses(
                 db,
                 source.id,
                 sorted(target_set - matched_targets),
             )
+            deleted_posts = len(deleted_post_refs)
 
         pages_scanned = (scanned_count + post_per_page - 1) // post_per_page if scanned_count > 0 else 0
         return {
