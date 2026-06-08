@@ -283,7 +283,14 @@ def parse_targeted_comet_metrics(html: str, post_id: str) -> tuple[bool, int, in
     anchor_patterns = [
         (rf'"subscription_target_id"\s*:\s*"{re.escape(post_id)}"', 100),
         (rf'"post_id"\s*:\s*"{re.escape(post_id)}"', 80),
+        (rf'\\"post_id\\"\s*:\s*\\"{re.escape(post_id)}\\"', 80),
         (rf'"share_fbid"\s*:\s*"{re.escape(post_id)}"', 60),
+        (rf'"video_id"\s*:\s*"{re.escape(post_id)}"', 90),
+        (rf'\\"video_id\\"\s*:\s*\\"{re.escape(post_id)}\\"', 90),
+        (rf'\\"top_level_post_id\\"\s*:\s*\\"{re.escape(post_id)}\\"', 120),
+        (rf'"root_video_id"\s*:\s*"{re.escape(post_id)}"', 100),
+        (rf'"initial_node_id"\s*:\s*"{re.escape(post_id)}"', 100),
+        (rf'"shareable_url"\s*:\s*"https:\\/\\/www\.facebook\.com\\/reel\\/{re.escape(post_id)}', 100),
         (re.escape(feedback_id), 50),
         (rf'groups\\?/[^"\\]+\\?/posts\\?/{re.escape(post_id)}', 40),
         (rf'groups\\?/[^"\\]+\\?/permalink\\?/{re.escape(post_id)}', 40),
@@ -307,8 +314,15 @@ def parse_targeted_comet_metrics(html: str, post_id: str) -> tuple[bool, int, in
         end = min(len(html), position + 30000)
         chunk = html[start:end]
 
-        found_likes, likes = first_count(r'"reaction_count"\s*:\s*\{"count"\s*:\s*(\d+)', chunk)
-        if not found_likes:
+        like_matches = [
+            first_count(r'"reaction_count"\s*:\s*\{"count"\s*:\s*(\d+)', chunk),
+            first_count(r'"unified_reactors"\s*:\s*\{"count"\s*:\s*(\d+)', chunk),
+            first_count(r'"reactors"\s*:\s*\{"count"\s*:\s*(\d+)', chunk),
+            first_count(r'"likers"\s*:\s*\{"count"\s*:\s*(\d+)', chunk),
+        ]
+        found_likes = any(found for found, _ in like_matches)
+        likes = max(value for _, value in like_matches)
+        if likes == 0:
             top_reaction_totals = []
             for match in re.finditer(
                 r'"top_reactions"\s*:\s*\{"edges"\s*:\s*\[(.*?)\]\}',
@@ -322,20 +336,30 @@ def parse_targeted_comet_metrics(html: str, post_id: str) -> tuple[bool, int, in
                 found_likes = True
                 likes = max(top_reaction_totals)
 
-        found_comment_instance, comments_instance = first_count(
-            r'"comment_rendering_instance"\s*:\s*\{"comments"\s*:\s*\{"total_count"\s*:\s*(\d+)',
-            chunk,
-        )
-        found_comments, comments = first_count(
-            r'"comments"\s*:\s*\{[^{}]{0,500}"total_count"\s*:\s*(\d+)',
-            chunk,
-        )
-        comments = max(comments_instance, comments)
-        found_comments = found_comment_instance or found_comments
+        comment_matches = [
+            first_count(
+                r'"comment_rendering_instance"\s*:\s*\{"comments"\s*:\s*\{"total_count"\s*:\s*(\d+)',
+                chunk,
+            ),
+            first_count(r'"comments"\s*:\s*\{[^{}]{0,500}"total_count"\s*:\s*(\d+)', chunk),
+            first_count(r'"total_comment_count"\s*:\s*(\d+)', chunk),
+            first_count(r'\\"total_comment_count\\"\s*:\s*(\d+)', chunk),
+            first_count(r'"comment_count"\s*:\s*(\d+)', chunk),
+            first_count(r'\\"comment_count\\"\s*:\s*(\d+)', chunk),
+            first_count(r'"aggregated_comment_count"\s*:\s*(\d+)', chunk),
+            first_count(r'\\"aggregated_comment_count\\"\s*:\s*(\d+)', chunk),
+        ]
+        found_comments = any(found for found, _ in comment_matches)
+        comments = max(value for _, value in comment_matches)
 
-        found_shares, shares = first_count(r'"share_count"\s*:\s*\{"count"\s*:\s*(\d+)', chunk)
-        if not found_shares:
-            found_shares, shares = first_count(r'"i18n_share_count"\s*:\s*"([^"]+)"', chunk)
+        share_matches = [
+            first_count(r'"share_count"\s*:\s*\{"count"\s*:\s*(\d+)', chunk),
+            first_count(r'"share_count_reduced"\s*:\s*"([^"]+)"', chunk),
+            first_count(r'\\"share_count_reduced\\"\s*:\s*\\"([^"\\]+)', chunk),
+            first_count(r'"i18n_share_count"\s*:\s*"([^"]+)"', chunk),
+        ]
+        found_shares = any(found for found, _ in share_matches)
+        shares = max(value for _, value in share_matches)
 
         has_signal = found_likes or found_comments or found_shares
         if not has_signal:
@@ -346,16 +370,35 @@ def parse_targeted_comet_metrics(html: str, post_id: str) -> tuple[bool, int, in
             score += 40
         if f'"subscription_target_id":"{post_id}"' in chunk:
             score += 40
+        if f'\\"top_level_post_id\\":\\"{post_id}\\"' in chunk:
+            score += 80
+        if f'\\"video_id\\":\\"{post_id}\\"' in chunk or f'"video_id":"{post_id}"' in chunk:
+            score += 40
+        if "fb_reel_react_button" in chunk:
+            score += 30
         if "comment_id=" in chunk or '"comment_id"' in chunk:
             score -= 20
 
         if score > best_score:
+            snippet_start = -1
+            for needle in (
+                '"comet_ufi_summary_and_actions_renderer"',
+                f'"post_id":"{post_id}"',
+                '\\"top_level_post_id\\":\\"' + post_id + '\\"',
+                "fb_reel_react_button",
+            ):
+                snippet_start = chunk.find(needle)
+                if snippet_start >= 0:
+                    break
+            if snippet_start < 0:
+                snippet_start = 0
+            snippet = re.sub(r"\s+", " ", chunk[snippet_start : snippet_start + 500])
             best = (
                 True,
                 likes,
                 comments,
                 shares,
-                _snippet(chunk, '"comet_ufi_summary_and_actions_renderer"', f'"post_id":"{post_id}"'),
+                snippet,
             )
             best_score = score
 

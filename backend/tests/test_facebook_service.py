@@ -2431,6 +2431,34 @@ def test_direct_post_metrics_parser_reads_targeted_comet_counts():
     assert result.shares == 2
 
 
+def test_direct_post_metrics_parser_reads_reel_comment_and_share_counts():
+    html = r"""
+    <html><head><title>Reel</title></head><body>
+    <script>
+    {"shareable_url":"https:\/\/www.facebook.com\/reel\/reel-target-1",
+     "fb_reel_react_button":true,
+     \"top_level_post_id\":\"reel-target-1\",
+     \"video_id\":\"reel-target-1\",
+     "unified_reactors":{"count":21},
+     \"total_comment_count\":7,
+     \"share_count_reduced\":\"3\"}
+    </script>
+    </body></html>
+    """
+
+    result = direct_post_metrics.parse_html_metrics(
+        html,
+        "reel-target-1",
+        "https://www.facebook.com/reel/reel-target-1",
+        "unit",
+    )
+
+    assert result.has_metric_signal is True
+    assert result.likes == 21
+    assert result.comments == 7
+    assert result.shares == 3
+
+
 def test_direct_post_metrics_parser_accepts_targeted_zero_counts():
     html = """
     <html><head><title>Zero Post</title></head><body>
