@@ -6,11 +6,11 @@ services:
     image: postgres:16-alpine
     container_name: facebook-scraper-db
     environment:
-      POSTGRES_USER: scraper
-      POSTGRES_PASSWORD: scraper_password
-      POSTGRES_DB: facebook_scraper
+      POSTGRES_USER: ${POSTGRES_USER:-scraper}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-scraper_password}
+      POSTGRES_DB: ${POSTGRES_DB:-facebook_scraper}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -35,12 +35,12 @@ services:
   # FastAPI Backend
   api:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
     container_name: facebook-scraper-api
     environment:
       ENV: production
-      DATABASE_URL: postgresql://scraper:scraper_password@postgres:5432/facebook_scraper
+      DATABASE_URL: ${API_DATABASE_URL:-postgresql://scraper:scraper_password@postgres:5432/facebook_scraper}
       API_HOST: 0.0.0.0
       API_PORT: 8000
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production}

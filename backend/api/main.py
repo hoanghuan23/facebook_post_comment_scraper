@@ -52,7 +52,7 @@ async def lifespan(app: FastAPI):
             logger.error(f"Scheduler startup failed: {e}")
     
     logger.info(f"API running at {settings.API_BASE_URL}")
-    logger.info(f"Database: {settings.DATABASE_URL}")
+    logger.info(f"Database: {engine.url.render_as_string(hide_password=True)}")
     if sqlite_db_path:
         logger.info(f"SQLite file: {sqlite_db_path.resolve()}")
     logger.info(f"Debug mode: {settings.DEBUG}")
