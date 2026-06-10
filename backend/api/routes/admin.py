@@ -227,6 +227,12 @@ async def run_task_manually(
                 raise HTTPException(status_code=404, detail="Source not found")
 
             if task_name == "scrape_posts":
+                if PipelineJobCRUD.has_running_scrape_job(db, source_id):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="A scrape job is already running for this source",
+                    )
+
                 pipeline_job = PipelineJobCRUD.create_job(
                     db=db,
                     job_type="scraper_job",

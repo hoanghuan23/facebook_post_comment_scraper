@@ -5,6 +5,7 @@ import sqlite3
 
 from fastapi import BackgroundTasks
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from backend.database.crud import CommentCRUD, FacebookSessionCRUD, PipelineJobCRUD, PostCRUD, PostMetricCRUD, SourceCRUD, UserCRUD
 from backend.database.db import SessionLocal, engine
 from backend.database.models import Base, PostMetric, ScrapeJob, ScraperLog
@@ -1784,6 +1785,74 @@ def test_update_recent_post_metrics_uses_direct_refresh_for_sources_with_missed_
     asyncio.run(update_recent_post_metrics())
 
     assert calls == [["metrics-missed-depth-post"]]
+
+
+def test_post_upsert_recovers_when_concurrent_insert_wins(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="race-user", email="race@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="race-group",
+            facebook_url="https://www.facebook.com/groups/race-group",
+            source_name="Race Group",
+        )
+        existing = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="race-post",
+            facebook_url="https://facebook.com/posts/race-post-old",
+            posted_at=datetime(2026, 1, 1, 8, 0, 0),
+            content="Old",
+            media_count=0,
+            has_images=False,
+            has_videos=False,
+        )
+        existing.is_tracked = False
+        existing.is_deleted = True
+        db.commit()
+
+        def fake_create(*args, **kwargs):
+            raise IntegrityError("INSERT INTO posts", {}, Exception("duplicate"))
+
+        monkeypatch.setattr("backend.database.crud.PostCRUD.create", staticmethod(fake_create))
+
+        calls = {"count": 0}
+
+        def fake_get_by_facebook_post_id(session, post_id):
+            calls["count"] += 1
+            return None if calls["count"] == 1 else existing
+
+        monkeypatch.setattr(
+            "backend.database.crud.PostCRUD.get_by_facebook_post_id",
+            staticmethod(fake_get_by_facebook_post_id),
+        )
+
+        db_post, created = PostCRUD.upsert_for_source(
+            db,
+            source_id=source.id,
+            facebook_post_id="race-post",
+            facebook_url="https://facebook.com/posts/race-post-new",
+            posted_at=datetime(2026, 1, 1, 9, 0, 0),
+            content="New",
+            media_count=2,
+            has_images=True,
+            has_videos=False,
+        )
+
+        assert created is False
+        assert db_post.id == existing.id
+        assert db_post.facebook_url == "https://facebook.com/posts/race-post-new"
+        assert db_post.content == "New"
+        assert db_post.media_count == 2
+        assert db_post.has_images is True
+        assert db_post.is_tracked is True
+        assert db_post.is_deleted is False
+        assert db.query(PostMetric).count() == 0
+    finally:
+        db.close()
 
 
 def test_periodic_scrape_new_posts_uses_latest_db_post_as_cutoff(monkeypatch):
@@ -4229,6 +4298,53 @@ def test_periodic_scrape_new_posts_skips_source_with_running_scrape_job(monkeypa
     asyncio.run(periodic_scrape_new_posts())
 
     assert calls == []
+
+
+def test_periodic_scrape_new_posts_ignores_stale_running_scrape_job(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="periodic-stale-user", email="periodic-stale@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="periodic-stale-group",
+            facebook_url="https://www.facebook.com/groups/periodic-stale-group",
+            source_name="Periodic Stale Group",
+        )
+        PipelineJobCRUD.create_job(
+            db,
+            job_type="scrape_24h",
+            source_id=source.id,
+            status="running",
+            started_at=datetime.utcnow() - timedelta(hours=3),
+        )
+        source_id = source.id
+    finally:
+        db.close()
+
+    calls = []
+
+    def fake_scrape_source(session, passed_source_id, **kwargs):
+        calls.append((passed_source_id, kwargs))
+        return SimpleNamespace(
+            total_fetched=0,
+            created_posts=0,
+            updated_posts=0,
+            skipped_posts=0,
+            filtered_by_cutoff=0,
+        )
+
+    monkeypatch.setattr(
+        "backend.scheduler.periodic_tasks.FacebookScraperService.scrape_source",
+        fake_scrape_source,
+    )
+
+    import asyncio
+    asyncio.run(periodic_scrape_new_posts())
+
+    assert len(calls) == 1
+    assert calls[0][0] == source_id
 
 
 def test_periodic_scrape_new_posts_includes_due_metric_targets_for_same_source(monkeypatch):

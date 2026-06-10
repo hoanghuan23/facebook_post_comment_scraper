@@ -1,6 +1,7 @@
 # CRUD Operations for Database Models
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, desc, func
+from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
 import json
 from typing import Dict, List, Optional, Tuple
@@ -297,6 +298,19 @@ class PipelineJobCRUD:
         db.commit()
         db.refresh(job)
         return job
+
+    @staticmethod
+    def has_running_scrape_job(db: Session, source_id: int) -> bool:
+        """Return whether a source has a recent active scrape job."""
+        stale_cutoff = datetime.utcnow() - timedelta(minutes=20)
+        return db.query(models.PipelineJob.id).filter(
+            and_(
+                models.PipelineJob.source_id == source_id,
+                models.PipelineJob.status == "running",
+                models.PipelineJob.job_type.in_(("scrape_24h", "scraper_job")),
+                models.PipelineJob.started_at >= stale_cutoff,
+            )
+        ).first() is not None
 
 
 ScrapeJobCRUD = PipelineJobCRUD
@@ -707,6 +721,28 @@ class PostCRUD:
         return post
 
     @staticmethod
+    def _refresh_existing_from_scrape(
+        db: Session,
+        post: models.Post,
+        facebook_url: str,
+        posted_at: datetime,
+        content: str = None,
+        **kwargs,
+    ) -> models.Post:
+        """Refresh mutable post fields from a scrape result."""
+        post.facebook_url = facebook_url
+        post.posted_at = posted_at
+        post.content = content
+        post.media_count = kwargs.get('media_count', post.media_count)
+        post.has_images = kwargs.get('has_images', post.has_images)
+        post.has_videos = kwargs.get('has_videos', post.has_videos)
+        post.is_tracked = True
+        post.is_deleted = False
+        db.commit()
+        db.refresh(post)
+        return post
+
+    @staticmethod
     def upsert_for_source(
         db: Session,
         source_id: int,
@@ -717,29 +753,40 @@ class PostCRUD:
         **kwargs,
     ) -> Tuple[models.Post, bool]:
         """Create post if missing, otherwise refresh its latest core fields."""
-        existing_post = PostCRUD.get_by_source_and_facebook_post_id(db, source_id, facebook_post_id)
+        existing_post = PostCRUD.get_by_facebook_post_id(db, facebook_post_id)
         if existing_post:
-            existing_post.facebook_url = facebook_url
-            existing_post.posted_at = posted_at
-            existing_post.content = content
-            existing_post.media_count = kwargs.get('media_count', existing_post.media_count)
-            existing_post.has_images = kwargs.get('has_images', existing_post.has_images)
-            existing_post.has_videos = kwargs.get('has_videos', existing_post.has_videos)
-            existing_post.is_tracked = True
-            existing_post.is_deleted = False
-            db.commit()
-            db.refresh(existing_post)
-            return existing_post, False
+            return PostCRUD._refresh_existing_from_scrape(
+                db,
+                existing_post,
+                facebook_url=facebook_url,
+                posted_at=posted_at,
+                content=content,
+                **kwargs,
+            ), False
 
-        created_post = PostCRUD.create(
-            db=db,
-            source_id=source_id,
-            facebook_post_id=facebook_post_id,
-            facebook_url=facebook_url,
-            posted_at=posted_at,
-            content=content,
-            **kwargs,
-        )
+        try:
+            created_post = PostCRUD.create(
+                db=db,
+                source_id=source_id,
+                facebook_post_id=facebook_post_id,
+                facebook_url=facebook_url,
+                posted_at=posted_at,
+                content=content,
+                **kwargs,
+            )
+        except IntegrityError:
+            db.rollback()
+            raced_post = PostCRUD.get_by_facebook_post_id(db, facebook_post_id)
+            if not raced_post:
+                raise
+            return PostCRUD._refresh_existing_from_scrape(
+                db,
+                raced_post,
+                facebook_url=facebook_url,
+                posted_at=posted_at,
+                content=content,
+                **kwargs,
+            ), False
         return created_post, True
     
     @staticmethod

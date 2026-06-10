@@ -158,6 +158,16 @@ async def periodic_scrape_new_posts():
                     schedule_next_scrape(source_id, job_db)
                     return {"status": "skipped"}
 
+                if PipelineJobCRUD.has_running_scrape_job(job_db, source_id):
+                    logger.info(
+                        "Skip periodic_scrape_new_posts: thread=%s source=%s progress=%s/%s reason=running_scrape_job",
+                        thread_label,
+                        source_label,
+                        progress_index,
+                        total_due_sources,
+                    )
+                    return {"status": "skipped"}
+
                 latest_posted_at = job.get("latest_posted_at")
                 pipeline_job = PipelineJobCRUD.create_job(
                     db=job_db,
