@@ -105,8 +105,7 @@ CREATE TABLE posts (
         cold_check_count INTEGER NOT NULL DEFAULT 0,
         metric_scan_miss_count INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (id), 
-        FOREIGN KEY(source_id) REFERENCES sources (id),
-        CONSTRAINT ck_posts_metric_tier CHECK (metric_tier IN ('bootstrap', 'hot', 'warm', 'cold', 'expired'))
+        FOREIGN KEY(source_id) REFERENCES sources (id)
 );
 CREATE INDEX idx_post_last_update ON posts (last_metric_update);
 CREATE INDEX idx_post_source ON posts (source_id);
@@ -138,14 +137,13 @@ CREATE INDEX idx_analytics_source_date ON analytics_cache (source_id, date);
 CREATE TABLE post_metrics (
         id INTEGER NOT NULL, 
         post_id INTEGER NOT NULL, 
-        job_id INTEGER,
         likes_count INTEGER, 
         shares_count INTEGER, 
         comments_count INTEGER, 
-        recorded_at DATETIME, 
+        recorded_at DATETIME,
+        job_id INTEGER REFERENCES pipeline_jobs(id) ON DELETE SET NULL, 
         PRIMARY KEY (id), 
-        FOREIGN KEY(post_id) REFERENCES posts (id),
-        FOREIGN KEY(job_id) REFERENCES pipeline_jobs (id) ON DELETE SET NULL
+        FOREIGN KEY(post_id) REFERENCES posts (id)
 );
 CREATE INDEX ix_post_metrics_recorded_at ON post_metrics (recorded_at);
 CREATE INDEX idx_metric_post_date ON post_metrics (post_id, recorded_at);
@@ -198,8 +196,8 @@ CREATE TABLE pipeline_jobs (
     finished_at     DATETIME
 );
 
-CREATE INDEX idx_pipeline_jobs_source_time ON pipeline_jobs (source_id, started_at DESC);
-CREATE INDEX idx_pipeline_jobs_type_status ON pipeline_jobs (job_type, status, started_at DESC);
+CREATE INDEX idx_pipeline_jobs_source_time ON pipeline_jobs (source_id, started_at);
+CREATE INDEX idx_pipeline_jobs_type_status ON pipeline_jobs (job_type, status, started_at);
 
 -- bảng pipeline_logs lưu log chi tiết cho từng pipeline job để debug
 CREATE TABLE pipeline_logs (
