@@ -78,7 +78,7 @@ def calculate_tier(source_id: int, db: Session) -> dict:
                     SELECT CAST(COUNT(*) AS FLOAT) / 7
                     FROM posts
                     WHERE source_id = :source_id
-                      AND posted_at >= DATETIME('now', '-7 days')
+                      AND posted_at >= NOW() - INTERVAL '7 days'
                 )                          AS avg_posts,
                 COUNT(*)                   AS data_days,
                 AVG(
@@ -89,7 +89,7 @@ def calculate_tier(source_id: int, db: Session) -> dict:
                 )                          AS avg_likes_per_post
             FROM analytics_cache
             WHERE source_id = :source_id
-              AND date >= DATE('now', '-7 days')
+              AND date >= CURRENT_DATE - INTERVAL '7 days'
             """
         ),
         {"source_id": source_id},
