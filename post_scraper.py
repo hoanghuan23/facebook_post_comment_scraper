@@ -736,14 +736,19 @@ def fetch_posts(
             if not isinstance(block, dict):
                 continue
             
-            node = block.get("node", {})
+            node = block.get("node") or {}
+            if not isinstance(node, dict):
+                continue
             node_typename = node.get("__typename")
             
             # Check if this block has timeline edges
             if "timeline_list_feed_units" in node:
                 timeline_block = block
-                edges = node["timeline_list_feed_units"].get("edges", [])
+                timeline = node.get("timeline_list_feed_units") or {}
+                edges = timeline.get("edges", []) if isinstance(timeline, dict) else []
                 for edge in edges:
+                    if not isinstance(edge, dict):
+                        continue
                     edge_node = edge.get("node")
                     if edge_node and edge_node.get("__typename") == "Story":
                         story_nodes.append(edge_node)
@@ -754,9 +759,14 @@ def fetch_posts(
             
             # Check for Story nodes inside Group edges (edge case)
             elif node_typename == "Group":
-                edges = node.get('group_feed', {}).get('edges', [])
+                group_feed = node.get("group_feed") or {}
+                edges = group_feed.get("edges", []) if isinstance(group_feed, dict) else []
                 for edge in edges:
-                    edge_node = edge.get('node', {})
+                    if not isinstance(edge, dict):
+                        continue
+                    edge_node = edge.get('node') or {}
+                    if not isinstance(edge_node, dict):
+                        continue
                     if edge_node.get('__typename') == 'Story':
                         story_nodes.append(edge_node)
         
@@ -947,4 +957,3 @@ if __name__ == "__main__":
         json.dump(posts, f, ensure_ascii=False, indent=2)
 
     print(f"Da luu {len(posts)} post vao posts.json")
-

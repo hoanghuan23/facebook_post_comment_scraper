@@ -845,6 +845,47 @@ def test_timeline_fetch_posts_handles_standalone_story_without_timeline_page_inf
     assert [post["post_id"] for post in posts] == ["standalone-story-1"]
 
 
+def test_timeline_fetch_posts_skips_null_nodes(monkeypatch):
+    creation_time = int(datetime.utcnow().timestamp())
+    story = {
+        "__typename": "Story",
+        "post_id": "story-after-null-node",
+        "creation_time": creation_time,
+        "comet_sections": {
+            "content": {
+                "story": {
+                    "message": {"text": "Story after null node"},
+                    "actors": [{"name": "Null Node Page", "__typename": "Page"}],
+                }
+            }
+        },
+        "feedback": {"id": "feedback-story-after-null-node"},
+        "attachments": [],
+    }
+
+    class FakeResponse:
+        status_code = 200
+        text = "\n".join(
+            [
+                json.dumps({"data": {"node": None}}),
+                json.dumps({"data": {"node": story}}),
+            ]
+        )
+
+    monkeypatch.setattr(post_scraper, "PAGE_NAME", None)
+    monkeypatch.setattr(post_scraper, "WRITE_DEBUG_FILES", False)
+    monkeypatch.setattr(post_scraper, "retry_request", lambda *args, **kwargs: FakeResponse())
+
+    posts = post_scraper.fetch_posts(
+        limit=None,
+        last_24_hours_only=True,
+        download_media=False,
+        skip_existing_posts=False,
+    )
+
+    assert [post["post_id"] for post in posts] == ["story-after-null-node"]
+
+
 def test_timeline_fetch_posts_includes_video_stories_by_default(monkeypatch):
     creation_time = int(datetime.utcnow().timestamp())
     story = {
