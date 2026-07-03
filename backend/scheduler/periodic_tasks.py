@@ -91,18 +91,9 @@ async def periodic_scrape_new_posts():
 
         source_ids = [source.id for source in due_sources]
 
-        user_ids = [source.user_id for source in due_sources]
         latest_posted_at_map = PostCRUD.get_latest_posted_at_bulk(db, source_ids, tracked_only=False)
+        user_ids = [source.user_id for source in due_sources]
         active_sessions_map = FacebookSessionCRUD.get_active_sessions_bulk(db, user_ids)
-        due_metric_posts = PostCRUD.get_due_metric_updates(
-            db,
-            hours=24,
-            limit=settings.SCRAPER_POSTS_BATCH_LIMIT,
-            source_ids=source_ids,
-        )
-        due_metric_targets_by_source = {}
-        for post in due_metric_posts:
-            due_metric_targets_by_source.setdefault(post.source_id, []).append(str(post.facebook_post_id))
 
         source_jobs = [
             {
@@ -113,7 +104,6 @@ async def periodic_scrape_new_posts():
                 "is_accessible": source.is_accessible,
                 "permission_checked_at": source.permission_checked_at,
                 "latest_posted_at": latest_posted_at_map.get(source.id),
-                "metric_target_post_ids": due_metric_targets_by_source.get(source.id, []),
                 "active_session_id": (
                     active_sessions_map[source.user_id].id
                     if source.user_id in active_sessions_map
@@ -133,7 +123,6 @@ async def periodic_scrape_new_posts():
             source_label = _format_source_label(source_id, job.get("source_name"))
             thread_label = _current_thread_label()
             source_started_at = time.time()
-            metric_target_post_ids = job.get("metric_target_post_ids", [])
             try:
                 if job["source_type"] not in {SourceType.GROUP, SourceType.PAGE, SourceType.USER}:
                     logger.info(
@@ -179,13 +168,12 @@ async def periodic_scrape_new_posts():
                 )
                 pipeline_job_id = pipeline_job.id
                 logger.info(
-                    "Bắt đầu scrape source: thread=%s source=%s progress=%s/%s latest_cutoff=%s due_metric_targets=%s",
+                    "Bắt đầu scrape source: thread=%s source=%s progress=%s/%s latest_cutoff=%s",
                     thread_label,
                     source_label,
                     progress_index,
                     total_due_sources,
                     latest_posted_at.isoformat() if latest_posted_at else None,
-                    len(metric_target_post_ids),
                 )
                 result = FacebookScraperService.scrape_source(
                     job_db,
@@ -195,7 +183,6 @@ async def periodic_scrape_new_posts():
                     min_posted_at=latest_posted_at,
                     consecutive_old_limit=settings.SCRAPER_CONSECUTIVE_OLD_LIMIT,
                     job_id=pipeline_job_id,
-                    metric_target_post_ids=metric_target_post_ids,
                 )
                 PipelineJobCRUD.mark_done(
                     db=job_db,
@@ -207,7 +194,7 @@ async def periodic_scrape_new_posts():
                 schedule_next_scrape(source_id, job_db)
                 source_duration = round(time.time() - source_started_at, 3)
                 logger.info(
-                    "Kết thúc scrape source: thread=%s source=%s progress=%s/%s fetched=%s created_posts=%s skipped_posts=%s filtered_by_cutoff=%s matched_metric_targets=%s duration_seconds=%s",
+                    "Kết thúc scrape source: thread=%s source=%s progress=%s/%s fetched=%s created_posts=%s skipped_posts=%s filtered_by_cutoff=%s duration_seconds=%s",
                     thread_label,
                     source_label,
                     progress_index,
@@ -216,7 +203,6 @@ async def periodic_scrape_new_posts():
                     result.created_posts,
                     result.skipped_posts,
                     result.filtered_by_cutoff,
-                    len(getattr(result, "matched_metric_target_ids", [])),
                     source_duration,
                 )
                 return {
@@ -707,4 +693,3 @@ async def health_check():
         )
     finally:
         db.close()
-

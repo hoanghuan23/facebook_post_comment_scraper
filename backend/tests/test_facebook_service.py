@@ -2020,7 +2020,7 @@ def test_periodic_scrape_new_posts_logs_source_name_and_summary(monkeypatch, cap
     assert "total_new_posts_created=1" in logs
 
 
-def test_scrape_source_combines_due_metric_targets_with_new_post_discovery(monkeypatch):
+def test_scrape_source_only_discovers_new_posts_and_keeps_metric_targets_separate(monkeypatch):
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="combined-scan", email="combined-scan@example.com", password="secret123")
@@ -2111,13 +2111,13 @@ def test_scrape_source_combines_due_metric_targets_with_new_post_discovery(monke
             source.id,
             last_24_hours_only=True,
             min_posted_at=latest_seen,
-            metric_target_post_ids=["due-target"],
         )
 
-        assert calls[0]["min_posted_at"] is None
+        assert calls[0]["min_posted_at"] == latest_seen
+        assert "target_post_ids" not in calls[0]
+        assert "stop_when_targets_found" not in calls[0]
         assert result.created_posts == 1
-        assert result.matched_metric_target_ids == ["due-target"]
-        assert len(PostMetricCRUD.get_by_post(db, target.id)) == 2
+        assert len(PostMetricCRUD.get_by_post(db, target.id)) == 1
         assert len(PostMetricCRUD.get_by_post(db, unrelated.id)) == 1
         assert PostCRUD.get_by_source_and_facebook_post_id(db, source.id, "brand-new") is not None
     finally:
@@ -4479,7 +4479,7 @@ def test_periodic_scrape_new_posts_ignores_stale_running_scrape_job(monkeypatch)
     assert calls[0][0] == source_id
 
 
-def test_periodic_scrape_new_posts_includes_due_metric_targets_for_same_source(monkeypatch):
+def test_periodic_scrape_new_posts_does_not_include_due_metric_targets(monkeypatch):
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="periodic-combined", email="periodic-combined@example.com", password="secret123")
@@ -4516,7 +4516,6 @@ def test_periodic_scrape_new_posts_includes_due_metric_targets_for_same_source(m
             updated_posts=1,
             skipped_posts=0,
             filtered_by_cutoff=0,
-            matched_metric_target_ids=["periodic-due-target"],
         )
 
     monkeypatch.setattr(
@@ -4531,7 +4530,7 @@ def test_periodic_scrape_new_posts_includes_due_metric_targets_for_same_source(m
     assert calls[0][0] == source_id
     assert calls[0][1]["last_24_hours_only"] is True
     assert calls[0][1]["min_posted_at"] == due_posted_at
-    assert calls[0][1]["metric_target_post_ids"] == ["periodic-due-target"]
+    assert "metric_target_post_ids" not in calls[0][1]
 
 
 def test_periodic_scrape_new_posts_sets_next_scrape_from_stored_tier(monkeypatch):
