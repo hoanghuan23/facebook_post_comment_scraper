@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 import json
+import logging
 import sqlite3
 
 from fastapi import BackgroundTasks
@@ -3399,6 +3400,96 @@ def test_create_source_enqueues_background_bootstrap_scrape(monkeypatch):
         db.close()
 
 
+def test_create_source_skips_existing_source_and_logs(monkeypatch, caplog):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="existing-source-user", email="existing-source@example.com", password="secret123")
+        SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="existing-group-1",
+            facebook_url="https://www.facebook.com/groups/existing-group-1",
+        )
+
+        monkeypatch.setattr(
+            "backend.api.routes.sources.FacebookURLParser.parse",
+            lambda _url: {
+                "is_valid": True,
+                "facebook_id": "existing-group-1",
+                "source_type": SimpleNamespace(value="group"),
+            },
+        )
+
+        source_data = SourceCreate(
+            source_type="group",
+            facebook_url="https://www.facebook.com/groups/existing-group-1",
+            check_access=False,
+        )
+        background_tasks = BackgroundTasks()
+        added_tasks = []
+        monkeypatch.setattr(background_tasks, "add_task", lambda *args, **kwargs: added_tasks.append((args, kwargs)))
+
+        import asyncio
+
+        with caplog.at_level(logging.INFO, logger="backend.api.routes.sources"):
+            result = asyncio.run(
+                create_source(
+                    source_data=source_data,
+                    background_tasks=background_tasks,
+                    current_user=user,
+                    db=db,
+                )
+            )
+
+        assert result.mode == "single"
+        assert result.total == 1
+        assert result.success_count == 0
+        assert result.error_count == 0
+        assert result.created == []
+        assert result.errors == []
+        assert added_tasks == []
+        assert "Source đã tồn tại, bỏ qua insert" in caplog.text
+    finally:
+        db.close()
+
+
+def test_resolved_facebook_id_duplicate_is_skipped_and_logged(caplog):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="resolved-dup-user", email="resolved-dup@example.com", password="secret123")
+        existing = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="page",
+            facebook_id="852434455340284",
+            facebook_url="https://www.facebook.com/profile.php?id=852434455340284",
+        )
+        duplicate_slug = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="page",
+            facebook_id="topcomments.vn",
+            facebook_url="https://www.facebook.com/topcomments.vn",
+        )
+
+        with caplog.at_level(logging.INFO, logger="facebook_scraper"):
+            updated = FacebookScraperService._update_source_facebook_id_if_unique(
+                db,
+                duplicate_slug,
+                "852434455340284",
+            )
+
+        assert updated is False
+        assert "Source đã tồn tại, bỏ qua cập nhật facebook_id" in caplog.text
+        db.refresh(existing)
+        db.refresh(duplicate_slug)
+        assert existing.facebook_id == "852434455340284"
+        assert duplicate_slug.facebook_id == "topcomments.vn"
+    finally:
+        db.close()
+
+
 def test_bootstrap_scrape_logs_error_without_crashing(monkeypatch):
     db = SessionLocal()
     try:
@@ -4651,4 +4742,3 @@ def test_bootstrap_scrape_marks_failed_scrape_job_and_keeps_counters_default(mon
         assert job.finished_at is not None
     finally:
         verify_db.close()
-

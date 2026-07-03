@@ -6,6 +6,7 @@ import logging
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.api.auth import get_current_user
@@ -43,6 +44,15 @@ router = APIRouter()
 
 def _format_source_label(source_id: int, source_name: str = None) -> str:
     return f"{source_name or 'unknown'} (id={source_id})"
+
+
+def _log_existing_source_skip(user_id: int, facebook_id: str, facebook_url: str):
+    logger.info(
+        "Source đã tồn tại, bỏ qua insert: user_id=%s facebook_id=%s facebook_url=%s",
+        user_id,
+        facebook_id,
+        facebook_url,
+    )
 
 
 def _bootstrap_scrape_source_last_24h(source_id: int):
@@ -158,10 +168,8 @@ def _create_single_source(
 
     # Check for duplicates
     if duplicate_check_source(db, current_user.id, facebook_id):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="This source is already being tracked",
-        )
+        _log_existing_source_skip(current_user.id, facebook_id, source_data.facebook_url)
+        return None
 
     # Check access permissions if requested
     permission_status = None
@@ -195,18 +203,23 @@ def _create_single_source(
             )
 
     # Create source with permission information
-    source = SourceCRUD.create(
-        db=db,
-        user_id=current_user.id,
-        source_type=source_data.source_type,
-        facebook_id=facebook_id,
-        facebook_url=source_data.facebook_url,
-        include_comments=source_data.include_comments,
-        max_days_old=source_data.max_days_old,
-        permission_status=permission_status,
-        is_accessible=is_accessible,
-        permission_checked_at=datetime.utcnow() if source_data.check_access else None,
-    )
+    try:
+        source = SourceCRUD.create(
+            db=db,
+            user_id=current_user.id,
+            source_type=source_data.source_type,
+            facebook_id=facebook_id,
+            facebook_url=source_data.facebook_url,
+            include_comments=source_data.include_comments,
+            max_days_old=source_data.max_days_old,
+            permission_status=permission_status,
+            is_accessible=is_accessible,
+            permission_checked_at=datetime.utcnow() if source_data.check_access else None,
+        )
+    except IntegrityError:
+        db.rollback()
+        _log_existing_source_skip(current_user.id, facebook_id, source_data.facebook_url)
+        return None
     SourceCRUD.update_scrape_info(
         db,
         source.id,
@@ -243,7 +256,8 @@ async def create_source(
                 current_user=current_user,
                 db=db,
             )
-            created_sources.append(source)
+            if source is not None:
+                created_sources.append(source)
         except HTTPException as exc:
             error_code = "create_source_error"
             if exc.status_code == status.HTTP_400_BAD_REQUEST:

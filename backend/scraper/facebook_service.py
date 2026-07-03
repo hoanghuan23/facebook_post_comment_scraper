@@ -9,6 +9,7 @@ import logging
 import re
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from backend.database.crud import CommentCRUD, FacebookSessionCRUD, LogCRUD, PostCRUD, PostMetricCRUD, SourceCRUD
 from backend.config import settings
@@ -535,6 +536,46 @@ class FacebookScraperService:
             source.source_name = updated_source.source_name
 
     @staticmethod
+    def _update_source_facebook_id_if_unique(db: Session, source: Source, resolved_facebook_id: str) -> bool:
+        resolved_facebook_id = str(resolved_facebook_id or "").strip()
+        if not resolved_facebook_id or resolved_facebook_id == source.facebook_id:
+            return True
+
+        existing_source = SourceCRUD.get_by_user_and_facebook_id(
+            db,
+            source.user_id,
+            resolved_facebook_id,
+        )
+        if existing_source and existing_source.id != source.id:
+            logger.info(
+                "Source đã tồn tại, bỏ qua cập nhật facebook_id: source_id=%s user_id=%s current_facebook_id=%s resolved_facebook_id=%s existing_source_id=%s",
+                source.id,
+                source.user_id,
+                source.facebook_id,
+                resolved_facebook_id,
+                existing_source.id,
+            )
+            return False
+
+        previous_facebook_id = source.facebook_id
+        source.facebook_id = resolved_facebook_id
+        try:
+            db.commit()
+            db.refresh(source)
+            return True
+        except IntegrityError:
+            db.rollback()
+            source.facebook_id = previous_facebook_id
+            logger.info(
+                "Source đã tồn tại, bỏ qua cập nhật facebook_id: source_id=%s user_id=%s current_facebook_id=%s resolved_facebook_id=%s",
+                source.id,
+                source.user_id,
+                previous_facebook_id,
+                resolved_facebook_id,
+            )
+            return False
+
+    @staticmethod
     def _ensure_valid_posted_at(raw_post: Dict[str, Any], normalized_post: Dict[str, Any]) -> None:
         if isinstance(normalized_post.get("posted_at"), datetime):
             return
@@ -560,8 +601,7 @@ class FacebookScraperService:
         cls._apply_source_auth_context(db, source)
         resolved_group_id = cls._resolve_group_id(source)
         if resolved_group_id and resolved_group_id != source.facebook_id:
-            SourceCRUD.update(db, source.id, facebook_id=resolved_group_id)
-            source.facebook_id = resolved_group_id
+            cls._update_source_facebook_id_if_unique(db, source, resolved_group_id)
         cls._apply_group_context(source)
 
         metric_target_set = {str(post_id) for post_id in (metric_target_post_ids or []) if post_id}
@@ -686,9 +726,7 @@ class FacebookScraperService:
         cls._apply_source_auth_context(db, source)
         resolved_timeline_id = cls._resolve_timeline_id(source)
         if resolved_timeline_id and resolved_timeline_id != source.facebook_id:
-            source.facebook_id = resolved_timeline_id
-            db.commit()
-            db.refresh(source)
+            cls._update_source_facebook_id_if_unique(db, source, resolved_timeline_id)
 
         cls._apply_timeline_context(source)
         base_folder = "page_post" if source.source_type == SourceType.PAGE else "user_post"
@@ -822,9 +860,7 @@ class FacebookScraperService:
         elif source.source_type in {SourceType.PAGE, SourceType.USER}:
             resolved_timeline_id = cls._resolve_timeline_id(source)
             if resolved_timeline_id and resolved_timeline_id != source.facebook_id:
-                source.facebook_id = resolved_timeline_id
-                db.commit()
-                db.refresh(source)
+                cls._update_source_facebook_id_if_unique(db, source, resolved_timeline_id)
             cls._apply_timeline_context(source)
             base_folder = "page_post" if source.source_type == SourceType.PAGE else "user_post"
             fetched_posts = cls._fetch_timeline_posts_with_compat(
@@ -1047,9 +1083,7 @@ class FacebookScraperService:
         elif source.source_type in {SourceType.PAGE, SourceType.USER}:
             resolved_timeline_id = cls._resolve_timeline_id(source)
             if resolved_timeline_id and resolved_timeline_id != source.facebook_id:
-                source.facebook_id = resolved_timeline_id
-                db.commit()
-                db.refresh(source)
+                cls._update_source_facebook_id_if_unique(db, source, resolved_timeline_id)
             cls._apply_timeline_context(source)
             base_folder = "page_post" if source.source_type == SourceType.PAGE else "user_post"
             fetched_posts = cls._fetch_timeline_posts_with_compat(
