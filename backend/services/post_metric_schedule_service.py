@@ -1,4 +1,3 @@
-import math
 from datetime import datetime, timedelta
 from typing import Iterable, Optional
 
@@ -19,8 +18,6 @@ RETRY_MINUTES = 15
 COLD_RECHECK_MINUTES = 120
 MISS_RETRY_MINUTES = (15, 30, 60)
 MAX_METRIC_SCAN_MISSES = 3
-MIN_SOURCE_BASELINE_POSTS = 10
-SOURCE_BASELINE_DAYS = 7
 HOT_VELOCITY_THRESHOLD = 100.0
 WARM_VELOCITY_THRESHOLD = 20.0
 
@@ -39,38 +36,6 @@ def _velocity(newer: PostMetric, older: PostMetric) -> float:
         return 0.0
     growth = max(weighted_engagement(newer) - weighted_engagement(older), 0)
     return growth / elapsed_hours
-
-
-def _nearest_rank_percentile(values: list[float], percentile: float) -> Optional[float]:
-    if not values:
-        return None
-    rank = max(1, math.ceil(percentile * len(values)))
-    return sorted(values)[rank - 1]
-
-
-def _latest_source_velocities(db: Session, source_id: int, now: datetime) -> list[float]:
-    cutoff = now - timedelta(days=SOURCE_BASELINE_DAYS)
-    rows = (
-        db.query(PostMetric)
-        .join(Post, PostMetric.post_id == Post.id)
-        .filter(
-            Post.source_id == source_id,
-            Post.is_deleted.is_(False),
-            PostMetric.recorded_at >= cutoff,
-        )
-        .order_by(PostMetric.post_id, PostMetric.recorded_at.desc(), PostMetric.id.desc())
-        .all()
-    )
-    metrics_by_post: dict[int, list[PostMetric]] = {}
-    for metric in rows:
-        post_metrics = metrics_by_post.setdefault(metric.post_id, [])
-        if len(post_metrics) < 2:
-            post_metrics.append(metric)
-    return [
-        _velocity(metrics[0], metrics[1])
-        for metrics in metrics_by_post.values()
-        if len(metrics) >= 2
-    ]
 
 
 def _tracking_deadline(post: Post) -> datetime:
@@ -158,19 +123,8 @@ def apply_metric_snapshot_schedule(
 
     velocity = _velocity(latest_metrics[0], latest_metrics[1])
     post.last_engagement_velocity = velocity
-    source_velocities = _latest_source_velocities(db, post.source_id, now)
-    p70 = None
-    p90 = None
-    if len(source_velocities) >= MIN_SOURCE_BASELINE_POSTS:
-        p70 = _nearest_rank_percentile(source_velocities, 0.70)
-        p90 = _nearest_rank_percentile(source_velocities, 0.90)
-
-    is_hot = velocity >= HOT_VELOCITY_THRESHOLD or (
-        velocity > 0 and p90 is not None and p90 > 0 and velocity >= p90
-    )
-    is_warm = velocity >= WARM_VELOCITY_THRESHOLD or (
-        velocity > 0 and p70 is not None and p70 > 0 and velocity >= p70
-    )
+    is_hot = velocity >= HOT_VELOCITY_THRESHOLD
+    is_warm = velocity >= WARM_VELOCITY_THRESHOLD
     if is_hot:
         next_tier = HOT
     elif is_warm:

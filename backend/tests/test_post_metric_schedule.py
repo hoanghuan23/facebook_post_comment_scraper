@@ -110,7 +110,7 @@ def test_cold_post_gets_one_recheck_then_expires():
         db.close()
 
 
-def test_source_percentile_can_mark_post_hot_below_absolute_threshold():
+def test_source_percentile_no_longer_marks_post_hot_below_absolute_threshold():
     db = SessionLocal()
     try:
         base = datetime.utcnow().replace(microsecond=0)
@@ -147,7 +147,7 @@ def test_source_percentile_can_mark_post_hot_below_absolute_threshold():
         scheduled = apply_metric_snapshot_schedule(db, target.id, now=base + timedelta(hours=1))
 
         assert scheduled.last_engagement_velocity == 10
-        assert scheduled.metric_tier == HOT
+        assert scheduled.metric_tier == COLD
     finally:
         db.close()
 
