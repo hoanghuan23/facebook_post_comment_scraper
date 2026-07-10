@@ -62,15 +62,15 @@ def delete_missed_post(post: Post) -> None:
 def _next_interval_minutes(tier: str, age_hours: float) -> int:
     if tier == HOT:
         if age_hours < 2:
-            return 5
-        if age_hours < 6:
-            return 10
-        return 30
-    if tier == WARM:
-        if age_hours < 2:
             return 15
         if age_hours < 6:
             return 30
+        return 45
+    if tier == WARM:
+        if age_hours < 2:
+            return 30
+        if age_hours < 6:
+            return 45
         return 60
     return COLD_RECHECK_MINUTES
 
