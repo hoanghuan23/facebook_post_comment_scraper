@@ -6,6 +6,7 @@ import logging
 import random
 import re
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -13,6 +14,8 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 from bs4 import BeautifulSoup
+
+from backend.scraper import request_telemetry
 
 logger = logging.getLogger("facebook_scraper")
 
@@ -198,6 +201,16 @@ def response_text(response: requests.Response) -> str:
             response.headers.get("Content-Encoding", "none"),
         )
     return text
+
+
+def _direct_classification(status_code: int, html: str, state: str) -> str:
+    if state == "login":
+        return request_telemetry.CLASS_LOGIN_REQUIRED
+    if state == "rate_limited":
+        return request_telemetry.CLASS_HTTP_ERROR
+    if state == "not_found" or status_code in (404, 410):
+        return request_telemetry.CLASS_HTTP_ERROR
+    return request_telemetry.classify_response(status_code, html)
 
 
 def _snippet(chunk: str, *needles: str) -> str:
@@ -476,9 +489,34 @@ def do_get(
     dump_html: bool = False,
     dump_dir: Optional[Path] = None,
 ) -> Optional[DirectPostMetric]:
+    request_id = str(uuid.uuid4())
+    run_id = request_telemetry.get_run_id()
+    source_id = request_telemetry.get_source_id()
+    facebook_id = request_telemetry.get_facebook_id(post_id)
+    start_monotonic, start_time, current_concurrency = request_telemetry.begin_attempt()
     try:
         response = session.get(url, timeout=timeout, allow_redirects=True)
     except requests.RequestException as exc:
+        end_time, duration_ms = request_telemetry.finish_attempt(start_monotonic)
+        request_telemetry.append_event(
+            request_id=request_id,
+            run_id=run_id,
+            start_time=start_time,
+            end_time=end_time,
+            duration_ms=duration_ms,
+            scraper="direct_post_metrics",
+            endpoint_label=f"facebook_direct_{method}",
+            source_id=source_id,
+            facebook_id=facebook_id,
+            attempt=1,
+            max_retries=1,
+            classification=request_telemetry.classify_exception(exc),
+            status_code=None,
+            response_size_bytes=None,
+            current_concurrency=current_concurrency,
+            proxy_mode="none",
+            proxy_label=None,
+        )
         logger.warning("Direct metric request failed: method=%s url=%s error=%s", method, url, exc)
         return DirectPostMetric(
             post_id=post_id,
@@ -487,14 +525,40 @@ def do_get(
             error_message=str(exc),
         )
 
+    end_time, duration_ms = request_telemetry.finish_attempt(start_monotonic)
+    request_telemetry.attach_response_metadata(
+        response,
+        request_id=request_id,
+        run_id=run_id,
+        start_time=start_time,
+        end_time=end_time,
+        duration_ms=duration_ms,
+        scraper="direct_post_metrics",
+        endpoint_label=f"facebook_direct_{method}",
+        source_id=source_id,
+        facebook_id=facebook_id,
+        attempt=1,
+        max_retries=1,
+        current_concurrency=current_concurrency,
+        proxy_mode="none",
+        proxy_label=None,
+    )
+
     if response.status_code in (404, 410):
+        request_telemetry.record_response(response, request_telemetry.CLASS_HTTP_ERROR)
         return DirectPostMetric(post_id=post_id, source_url=url, fetch_method=method, is_not_found=True)
 
     html = response_text(response)
     if dump_html:
         _dump_html(html, method, dump_dir or Path("."))
 
-    return parse_html_metrics(html, post_id, response.url, method)
+    metric = parse_html_metrics(html, post_id, response.url, method)
+    state = detect_html_state(html)
+    request_telemetry.record_response(
+        response,
+        _direct_classification(response.status_code, html, state),
+    )
+    return metric
 
 
 def build_urls(post_id: str, original_url: Optional[str]) -> list[tuple[str, str, bool]]:

@@ -2,6 +2,7 @@ import requests
 import json
 import time
 import os
+import uuid
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -26,16 +27,93 @@ if PROXY:
     print(f"Using proxy: {PROXY}")
 
 # ========= RETRY HELPER =========
-def retry_request(url, headers, data, proxies, cookies=None, max_retries=5):
+def retry_request(
+    url,
+    headers,
+    data,
+    proxies,
+    cookies=None,
+    max_retries=5,
+    *,
+    scraper="comments",
+    endpoint_label="facebook_graphql",
+    source_id=None,
+    facebook_id=None,
+    log_success=True,
+):
     """Make a POST request with retry logic"""
     global PROXIES
     from proxy_utils import rotate_proxy_for_retry, is_proxy_infra_error, is_ip_blocked
+    from backend.scraper import request_telemetry as telemetry
 
+    request_id = str(uuid.uuid4())
+    run_id = telemetry.get_run_id()
+    source_id = telemetry.get_source_id(source_id)
+    facebook_id = telemetry.get_facebook_id(facebook_id)
     for attempt in range(1, max_retries + 1):
+        start_monotonic, start_time, current_concurrency = telemetry.begin_attempt()
         try:
             r = requests.post(url, headers=headers, data=data, proxies=proxies, cookies=cookies, timeout=30)
+            end_time, duration_ms = telemetry.finish_attempt(start_monotonic)
             if r.status_code == 200:
+                if log_success:
+                    telemetry.append_event(
+                        request_id=request_id,
+                        run_id=run_id,
+                        start_time=start_time,
+                        end_time=end_time,
+                        duration_ms=duration_ms,
+                        scraper=scraper,
+                        endpoint_label=endpoint_label,
+                        source_id=source_id,
+                        facebook_id=facebook_id,
+                        attempt=attempt,
+                        max_retries=max_retries,
+                        classification=telemetry.classify_response(r.status_code, r.text),
+                        status_code=r.status_code,
+                        response_size_bytes=telemetry.response_size_bytes(r),
+                        current_concurrency=current_concurrency,
+                        proxy_mode=telemetry.proxy_mode(proxies, bool(cookies)),
+                        proxy_label=telemetry.proxy_label(proxies),
+                    )
+                else:
+                    telemetry.attach_response_metadata(
+                        r,
+                        request_id=request_id,
+                        run_id=run_id,
+                        start_time=start_time,
+                        end_time=end_time,
+                        duration_ms=duration_ms,
+                        scraper=scraper,
+                        endpoint_label=endpoint_label,
+                        source_id=source_id,
+                        facebook_id=facebook_id,
+                        attempt=attempt,
+                        max_retries=max_retries,
+                        current_concurrency=current_concurrency,
+                        proxy_mode=telemetry.proxy_mode(proxies, bool(cookies)),
+                        proxy_label=telemetry.proxy_label(proxies),
+                    )
                 return r
+            telemetry.append_event(
+                request_id=request_id,
+                run_id=run_id,
+                start_time=start_time,
+                end_time=end_time,
+                duration_ms=duration_ms,
+                scraper=scraper,
+                endpoint_label=endpoint_label,
+                source_id=source_id,
+                facebook_id=facebook_id,
+                attempt=attempt,
+                max_retries=max_retries,
+                classification=telemetry.classify_response(r.status_code, r.text),
+                status_code=r.status_code,
+                response_size_bytes=telemetry.response_size_bytes(r),
+                current_concurrency=current_concurrency,
+                proxy_mode=telemetry.proxy_mode(proxies, bool(cookies)),
+                proxy_label=telemetry.proxy_label(proxies),
+            )
             if is_proxy_infra_error(status_code=r.status_code):
                 print(f"  🚫 Attempt {attempt}/{max_retries}: Proxy auth failed (HTTP {r.status_code}) — retrying proxy...")
                 new_p = rotate_proxy_for_retry(proxies, has_cookies=bool(cookies))
@@ -51,12 +129,52 @@ def retry_request(url, headers, data, proxies, cookies=None, max_retries=5):
             else:
                 print(f"  ⚠️ Attempt {attempt}/{max_retries}: Status {r.status_code}")
         except requests.exceptions.ProxyError as e:
+            end_time, duration_ms = telemetry.finish_attempt(start_monotonic)
+            telemetry.append_event(
+                request_id=request_id,
+                run_id=run_id,
+                start_time=start_time,
+                end_time=end_time,
+                duration_ms=duration_ms,
+                scraper=scraper,
+                endpoint_label=endpoint_label,
+                source_id=source_id,
+                facebook_id=facebook_id,
+                attempt=attempt,
+                max_retries=max_retries,
+                classification=telemetry.CLASS_PROXY_ERROR,
+                status_code=None,
+                response_size_bytes=None,
+                current_concurrency=current_concurrency,
+                proxy_mode=telemetry.proxy_mode(proxies, bool(cookies)),
+                proxy_label=telemetry.proxy_label(proxies),
+            )
             print(f"  🚫 Attempt {attempt}/{max_retries}: Proxy unreachable — retrying proxy...")
             new_p = rotate_proxy_for_retry(proxies, has_cookies=bool(cookies))
             if new_p:
                 proxies = new_p
                 PROXIES = new_p
         except Exception as e:
+            end_time, duration_ms = telemetry.finish_attempt(start_monotonic)
+            telemetry.append_event(
+                request_id=request_id,
+                run_id=run_id,
+                start_time=start_time,
+                end_time=end_time,
+                duration_ms=duration_ms,
+                scraper=scraper,
+                endpoint_label=endpoint_label,
+                source_id=source_id,
+                facebook_id=facebook_id,
+                attempt=attempt,
+                max_retries=max_retries,
+                classification=telemetry.classify_exception(e),
+                status_code=None,
+                response_size_bytes=None,
+                current_concurrency=current_concurrency,
+                proxy_mode=telemetry.proxy_mode(proxies, bool(cookies)),
+                proxy_label=telemetry.proxy_label(proxies),
+            )
             if is_proxy_infra_error(exc=e):
                 print(f"  🚫 Attempt {attempt}/{max_retries}: Proxy connection error — retrying proxy...")
                 new_p = rotate_proxy_for_retry(proxies, has_cookies=bool(cookies))
@@ -301,15 +419,26 @@ def fetch_comments(feedback_id, cookies=None, fb_dtsg=None, proxies=None):
     post_info = None  # Store parent post info from first response
 
     while True:
+        from backend.scraper import request_telemetry as telemetry
+
         headers = {**BASE_HEADERS, "x-fb-friendly-name": "CommentsListComponentsPaginationQuery"}
         r = retry_request(
             GRAPHQL,
             headers,
             comments_payload(feedback_id, cursor, cookies, fb_dtsg=fb_dtsg),
             request_proxies,
-            cookies=cookies
+            cookies=cookies,
+            scraper="comments",
+            endpoint_label="facebook_graphql_comments",
+            facebook_id=feedback_id,
+            log_success=False,
         )
-        j = fb_json(r.text)
+        try:
+            j = fb_json(r.text)
+        except Exception:
+            telemetry.record_response(r, telemetry.CLASS_PARSE_ERROR)
+            raise
+        telemetry.record_response(r, telemetry.classify_response(r.status_code, r.text))
 
         # Extract post-level info as early as possible (works even when there are 0 comments)
         if response_count == 0 and post_info is None:
@@ -409,15 +538,26 @@ def fetch_replies(comment, cookies=None, fb_dtsg=None, proxies=None):
 
     headers = {**BASE_HEADERS, "x-fb-friendly-name": "Depth1CommentsListPaginationQuery"}
     request_proxies = PROXIES if proxies is None else proxies
+    from backend.scraper import request_telemetry as telemetry
+
     r = retry_request(
         GRAPHQL,
         headers,
         replies_payload(comment["_feedback_id"], comment["_expansion_token"], cookies, fb_dtsg=fb_dtsg),
         request_proxies,
-        cookies=cookies
+        cookies=cookies,
+        scraper="comment_replies",
+        endpoint_label="facebook_graphql_comment_replies",
+        facebook_id=comment.get("_feedback_id"),
+        log_success=False,
     )
 
-    j = fb_json(r.text)
+    try:
+        j = fb_json(r.text)
+    except Exception:
+        telemetry.record_response(r, telemetry.CLASS_PARSE_ERROR)
+        raise
+    telemetry.record_response(r, telemetry.classify_response(r.status_code, r.text))
     replies = []
 
     edges = (
@@ -484,4 +624,3 @@ if __name__ == "__main__":
         json.dump(output, f, ensure_ascii=False, indent=2)
 
     print(f"💬 Saved to {output_file}")
-

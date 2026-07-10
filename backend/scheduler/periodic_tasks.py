@@ -11,6 +11,7 @@ from backend.config import settings
 from backend.database.crud import AnalyticsCRUD, FacebookSessionCRUD, LogCRUD, PipelineJobCRUD, PostCRUD, SourceCRUD
 from backend.database.db import SessionLocal
 from backend.database.models import AnalyticsCache, Comment, Post, Source, SourceType
+from backend.scraper import request_telemetry
 from backend.scraper.facebook_service import FacebookScraperService
 from backend.services.post_metric_schedule_service import defer_metric_updates, handle_max_page_misses
 from backend.services.schedule_service import apply_analytics_schedule, schedule_next_scrape
@@ -693,3 +694,8 @@ async def health_check():
         )
     finally:
         db.close()
+
+
+async def generate_telemetry_summary():
+    """Aggregate request telemetry JSONL into the daily summary JSON."""
+    request_telemetry.write_summary()

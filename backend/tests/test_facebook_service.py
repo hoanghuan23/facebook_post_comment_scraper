@@ -28,7 +28,7 @@ from backend.scraper.facebook_service import (
     _normalize_group_post,
     _normalize_timeline_post,
 )
-from backend.scraper import direct_post_metrics
+from backend.scraper import direct_post_metrics, request_telemetry
 from backend.scheduler.periodic_tasks import generate_analytics_cache, periodic_scrape_new_posts, update_recent_post_metrics
 from backend.services.schedule_service import calculate_tier
 import post_scraper
@@ -2595,7 +2595,9 @@ def test_direct_post_metrics_parser_accepts_targeted_zero_counts():
     assert result.shares == 0
 
 
-def test_refresh_target_post_metrics_direct_updates_target_snapshot_and_uses_session(monkeypatch):
+def test_refresh_target_post_metrics_direct_updates_target_snapshot_and_uses_session(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACEBOOK_TELEMETRY_DIR", str(tmp_path))
+    request_telemetry.set_context(source_id=999, facebook_id="stale-context")
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="direct-metric-user", email="direct-metric-user@example.com", password="secret123")
@@ -2630,7 +2632,14 @@ def test_refresh_target_post_metrics_direct_updates_target_snapshot_and_uses_ses
         calls = []
 
         def fake_smart_fetch(cookies_raw, post_id, **kwargs):
-            calls.append({"cookies_raw": cookies_raw, "post_id": post_id, **kwargs})
+            calls.append(
+                {
+                    "cookies_raw": cookies_raw,
+                    "post_id": post_id,
+                    "telemetry_facebook_id": request_telemetry.get_facebook_id(post_id),
+                    **kwargs,
+                }
+            )
             return direct_post_metrics.DirectPostMetric(
                 post_id=post_id,
                 source_url=kwargs["original_url"],
@@ -2659,11 +2668,113 @@ def test_refresh_target_post_metrics_direct_updates_target_snapshot_and_uses_ses
         assert refreshed.metrics_history[-1].job_id == job.id
         assert calls[0]["cookies_raw"] == '{"c_user":"direct-session"}'
         assert calls[0]["group_id"] == "direct-group"
+        assert calls[0]["telemetry_facebook_id"] == "direct-post-1"
+        events = [
+            json.loads(line)
+            for path in tmp_path.glob("facebook_requests_*.jsonl")
+            for line in path.read_text(encoding="utf-8").splitlines()
+        ]
+        operation_events = [event for event in events if event.get("event_type") == "operation"]
+        assert len(operation_events) == 1
+        assert operation_events[0]["operation_type"] == request_telemetry.OP_DIRECT_POST_METRIC
+        assert operation_events[0]["success"] is True
+        assert operation_events[0]["target_id"] == "direct-post-1"
+    finally:
+        request_telemetry.set_context(source_id=None, facebook_id=None)
+        db.close()
+
+
+def test_scrape_source_writes_source_scrape_operation_event(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACEBOOK_TELEMETRY_DIR", str(tmp_path))
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="source-op-user", email="source-op@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="123456",
+            facebook_url="https://www.facebook.com/groups/123456",
+            source_name="Source Operation Group",
+        )
+
+        def fake_fetch_group_posts(**_kwargs):
+            return [
+                {
+                    "post_id": "source-op-post-1",
+                    "permalink": "https://www.facebook.com/groups/123456/posts/source-op-post-1",
+                    "message": "Source operation post",
+                    "posted_at": datetime.utcnow(),
+                    "reaction_count": 8,
+                    "comment_count": 2,
+                    "share_count": 1,
+                }
+            ]
+
+        monkeypatch.setattr(
+            "backend.scraper.facebook_service.FacebookScraperService._fetch_group_posts_with_compat",
+            staticmethod(fake_fetch_group_posts),
+        )
+
+        result = FacebookScraperService.scrape_source(db, source.id, limit=5)
+
+        assert result.total_fetched == 1
+        assert result.created_posts == 1
+        events = [
+            json.loads(line)
+            for path in tmp_path.glob("facebook_requests_*.jsonl")
+            for line in path.read_text(encoding="utf-8").splitlines()
+        ]
+        operation_events = [event for event in events if event.get("event_type") == "operation"]
+        assert len(operation_events) == 1
+        assert operation_events[0]["operation_type"] == request_telemetry.OP_SOURCE_SCRAPE
+        assert operation_events[0]["success"] is True
+        assert operation_events[0]["details"]["total_fetched"] == 1
     finally:
         db.close()
 
 
-def test_refresh_target_post_metrics_direct_defers_remaining_on_rate_limit(monkeypatch):
+def test_scrape_source_empty_result_is_successful_no_new_posts_outcome(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACEBOOK_TELEMETRY_DIR", str(tmp_path))
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="source-empty-user", email="source-empty@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="654321",
+            facebook_url="https://www.facebook.com/groups/654321",
+            source_name="Source Empty Group",
+        )
+
+        monkeypatch.setattr(
+            "backend.scraper.facebook_service.FacebookScraperService._fetch_group_posts_with_compat",
+            staticmethod(lambda **_kwargs: []),
+        )
+
+        result = FacebookScraperService.scrape_source(db, source.id, limit=5)
+
+        assert result.total_fetched == 0
+        assert result.created_posts == 0
+        assert result.updated_posts == 0
+        events = [
+            json.loads(line)
+            for path in tmp_path.glob("facebook_requests_*.jsonl")
+            for line in path.read_text(encoding="utf-8").splitlines()
+        ]
+        operation_events = [event for event in events if event.get("event_type") == "operation"]
+        assert len(operation_events) == 1
+        assert operation_events[0]["operation_type"] == request_telemetry.OP_SOURCE_SCRAPE
+        assert operation_events[0]["success"] is True
+        assert operation_events[0]["failure_reason"] is None
+        assert operation_events[0]["details"]["outcome_status"] == "no_new_posts"
+    finally:
+        db.close()
+
+
+def test_refresh_target_post_metrics_direct_defers_remaining_on_rate_limit(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACEBOOK_TELEMETRY_DIR", str(tmp_path))
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="direct-rate-user", email="direct-rate-user@example.com", password="secret123")
@@ -2719,6 +2830,15 @@ def test_refresh_target_post_metrics_direct_defers_remaining_on_rate_limit(monke
         assert refreshed_second.is_deleted is False
         assert refreshed_first.next_metric_update > datetime.utcnow()
         assert refreshed_second.next_metric_update > datetime.utcnow()
+        events = [
+            json.loads(line)
+            for path in tmp_path.glob("facebook_requests_*.jsonl")
+            for line in path.read_text(encoding="utf-8").splitlines()
+        ]
+        operation_events = [event for event in events if event.get("event_type") == "operation"]
+        assert len(operation_events) == 1
+        assert operation_events[0]["success"] is False
+        assert operation_events[0]["failure_reason"] == request_telemetry.FAIL_RATE_LIMITED
     finally:
         db.close()
 

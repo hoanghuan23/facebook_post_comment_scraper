@@ -103,6 +103,7 @@ class Settings(BaseSettings):
     TASK_UPDATE_RECENT_METRICS_INTERVAL: int = 60  # poll post đến hạn mỗi phút
     TASK_CLEANUP_OLD_DATA_INTERVAL: int = 43200  # mỗi 12 giờ
     TASK_GENERATE_ANALYTICS_INTERVAL: int = 86400 # mỗi 24 giờ
+    TASK_GENERATE_TELEMETRY_SUMMARY_INTERVAL: int = 3600  # mỗi 1 giờ
     TASK_HEALTH_CHECK_INTERVAL: int = 1800 # mỗi 30 phút
     
     # Data retention

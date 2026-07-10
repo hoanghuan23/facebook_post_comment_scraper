@@ -455,6 +455,9 @@ class ScraperThread(QThread):
 
     def run(self):
         """Run the scraping task"""
+        from backend.scraper import request_telemetry
+
+        request_telemetry.start_run()
         try:
             self._apply_proxy()
             if self.scraper_type == "user_posts":
@@ -467,6 +470,8 @@ class ScraperThread(QThread):
                 self.finished_signal.emit(False, "Invalid scraper type")
         except Exception as e:
             self.finished_signal.emit(False, f"Error: {str(e)}")
+        finally:
+            request_telemetry.write_summary()
     
     def scrape_user_posts(self):
         """Scrape posts from one or more user profile URLs (timeline)"""

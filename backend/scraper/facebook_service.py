@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from backend.database.crud import CommentCRUD, FacebookSessionCRUD, LogCRUD, PostCRUD, PostMetricCRUD, SourceCRUD
 from backend.config import settings
 from backend.database.models import Source, SourceType
-from backend.scraper import direct_post_metrics
+from backend.scraper import direct_post_metrics, request_telemetry
 from backend.services.post_metric_schedule_service import (
     apply_metric_snapshot_schedule,
     defer_metric_updates,
@@ -912,6 +912,7 @@ class FacebookScraperService:
                 "deleted_post_refs": [],
             }
 
+        run_id = request_telemetry.start_run()
         active_session = FacebookSessionCRUD.get_active_by_user_id(db, source.user_id)
         cookies_raw = active_session.fb_cookies if active_session and active_session.fb_cookies else ""
 
@@ -931,6 +932,7 @@ class FacebookScraperService:
                 skipped += 1
                 continue
 
+            request_telemetry.set_context(source_id=source.id, facebook_id=None)
             group_id = direct_post_metrics.extract_group_id(db_post.facebook_url)
             if not group_id and source.source_type == SourceType.GROUP:
                 group_id = str(source.facebook_id or "").strip() or None
@@ -946,6 +948,41 @@ class FacebookScraperService:
                 dump_html=settings.DIRECT_METRIC_DUMP_HTML,
             )
             fetched += 1
+            operation_success = (
+                result.has_metric_signal
+                and not result.is_rate_limited
+                and not result.is_login_required
+                and not result.is_not_found
+                and not result.error_message
+            )
+            if result.is_rate_limited:
+                operation_failure_reason = request_telemetry.FAIL_RATE_LIMITED
+            elif result.is_login_required:
+                operation_failure_reason = request_telemetry.FAIL_LOGIN_REQUIRED
+            elif result.is_not_found:
+                operation_failure_reason = request_telemetry.FAIL_NOT_FOUND
+            elif result.error_message:
+                operation_failure_reason = request_telemetry.FAIL_EXCEPTION
+            elif not result.has_metric_signal:
+                operation_failure_reason = request_telemetry.FAIL_NO_METRIC_SIGNAL
+            else:
+                operation_failure_reason = None
+            request_telemetry.append_operation_event(
+                operation_type=request_telemetry.OP_DIRECT_POST_METRIC,
+                success=operation_success,
+                failure_reason=operation_failure_reason,
+                run_id=run_id,
+                source_id=source.id,
+                facebook_id=db_post.facebook_post_id,
+                target_id=target_post_id,
+                details={
+                    "fetch_method": result.fetch_method,
+                    "likes": result.likes,
+                    "comments": result.comments,
+                    "shares": result.shares,
+                    "has_metric_signal": result.has_metric_signal,
+                },
+            )
 
             if result.is_rate_limited or result.is_login_required:
                 failed += 1
@@ -1172,27 +1209,62 @@ class FacebookScraperService:
         consecutive_old_limit: Optional[int] = None,
         job_id: Optional[int] = None,
     ) -> FacebookScrapeResult:
+        run_id = request_telemetry.start_run()
         source = SourceCRUD.get_by_id(db, source_id)
         if not source:
             raise ValueError(f"Source {source_id} not found")
-        if source.source_type == SourceType.GROUP:
-            return cls.scrape_group_source(
-                db,
-                source,
-                limit=limit,
-                last_24_hours_only=last_24_hours_only,
-                min_posted_at=min_posted_at,
-                consecutive_old_limit=consecutive_old_limit,
-                job_id=job_id,
+        request_telemetry.set_context(source_id=source.id, facebook_id=source.facebook_id)
+        try:
+            if source.source_type == SourceType.GROUP:
+                result = cls.scrape_group_source(
+                    db,
+                    source,
+                    limit=limit,
+                    last_24_hours_only=last_24_hours_only,
+                    min_posted_at=min_posted_at,
+                    consecutive_old_limit=consecutive_old_limit,
+                    job_id=job_id,
+                )
+            elif source.source_type in {SourceType.PAGE, SourceType.USER}:
+                result = cls.scrape_timeline_source(
+                    db,
+                    source,
+                    limit=limit,
+                    last_24_hours_only=last_24_hours_only,
+                    min_posted_at=min_posted_at,
+                    consecutive_old_limit=consecutive_old_limit,
+                    job_id=job_id,
+                )
+            else:
+                raise NotImplementedError(f"Facebook source type '{source.source_type.value}' is not implemented yet")
+        except Exception:
+            request_telemetry.append_operation_event(
+                operation_type=request_telemetry.OP_SOURCE_SCRAPE,
+                success=False,
+                failure_reason=request_telemetry.FAIL_EXCEPTION,
+                run_id=run_id,
+                source_id=source.id,
+                facebook_id=source.facebook_id,
+                details={"source_type": source.source_type.value},
             )
-        if source.source_type in {SourceType.PAGE, SourceType.USER}:
-            return cls.scrape_timeline_source(
-                db,
-                source,
-                limit=limit,
-                last_24_hours_only=last_24_hours_only,
-                min_posted_at=min_posted_at,
-                consecutive_old_limit=consecutive_old_limit,
-                job_id=job_id,
-            )
-        raise NotImplementedError(f"Facebook source type '{source.source_type.value}' is not implemented yet")
+            raise
+
+        outcome_status = "has_posts" if result.total_fetched > 0 else "no_new_posts"
+        request_telemetry.append_operation_event(
+            operation_type=request_telemetry.OP_SOURCE_SCRAPE,
+            success=True,
+            failure_reason=None,
+            run_id=run_id,
+            source_id=source.id,
+            facebook_id=source.facebook_id,
+            details={
+                "source_type": source.source_type.value,
+                "outcome_status": outcome_status,
+                "total_fetched": result.total_fetched,
+                "created_posts": result.created_posts,
+                "updated_posts": result.updated_posts,
+                "skipped_posts": result.skipped_posts,
+                "filtered_by_cutoff": result.filtered_by_cutoff,
+            },
+        )
+        return result

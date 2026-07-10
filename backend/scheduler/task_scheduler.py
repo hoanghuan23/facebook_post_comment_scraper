@@ -19,6 +19,7 @@ async def start_scheduler():
         update_recent_post_metrics,
         cleanup_old_data,
         generate_analytics_cache,
+        generate_telemetry_summary,
         health_check,
     )
     
@@ -63,6 +64,14 @@ async def start_scheduler():
             id='generate_analytics',
             name='Generate analytics cache',
         )
+
+        scheduler.add_job(
+            generate_telemetry_summary,
+            'interval',
+            seconds=settings.TASK_GENERATE_TELEMETRY_SUMMARY_INTERVAL,
+            id='generate_telemetry_summary',
+            name='Generate telemetry summary',
+        )
         
         scheduler.add_job(
             health_check,
@@ -73,7 +82,7 @@ async def start_scheduler():
         )
         
         scheduler.start()
-        logger.info("Task scheduler started with 5 jobs")
+        logger.info("Task scheduler started with 6 jobs")
 
 
 async def stop_scheduler():
