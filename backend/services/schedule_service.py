@@ -8,10 +8,11 @@ not used to calculate suggested tiers.
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from backend.config import settings
+from backend.database.models import AnalyticsCache, Post
 
 
 TIER_CONFIG = [
@@ -70,45 +71,43 @@ def calculate_tier(source_id: int, db: Session) -> dict:
         }
     """
 
-    row = db.execute(
-        text(
-            """
-            SELECT
-                (
-                    SELECT CAST(COUNT(*) AS FLOAT) / 7
-                    FROM posts
-                    WHERE source_id = :source_id
-                      AND posted_at >= NOW() - INTERVAL '7 days'
-                )                          AS avg_posts,
-                COUNT(*)                   AS data_days,
-                AVG(
-                    COALESCE(
-                        avg_likes_per_post,
-                        CAST(total_likes AS FLOAT) / NULLIF(total_posts, 0)
-                    )
-                )                          AS avg_likes_per_post
-            FROM analytics_cache
-            WHERE source_id = :source_id
-              AND date >= CURRENT_DATE - INTERVAL '7 days'
-            """
-        ),
-        {"source_id": source_id},
-    ).fetchone()
+    now = datetime.utcnow()
+    post_cutoff = now - timedelta(days=7)
+    analytics_cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=7)
 
-    if not row or row.data_days == 0:
+    recent_posts = db.query(func.count(Post.id)).filter(
+        Post.source_id == source_id,
+        Post.posted_at >= post_cutoff,
+    ).scalar() or 0
+    analytics_rows = db.query(AnalyticsCache).filter(
+        AnalyticsCache.source_id == source_id,
+        AnalyticsCache.date >= analytics_cutoff,
+    ).all()
+
+    data_days = len(analytics_rows)
+    avg_posts = recent_posts / 7
+    if data_days == 0:
         return {
             "tier": None,
             "interval_minutes": None,
             "label": "Unknown",
             "reason": "Chua co du lieu analytics (analytics_cache trong)",
-            "avg_posts_per_day": round((row.avg_posts if row else 0) or 0, 2),
+            "avg_posts_per_day": round(avg_posts, 2),
             "avg_likes_per_post": 0,
             "data_days": 0,
         }
 
-    avg_posts = row.avg_posts or 0
-    avg_likes_per_post = row.avg_likes_per_post or 0
-    data_days = row.data_days
+    likes_per_post_values = []
+    for cache in analytics_rows:
+        if cache.avg_likes_per_post is not None:
+            likes_per_post_values.append(cache.avg_likes_per_post)
+        elif cache.total_posts:
+            likes_per_post_values.append(cache.total_likes / cache.total_posts)
+    avg_likes_per_post = (
+        sum(likes_per_post_values) / len(likes_per_post_values)
+        if likes_per_post_values
+        else 0
+    )
 
     selected_tier = None
     interval = None

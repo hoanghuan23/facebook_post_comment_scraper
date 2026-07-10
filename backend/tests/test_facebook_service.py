@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from backend.database.crud import CommentCRUD, FacebookSessionCRUD, PipelineJobCRUD, PostCRUD, PostMetricCRUD, SourceCRUD, UserCRUD
 from backend.database.db import SessionLocal, engine
-from backend.database.models import Base, PostMetric, ScrapeJob, ScraperLog
+from backend.database.models import AnalyticsCache, Base, PostMetric, ScrapeJob, ScraperLog
 from backend.database.schemas import SourceCreate, SourceUpdate
 from backend.api.routes.sources import (
     _bootstrap_scrape_source_last_24h,
@@ -3896,6 +3896,64 @@ def test_generate_analytics_cache_assigns_tier_4_without_pausing_low_activity_so
         assert refreshed.is_active is True
         assert refreshed.next_scrape >= before + timedelta(minutes=719)
         assert refreshed.next_scrape <= datetime.utcnow() + timedelta(minutes=721)
+    finally:
+        verify_db.close()
+
+
+def test_generate_analytics_cache_updates_same_day_row_and_recalculates_tier():
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="analytics-same-day-user", email="analytics-same-day@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="analytics-same-day-group",
+            facebook_url="https://www.facebook.com/groups/analytics-same-day-group",
+        )
+        post = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="analytics-same-day-post",
+            facebook_url="https://www.facebook.com/posts/analytics-same-day-post",
+            posted_at=datetime.utcnow() - timedelta(hours=1),
+        )
+        PostMetricCRUD.create(db, post.id, likes=5, shares=1, comments=1)
+        source_id = source.id
+        post_id = post.id
+    finally:
+        db.close()
+
+    import asyncio
+    asyncio.run(generate_analytics_cache())
+
+    first_db = SessionLocal()
+    try:
+        first_cache = first_db.query(AnalyticsCache).filter(
+            AnalyticsCache.source_id == source_id
+        ).one()
+        first_cache_id = first_cache.id
+        assert first_cache.total_likes == 5
+        assert first_cache.total_shares == 1
+        assert first_cache.total_comments == 1
+        assert SourceCRUD.get_by_id(first_db, source_id).schedule_tier == 4
+        PostMetricCRUD.create(first_db, post_id, likes=42, shares=3, comments=2)
+    finally:
+        first_db.close()
+
+    asyncio.run(generate_analytics_cache())
+
+    verify_db = SessionLocal()
+    try:
+        caches = verify_db.query(AnalyticsCache).filter(
+            AnalyticsCache.source_id == source_id
+        ).all()
+        assert len(caches) == 1
+        assert caches[0].id == first_cache_id
+        assert caches[0].total_likes == 42
+        assert caches[0].total_shares == 3
+        assert caches[0].total_comments == 2
+        assert SourceCRUD.get_by_id(verify_db, source_id).schedule_tier == 4
     finally:
         verify_db.close()
 
