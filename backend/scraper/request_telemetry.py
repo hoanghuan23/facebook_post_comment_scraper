@@ -224,13 +224,16 @@ def append_event(
     facebook_id: Optional[Any],
     attempt: int,
     max_retries: int,
-    classification: str,
+    classification: Optional[str],
     status_code: Optional[int],
     response_size_bytes: Optional[int],
     current_concurrency: int,
     proxy_mode: str,
     proxy_label: Optional[str],
+    success: Optional[bool] = None,
 ) -> None:
+    if success is None:
+        success = classification == CLASS_SUCCESS
     event = {
         "schema_version": SCHEMA_VERSION,
         "event_type": EVENT_TYPE_REQUEST,
@@ -245,6 +248,7 @@ def append_event(
         "facebook_id": facebook_id,
         "attempt": attempt,
         "max_retries": max_retries,
+        "success": bool(success),
         "classification": classification,
         "status_code": status_code,
         "response_size_bytes": response_size_bytes,
@@ -346,7 +350,7 @@ def attach_response_metadata(
         return
 
 
-def record_response(response: Any, classification: str) -> None:
+def record_response(response: Any, *, success: bool, classification: Optional[str]) -> None:
     meta = getattr(response, "_facebook_telemetry", None)
     if not meta or meta.get("logged"):
         return
@@ -363,6 +367,7 @@ def record_response(response: Any, classification: str) -> None:
         attempt=meta["attempt"],
         max_retries=meta["max_retries"],
         classification=classification,
+        success=success,
         status_code=getattr(response, "status_code", None),
         response_size_bytes=response_size_bytes(response),
         current_concurrency=meta["current_concurrency"],
@@ -422,22 +427,28 @@ def _operation_events(events: Iterable[Dict[str, Any]]) -> list[Dict[str, Any]]:
     return [event for event in events if event.get("event_type") == EVENT_TYPE_OPERATION]
 
 
+def _request_success(event: Dict[str, Any]) -> bool:
+    if isinstance(event.get("success"), bool):
+        return bool(event["success"])
+    return event.get("classification") == CLASS_SUCCESS
+
+
 def _build_request_level(events: list[Dict[str, Any]]) -> Dict[str, Any]:
     total = len(events)
-    success = sum(1 for event in events if event.get("classification") == CLASS_SUCCESS)
+    success = sum(1 for event in events if _request_success(event))
     error = total - success
     latencies = [int(event["duration_ms"]) for event in events if isinstance(event.get("duration_ms"), int)]
     errors_by_classification = Counter(
         event.get("classification")
         for event in events
-        if event.get("classification") and event.get("classification") != CLASS_SUCCESS
+        if not _request_success(event) and event.get("classification")
     )
 
     first_error_request_index = None
     consecutive = 0
     max_consecutive_errors = 0
     for index, event in enumerate(events, start=1):
-        if event.get("classification") == CLASS_SUCCESS:
+        if _request_success(event):
             consecutive = 0
             continue
         if first_error_request_index is None:
@@ -456,7 +467,7 @@ def _build_request_level(events: list[Dict[str, Any]]) -> Dict[str, Any]:
         if max(int(event.get("attempt") or 1) for event in request_events) <= 1:
             continue
         final_event = sorted(request_events, key=lambda item: int(item.get("attempt") or 1))[-1]
-        if final_event.get("classification") == CLASS_SUCCESS:
+        if _request_success(final_event):
             retry_success += 1
         else:
             retry_failed += 1
@@ -478,7 +489,7 @@ def _build_request_level(events: list[Dict[str, Any]]) -> Dict[str, Any]:
     by_hour = {}
     for hour, hour_events in sorted(by_hour_raw.items()):
         hour_total = len(hour_events)
-        hour_success = sum(1 for event in hour_events if event.get("classification") == CLASS_SUCCESS)
+        hour_success = sum(1 for event in hour_events if _request_success(event))
         hour_start = [_parse_time(event.get("start_time")) for event in hour_events]
         hour_end = [_parse_time(event.get("end_time")) for event in hour_events]
         hour_start = [value for value in hour_start if value]
@@ -495,7 +506,7 @@ def _build_request_level(events: list[Dict[str, Any]]) -> Dict[str, Any]:
     proxy_mode_summary: Dict[str, Dict[str, int]] = {}
     for mode in sorted({str(event.get("proxy_mode") or "none") for event in events}):
         mode_events = [event for event in events if str(event.get("proxy_mode") or "none") == mode]
-        mode_success = sum(1 for event in mode_events if event.get("classification") == CLASS_SUCCESS)
+        mode_success = sum(1 for event in mode_events if _request_success(event))
         proxy_mode_summary[mode] = {
             "total": len(mode_events),
             "success": mode_success,
@@ -517,7 +528,7 @@ def _build_request_level(events: list[Dict[str, Any]]) -> Dict[str, Any]:
             if str(event.get("scraper") or "unknown") == scraper
             and str(event.get("endpoint_label") or "unknown") == endpoint_label
         ]
-        endpoint_success = sum(1 for event in endpoint_events if event.get("classification") == CLASS_SUCCESS)
+        endpoint_success = sum(1 for event in endpoint_events if _request_success(event))
         by_endpoint[key] = {
             "total": len(endpoint_events),
             "success": endpoint_success,
@@ -628,12 +639,13 @@ def _build_estimated_outcome_level(request_events: list[Dict[str, Any]]) -> Dict
 
     estimated_events: list[Dict[str, Any]] = []
     for (operation_type, key), group in grouped.items():
-        success = any(event.get("classification") == CLASS_SUCCESS for event in group)
+        success = any(_request_success(event) for event in group)
         first_event = group[0]
         last_event = group[-1]
         failure_reason = None
         if not success:
-            failure_reason = _failure_reason_from_classification(str(last_event.get("classification") or "unknown"))
+            classification = last_event.get("classification")
+            failure_reason = _failure_reason_from_classification(classification) if classification else "unknown"
         estimated_events.append(
             {
                 "operation_type": operation_type,
@@ -657,7 +669,9 @@ def build_summary(date: Optional[str] = None, path: Optional[Path] = None) -> Di
     operation_events = _operation_events(events)
     request_level = _build_request_level(request_events)
     outcome_level = _build_operation_level(operation_events) if operation_events else None
-    estimated_outcome_level = _build_estimated_outcome_level(request_events) if request_events else None
+    estimated_outcome_level = None if operation_events else (
+        _build_estimated_outcome_level(request_events) if request_events else None
+    )
     primary_outcome = outcome_level or _build_operation_level([], estimated=True)
 
     summary = {

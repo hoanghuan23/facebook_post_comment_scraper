@@ -203,14 +203,21 @@ def response_text(response: requests.Response) -> str:
     return text
 
 
-def _direct_classification(status_code: int, html: str, state: str) -> str:
-    if state == "login":
-        return request_telemetry.CLASS_LOGIN_REQUIRED
-    if state == "rate_limited":
-        return request_telemetry.CLASS_HTTP_ERROR
-    if state == "not_found" or status_code in (404, 410):
-        return request_telemetry.CLASS_HTTP_ERROR
-    return request_telemetry.classify_response(status_code, html)
+def _direct_request_result(
+    status_code: Optional[int],
+    html: str,
+    state: str,
+    metric: DirectPostMetric,
+) -> tuple[bool, Optional[str]]:
+    if status_code is not None and status_code >= 400:
+        return False, request_telemetry.CLASS_HTTP_ERROR
+    if request_telemetry.has_login_wall(html) or state == "login" or metric.is_login_required:
+        return False, request_telemetry.CLASS_LOGIN_REQUIRED
+    if status_code == 200 and metric.has_metric_signal:
+        return True, None
+    if status_code == 200:
+        return False, request_telemetry.CLASS_NO_METRIC_SIGNAL
+    return False, request_telemetry.CLASS_NO_METRIC_SIGNAL
 
 
 def _snippet(chunk: str, *needles: str) -> str:
@@ -511,6 +518,7 @@ def do_get(
             attempt=1,
             max_retries=1,
             classification=request_telemetry.classify_exception(exc),
+            success=False,
             status_code=None,
             response_size_bytes=None,
             current_concurrency=current_concurrency,
@@ -544,20 +552,16 @@ def do_get(
         proxy_label=None,
     )
 
-    if response.status_code in (404, 410):
-        request_telemetry.record_response(response, request_telemetry.CLASS_HTTP_ERROR)
-        return DirectPostMetric(post_id=post_id, source_url=url, fetch_method=method, is_not_found=True)
-
     html = response_text(response)
     if dump_html:
         _dump_html(html, method, dump_dir or Path("."))
 
     metric = parse_html_metrics(html, post_id, response.url, method)
+    if response.status_code in (404, 410):
+        metric.is_not_found = True
     state = detect_html_state(html)
-    classification = _direct_classification(response.status_code, html, state)
-    if response.status_code == 200 and state == "ok" and not metric.has_metric_signal:
-        classification = request_telemetry.CLASS_NO_METRIC_SIGNAL
-    request_telemetry.record_response(response, classification)
+    success, classification = _direct_request_result(response.status_code, html, state, metric)
+    request_telemetry.record_response(response, success=success, classification=classification)
     return metric
 
 
