@@ -1,106 +1,58 @@
-# Facebook Post & Comment Scraper (v2.0)
+# Facebook Post Comment Scraper
 
-1 accout chạy 100 groups , 1 proxy , database sqlite3
-viết luồng chạy demo trả về dữ liệu (gồm 3 sources 100 link , posts bài viết nội dung, metrics_history, monitor_configs , comment (nếu được)
-    
+Du an Python dung de thu thap bai viet, binh luan va chi so tuong tac Facebook. Repo hien co 2 cach chay chinh:
 
-Tool thu thập **bài viết / bình luận / chỉ số tương tác** từ Facebook (Page / Group / User), tập trung vào backend và desktop UI để scrape, lưu file, kiểm tra và fix dữ liệu thuận tiện hơn.
+- Script/Desktop UI: scrape va xuat du lieu ra file.
+- Backend API: FastAPI + SQLAlchemy, luu source/post/comment/metric vao database va co scheduler cap nhat dinh ky.
 
----
+## Cau truc chinh
 
-## Tính năng chính
+```text
+backend/
+  api/          FastAPI routes: auth, sources, posts, analytics, admin
+  database/     SQLAlchemy models, schemas, crud, init DB
+  scraper/      Facebook scraping service
+  scheduler/    APScheduler jobs
+  services/     Logic schedule, metric, trending
+  tests/        Unit tests
+docker/         Docker Compose cho PostgreSQL
+schema/         SQL schema tham khao
+data/           SQLite DB, telemetry, du lieu local
+```
 
-- **Scrape bài viết** từ Page/User timeline, hoặc Group feed (tùy module).
-- **Scrape bình luận & reply** cho từng bài viết (tùy chọn có/không).
-- **Tải ảnh** đi kèm bài viết (lưu theo từng `post_id`).
-- **Proxy & retry**: có cơ chế đổi proxy (module `proxy_utils.py`) và retry khi bị lỗi/mạng chập chờn.
-- **Backend API + DB**: quản lý Source/Post/Comment, lưu lịch sử metrics theo thời gian, hỗ trợ analytics cơ bản.
-- **Scheduler (APScheduler)**: chạy tác vụ định kỳ (nếu bật).
+Mot so script o root:
 
----
+- `facebook_ui.py`: giao dien PyQt de scrape.
+- `main.py`: menu CLI scrape page/user/group.
+- `comment_scraper.py`, `post_scraper.py`, `group_post_scraper_v2.py`: cac module scrape cu.
+- `fb_direct_fetch.py`: lay metric truc tiep.
+- `db_persistence.py`: ghi du lieu scrape vao DB.
 
-## Kiến trúc & “DB lưu trữ”
+## Yeu cau
 
-### 1) Lưu trữ dạng file (khi chạy UI/script)
+- Python 3.9+
+- SQLite mac dinh, hoac PostgreSQL neu cau hinh `DATABASE_URL`
+- Cookie/session Facebook hop le neu scrape noi dung can dang nhap
 
-Các script/UI hiện tại lưu theo cấu trúc thư mục:
-
-- `page_post/<Tên Page>/<post_id>/<post_id>.json` (+ ảnh: `<post_id>.jpg`, `<post_id>_2.jpg`, …)
-- `user_post/<Tên User>/<post_id>/<post_id>.json` (+ ảnh)
-- `group_post/<Tên Group>/<post_id>/<post_id>.json`
-- `simple_post/<post_id>/<post_id>.json` (+ ảnh nếu lấy được)
-
-Đối với timeline scrape, dữ liệu được tách rõ để tiện scale và debug:
-- post từ page lưu vào `page_post/`
-- post từ user/profile lưu vào `user_post/`
-- post từ group lưu vào `group_post/`
-
- file JSON, thường có:
-- **Thông tin post**: `post_id`, `feedback_id`, `permalink`, `text`, `reaction_count`, `comment_count`, `media`…
-- **Danh sách comments**: nằm trong key `comments` (mỗi comment có thể có `replies`).
-
-### 2) Lưu trữ DB (khi chạy Backend API)
-
-Backend dùng **SQLAlchemy** và hỗ trợ:
-- **SQLite** (mặc định): file DB đặt tại `./data/facebook_scraper.db`
-- **PostgreSQL** (production): cấu hình qua `DATABASE_URL`
-
-Các bảng chính (xem `backend/database/models.py`):
-- **users**: tài khoản, lưu `fb_cookies`, `fb_dtsg` (dạng text, dự kiến mã hóa ở tầng nghiệp vụ)
-- **sources**: nguồn theo dõi (PAGE/GROUP/USER) + trạng thái quyền truy cập
-- **posts**: bài viết + metrics hiện tại
-- **post_metrics**: lịch sử metrics theo thời gian
-- **comments**: bình luận (hỗ trợ reply qua `parent_comment_id`, `depth_level`)
-- **analytics_cache**: cache thống kê
-- **pipeline_jobs**, **pipeline_logs**, **task_logs**: log hệ thống
-
-> Migration cũ -> mới: chạy `python -m backend.database.migrations` trước khi drop các bảng legacy `scrape_jobs`/`scraper_logs`.
-
----
-
-## Cách triển khai (Deploy/Run)
-
-### Yêu cầu
-
-- Python **3.9+**
-- (Tùy chọn) Docker + Docker Compose nếu chạy bằng container
-
-### Cài đặt nhanh (local)
+## Cai dat local
 
 ```bash
 python -m venv venv
-venv\Scripts\activate  # Windows
-# source venv/bin/activate  # macOS/Linux
-
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### A) Chạy Desktop UI (khuyến nghị nếu bạn muốn “xuất file”)
+Windows:
 
-```bash
-python facebook_ui.py
+```bat
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
-Trong UI có phần cấu hình:
-- **Cookies + `fb_dtsg`**: có thể lấy bằng SeleniumBase (mở Chrome login) hoặc dán “Copy as cURL” từ DevTools.
-- **Proxy**: tự chọn proxy phù hợp theo việc có/không có cookie session.
+## Cau hinh
 
-### B) Chạy CLI menu (xuất file JSON/JPG)
-
-```bash
-python main.py
-```
-
-Chọn:
-- `User Post`: lấy N Post từ trang cá nhân user và comment
-- `Page Posts`: lấy N post từ page/user và comment
-- `Group Posts`: lấy N post từ group và comment
-
-### C) Chạy Backend API + DB (FastAPI, không bao gồm web dashboard)
-
-#### Tạo `.env` (tối thiểu)
-
-Repo hiện chưa có `.env.example`, bạn có thể tạo `.env` với các biến phổ biến sau:
+Tao file `.env` o root project. Cau hinh toi thieu:
 
 ```env
 ENV=development
@@ -113,67 +65,100 @@ ENCRYPTION_KEY=change-me
 SCHEDULER_ENABLED=True
 ```
 
-#### Chạy trên Windows
+Neu dung PostgreSQL:
 
-```bash
-run.bat
+```env
+DATABASE_URL=postgresql://scraper:scraper_password@localhost:5432/facebook_scraper
 ```
 
-#### Chạy trên macOS/Linux
+Luu y: `run.sh` va `run.bat` hien co buoc copy tu `.env.example`, nhung repo chua co file `.env.example`. Neu chua tao `.env`, hay tao thu cong theo mau tren.
 
-```bash
-bash run.sh
-```
+## Chay Backend API
 
-Hoặc chạy trực tiếp:
+Khoi tao DB:
 
 ```bash
 python -c "from backend.database.db import init_db; init_db()"
+```
+
+Chay API:
+
+```bash
 uvicorn backend.api.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+Dia chi:
+
 - API root: `http://localhost:8000`
 - Swagger: `http://localhost:8000/api/docs`
+- Health: `http://localhost:8000/health`
 
----
+Nhom endpoint chinh:
 
-## Triển khai bằng Docker Compose (production mẫu)
+- `/api/auth`
+- `/api/sources`
+- `/api/posts`
+- `/api/analytics`
+- `/api/admin`
 
-```bash
-docker-compose up -d --build
-docker-compose logs -f api
-```
+## Chay script scrape
 
-Mặc định `docker-compose.yml` sẽ chạy:
-- `postgres` (DB)
-- `api` (FastAPI)
-- `redis` (tùy chọn)
-- `nginx` (tùy chọn)
-
----
-
-## API (tóm tắt)
-
-Xem đầy đủ tại Swagger: `http://localhost:8000/api/docs`
-
-Các nhóm endpoint chính:
-- `/api/auth`: đăng ký/đăng nhập
-- `/api/sources`: quản lý nguồn theo dõi
-- `/api/posts`: truy vấn bài viết / metrics / comments
-- `/api/analytics`: thống kê/trending
-- `/api/admin`: thông tin hệ thống
-
----
-
-## Development & Testing
+Desktop UI:
 
 ```bash
-pytest
-black .
-flake8 .
-isort .
+python facebook_ui.py
 ```
 
----
+CLI menu:
 
+```bash
+python main.py
+```
 
+Du lieu file local co the duoc luu theo cac thu muc nhu `page_post/`, `user_post/`, `group_post/`, `simple_post/` tuy script dang chay.
+
+## PostgreSQL bang Docker
+
+File compose hien tai chi chay PostgreSQL:
+
+```bash
+docker compose -f docker/docker-compose.yml up -d
+```
+
+Sau do cau hinh `.env` de API ket noi vao PostgreSQL.
+
+## Database
+
+Backend dung SQLAlchemy. Cac bang quan trong nam trong `backend/database/models.py`:
+
+- `users`, `facebook_sessions`
+- `sources`
+- `posts`
+- `post_metrics`
+- `comments`
+- `analytics_cache`
+- `pipeline_jobs`, `pipeline_logs`, `task_logs`
+
+SQLite mac dinh nam tai:
+
+```text
+data/facebook_scraper.db
+```
+
+## Test
+
+```bash
+pytest backend/tests
+```
+
+Co the chay tung file test khi can:
+
+```bash
+pytest backend/tests/test_facebook_service.py
+```
+
+## Ghi chu
+
+- Thu muc `data/telemetry/` dung de ghi log request/debug local.
+- Scheduler co the tat bang `SCHEDULER_ENABLED=False`.
+- Scrape Facebook phu thuoc cookie, proxy, quyen truy cap source va thay doi giao dien/API cua Facebook.
