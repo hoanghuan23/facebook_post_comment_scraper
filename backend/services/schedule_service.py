@@ -70,6 +70,7 @@ def calculate_tier(source_id: int, db: Session) -> dict:
         }
     """
 
+    seven_days_ago = datetime.utcnow() - timedelta(days=7)
     row = db.execute(
         text(
             """
@@ -78,7 +79,7 @@ def calculate_tier(source_id: int, db: Session) -> dict:
                     SELECT CAST(COUNT(*) AS FLOAT) / 7
                     FROM posts
                     WHERE source_id = :source_id
-                      AND posted_at >= NOW() - INTERVAL '7 days'
+                      AND posted_at >= :seven_days_ago
                 )                          AS avg_posts,
                 COUNT(*)                   AS data_days,
                 AVG(
@@ -89,10 +90,10 @@ def calculate_tier(source_id: int, db: Session) -> dict:
                 )                          AS avg_likes_per_post
             FROM analytics_cache
             WHERE source_id = :source_id
-              AND date >= CURRENT_DATE - INTERVAL '7 days'
+              AND date >= :seven_days_ago
             """
         ),
-        {"source_id": source_id},
+        {"source_id": source_id, "seven_days_ago": seven_days_ago},
     ).fetchone()
 
     if not row or row.data_days == 0:

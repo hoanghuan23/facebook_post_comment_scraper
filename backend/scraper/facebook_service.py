@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 import base64
+import inspect
 import json
 import logging
 import re
@@ -66,6 +67,26 @@ def _load_json_dict(raw_value: Optional[str]) -> Dict[str, Any]:
     if isinstance(parsed, dict):
         return parsed
     return {}
+
+
+def _call_fetch_posts_with_supported_kwargs(fetch_posts: Any, kwargs: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Call scraper fetch_posts while preserving compatibility with old test doubles."""
+    try:
+        signature = inspect.signature(fetch_posts)
+    except (TypeError, ValueError):
+        return fetch_posts(**kwargs)
+
+    parameters = signature.parameters.values()
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters):
+        return fetch_posts(**kwargs)
+
+    supported_names = {
+        parameter.name
+        for parameter in signature.parameters.values()
+        if parameter.kind in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}
+    }
+    supported_kwargs = {key: value for key, value in kwargs.items() if key in supported_names}
+    return fetch_posts(**supported_kwargs)
 
 
 def _coerce_datetime(value: Any) -> Optional[datetime]:
@@ -296,33 +317,24 @@ class FacebookScraperService:
         stop_when_targets_found: bool = False,
         on_page_diagnostic: Any = None,
     ) -> List[Dict[str, Any]]:
-        """Call group scraper with new args, fallback to legacy signature for compatibility."""
-        try:
-            fetch_kwargs = {
-                "limit": limit,
-                "last_24_hours_only": last_24_hours_only,
-                "min_posted_at": min_posted_at,
-                "consecutive_old_limit": consecutive_old_limit,
-                "group_id": group_id,
-                "group_name": group_name,
-                "cookies": group_scraper.COOKIES,
-                "fb_dtsg": group_scraper.FB_DTSG,
-                "download_media": download_media,
-                "skip_existing_posts": skip_existing_posts,
-                "on_page_diagnostic": on_page_diagnostic,
-            }
-            if target_post_ids:
-                fetch_kwargs["target_post_ids"] = target_post_ids
-                fetch_kwargs["stop_when_targets_found"] = stop_when_targets_found
-            return group_scraper.fetch_posts(**fetch_kwargs)
-        except TypeError:
-            # Legacy tests/mocks may patch fetch_posts(limit=...) only.
-            if last_24_hours_only:
-                try:
-                    return group_scraper.fetch_posts(limit=None, last_24_hours_only=True)
-                except TypeError:
-                    return group_scraper.fetch_posts(limit=limit)
-            return group_scraper.fetch_posts(limit=limit)
+        """Call group scraper with only the kwargs supported by the current callable."""
+        fetch_kwargs = {
+            "limit": limit,
+            "last_24_hours_only": last_24_hours_only,
+            "min_posted_at": min_posted_at,
+            "consecutive_old_limit": consecutive_old_limit,
+            "group_id": group_id,
+            "group_name": group_name,
+            "cookies": group_scraper.COOKIES,
+            "fb_dtsg": group_scraper.FB_DTSG,
+            "download_media": download_media,
+            "skip_existing_posts": skip_existing_posts,
+            "on_page_diagnostic": on_page_diagnostic,
+        }
+        if target_post_ids:
+            fetch_kwargs["target_post_ids"] = target_post_ids
+            fetch_kwargs["stop_when_targets_found"] = stop_when_targets_found
+        return _call_fetch_posts_with_supported_kwargs(group_scraper.fetch_posts, fetch_kwargs)
 
     @staticmethod
     def _create_group_page_diagnostic_logger(
@@ -373,36 +385,16 @@ class FacebookScraperService:
         download_media: bool = True,
         skip_existing_posts: bool = True,
     ) -> List[Dict[str, Any]]:
-        try:
-            if last_24_hours_only:
-                return timeline_scraper.fetch_posts(
-                    limit=None,
-                    base_folder=base_folder,
-                    last_24_hours_only=True,
-                    min_posted_at=min_posted_at,
-                    consecutive_old_limit=consecutive_old_limit,
-                    download_media=download_media,
-                    skip_existing_posts=skip_existing_posts,
-                )
-            return timeline_scraper.fetch_posts(
-                limit=limit,
-                base_folder=base_folder,
-                download_media=download_media,
-                skip_existing_posts=skip_existing_posts,
-                min_posted_at=min_posted_at,
-                consecutive_old_limit=consecutive_old_limit,
-            )
-        except TypeError:
-            if last_24_hours_only:
-                try:
-                    return timeline_scraper.fetch_posts(
-                        limit=None,
-                        base_folder=base_folder,
-                        last_24_hours_only=True,
-                    )
-                except TypeError:
-                    return timeline_scraper.fetch_posts(limit=limit, base_folder=base_folder)
-            return timeline_scraper.fetch_posts(limit=limit, base_folder=base_folder)
+        fetch_kwargs = {
+            "limit": None if last_24_hours_only else limit,
+            "base_folder": base_folder,
+            "last_24_hours_only": last_24_hours_only,
+            "min_posted_at": min_posted_at,
+            "consecutive_old_limit": consecutive_old_limit,
+            "download_media": download_media,
+            "skip_existing_posts": skip_existing_posts,
+        }
+        return _call_fetch_posts_with_supported_kwargs(timeline_scraper.fetch_posts, fetch_kwargs)
 
     @staticmethod
     def _apply_timeline_context(source: Source) -> None:

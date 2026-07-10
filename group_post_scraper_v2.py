@@ -1282,15 +1282,20 @@ def fetch_posts(
             try:
                 data = parse_fb_response(r.text)
             except Exception:
-                telemetry.record_response(r, telemetry.CLASS_PARSE_ERROR)
+                telemetry.record_response(r, success=False, classification=telemetry.CLASS_PARSE_ERROR)
                 raise
             
             if data and len(data) > 0:
-                telemetry.record_response(r, telemetry.classify_response(r.status_code, r.text))
+                classification = telemetry.classify_response(getattr(r, "status_code", 200), r.text)
+                telemetry.record_response(
+                    r,
+                    success=classification == telemetry.CLASS_SUCCESS,
+                    classification=classification,
+                )
                 # Got valid data, break retry loop
                 break
             else:
-                telemetry.record_response(r, telemetry.CLASS_EMPTY_RESPONSE)
+                telemetry.record_response(r, success=False, classification=telemetry.CLASS_EMPTY_RESPONSE)
                 empty_retry_count += 1
                 if empty_retry_count < max_empty_retries:
                     print(f"Phản hồi rỗng, đang thử lại ({empty_retry_count}/{max_empty_retries})...")
@@ -1497,7 +1502,7 @@ def fetch_posts(
         
         if received_posts > 0 and posts_found == 0:
             print(
-                f"Response chứa {received_posts} post nhưng 0 có post mới"
+                f"Response chứa {received_posts} post nhưng 0 post được giữ lại sau bộ lọc"
                 f"(filtered_by_latest_cutoff={filtered_by_latest_cutoff})"
             )
         else:

@@ -5,6 +5,7 @@ import logging
 import sqlite3
 
 from fastapi import BackgroundTasks
+import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from backend.database.crud import CommentCRUD, FacebookSessionCRUD, PipelineJobCRUD, PostCRUD, PostMetricCRUD, SourceCRUD, UserCRUD
@@ -2401,6 +2402,44 @@ def test_refresh_recent_post_metrics_passes_download_media_flag_to_timeline_fetc
         assert calls[0]["skip_existing_posts"] is False
     finally:
         db.close()
+
+
+def test_timeline_fetch_compat_does_not_retry_internal_type_error(monkeypatch):
+    calls = []
+
+    def fake_fetch_posts(**kwargs):
+        calls.append(kwargs)
+        raise TypeError("telemetry call shape mismatch")
+
+    monkeypatch.setattr("backend.scraper.facebook_service.timeline_scraper.fetch_posts", fake_fetch_posts)
+
+    with pytest.raises(TypeError, match="telemetry call shape mismatch"):
+        FacebookScraperService._fetch_timeline_posts_with_compat(
+            limit=5,
+            base_folder="page_post",
+            last_24_hours_only=False,
+        )
+
+    assert len(calls) == 1
+
+
+def test_group_fetch_compat_does_not_retry_internal_type_error(monkeypatch):
+    calls = []
+
+    def fake_fetch_posts(**kwargs):
+        calls.append(kwargs)
+        raise TypeError("telemetry call shape mismatch")
+
+    monkeypatch.setattr("backend.scraper.facebook_service.group_scraper.fetch_posts", fake_fetch_posts)
+
+    with pytest.raises(TypeError, match="telemetry call shape mismatch"):
+        FacebookScraperService._fetch_group_posts_with_compat(
+            limit=5,
+            last_24_hours_only=False,
+            group_id="group-1",
+        )
+
+    assert len(calls) == 1
 
 
 def test_scrape_timeline_source_applies_resolved_source_id_before_fetch(monkeypatch):
