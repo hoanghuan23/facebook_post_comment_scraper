@@ -6,6 +6,25 @@ from backend.scraper import request_telemetry as telemetry
 from backend.scraper import direct_post_metrics
 
 
+REQUEST_LEVEL_ONLY_KEYS = {
+    "total_requests",
+    "success_requests",
+    "error_requests",
+    "first_error_request_index",
+    "retry_count",
+    "retry_success",
+    "retry_failed",
+    "max_consecutive_errors",
+    "requests_per_minute",
+    "latency_ms",
+    "errors_by_classification",
+    "by_hour",
+    "proxy_mode",
+    "by_endpoint",
+    "by_status_code",
+}
+
+
 def _event(
     *,
     request_id,
@@ -130,25 +149,27 @@ def test_build_summary_counts_retry_and_error_metrics(tmp_path):
     summary = telemetry.build_summary(date="2026-07-09", path=raw_path)
 
     assert summary["schema_version"] == 2
-    assert summary["total_requests"] == 5
-    assert summary["success_requests"] == 2
-    assert summary["error_requests"] == 3
-    assert summary["request_level"]["success_rate"] == 0.4
+    assert REQUEST_LEVEL_ONLY_KEYS.isdisjoint(summary.keys())
+    request_level = summary["request_level"]
+    assert request_level["total_requests"] == 5
+    assert request_level["success_requests"] == 2
+    assert request_level["error_requests"] == 3
+    assert request_level["success_rate"] == 0.4
     assert summary["estimated_outcome_level"]["estimated"] is True
     assert summary["total_operations"] == 0
     assert summary["success_rate"] == 0
     assert summary["error_rate"] == 0
-    assert summary["first_error_request_index"] == 2
-    assert summary["retry_count"] == 2
-    assert summary["retry_success"] == 1
-    assert summary["retry_failed"] == 1
-    assert summary["max_consecutive_errors"] == 2
-    assert summary["errors_by_classification"] == {"http_error": 2, "timeout": 1}
-    assert summary["latency_ms"]["avg"] == 300
-    assert summary["latency_ms"]["p50"] == 300
-    assert summary["by_hour"]["10"]["total"] == 5
-    assert summary["proxy_mode"]["none"] == {"total": 5, "success": 2, "error": 3}
-    assert summary["requests_per_minute"] > 0
+    assert request_level["first_error_request_index"] == 2
+    assert request_level["retry_count"] == 2
+    assert request_level["retry_success"] == 1
+    assert request_level["retry_failed"] == 1
+    assert request_level["max_consecutive_errors"] == 2
+    assert request_level["errors_by_classification"] == {"http_error": 2, "timeout": 1}
+    assert request_level["latency_ms"]["avg"] == 300
+    assert request_level["latency_ms"]["p50"] == 300
+    assert request_level["by_hour"]["10"]["total"] == 5
+    assert request_level["proxy_mode"]["none"] == {"total": 5, "success": 2, "error": 3}
+    assert request_level["requests_per_minute"] > 0
 
 
 def test_build_summary_prefers_operation_outcomes_over_raw_request_errors(tmp_path):
@@ -189,13 +210,47 @@ def test_build_summary_prefers_operation_outcomes_over_raw_request_errors(tmp_pa
 
     summary = telemetry.build_summary(date="2026-07-09", path=raw_path)
 
-    assert summary["total_requests"] == 2
+    assert "total_requests" not in summary
+    assert summary["request_level"]["total_requests"] == 2
     assert summary["request_level"]["error_rate"] == 1.0
     assert summary["total_operations"] == 2
     assert summary["success_operations"] == 1
     assert summary["error_operations"] == 1
     assert summary["success_rate"] == 0.5
+    assert summary["error_rate"] == summary["outcome_level"]["error_rate"] == 0.5
     assert summary["outcome_level"]["failure_reasons"] == {"empty_source_response": 1}
+
+
+def test_normalize_summary_preserves_legacy_request_fields_under_request_level():
+    legacy = {
+        "schema_version": 2,
+        "date": "2026-07-09",
+        "success_rate": 0.2,
+        "error_rate": 0.8,
+        "outcome_level": {
+            "total_operations": 2,
+            "success_operations": 1,
+            "error_operations": 1,
+            "success_rate": 0.5,
+            "error_rate": 0.5,
+        },
+        "total_requests": 10,
+        "success_requests": 2,
+        "error_requests": 8,
+        "latency_ms": {"avg": 123},
+        "by_endpoint": {"direct": {"total": 10}},
+    }
+
+    normalized = telemetry.normalize_summary(legacy)
+
+    assert REQUEST_LEVEL_ONLY_KEYS.isdisjoint(normalized.keys())
+    assert normalized["success_rate"] == 0.5
+    assert normalized["error_rate"] == 0.5
+    assert normalized["total_operations"] == 2
+    assert normalized["request_level"]["total_requests"] == 10
+    assert normalized["request_level"]["error_requests"] == 8
+    assert normalized["request_level"]["latency_ms"] == {"avg": 123}
+    assert normalized["request_level"]["by_endpoint"] == {"direct": {"total": 10}}
 
 
 def test_append_event_writes_jsonl_to_configured_directory(tmp_path, monkeypatch):
@@ -265,10 +320,38 @@ def test_direct_post_metrics_do_get_writes_telemetry(tmp_path, monkeypatch):
     assert event["endpoint_label"] == "facebook_direct_www/original"
     assert event["source_id"] == 777
     assert event["facebook_id"] == "source-facebook-id"
-    assert event["classification"] == "success"
+    assert event["classification"] == "no_metric_signal"
     assert event["event_type"] == "request"
     assert "cookie" not in lines[0].lower()
     assert "token" not in lines[0].lower()
+
+
+def test_direct_post_metrics_do_get_keeps_http_error_for_status_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv("FACEBOOK_TELEMETRY_DIR", str(tmp_path))
+    telemetry.start_run("direct-run")
+    telemetry.set_context(source_id=777, facebook_id="source-facebook-id")
+
+    response = requests.Response()
+    response.status_code = 404
+    response.url = "https://www.facebook.com/posts/post-1"
+    response._content = b"not found"
+
+    class FakeSession:
+        def get(self, url, timeout=None, allow_redirects=True):
+            return response
+
+    metric = direct_post_metrics.do_get(
+        FakeSession(),
+        "https://www.facebook.com/posts/post-1",
+        "post-1",
+        "www/original",
+        timeout=1,
+    )
+
+    assert metric.is_not_found is True
+    raw_path = next(tmp_path.glob("facebook_requests_*.jsonl"))
+    event = json.loads(raw_path.read_text(encoding="utf-8").splitlines()[0])
+    assert event["classification"] == "http_error"
 
 
 def test_append_operation_event_writes_outcome_without_sensitive_data(tmp_path, monkeypatch):

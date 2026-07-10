@@ -26,6 +26,7 @@ CLASS_PROXY_ERROR = "proxy_error"
 CLASS_EMPTY_RESPONSE = "empty_response"
 CLASS_PARSE_ERROR = "parse_error"
 CLASS_LOGIN_REQUIRED = "login_required_or_checkpoint"
+CLASS_NO_METRIC_SIGNAL = "no_metric_signal"
 OP_SOURCE_SCRAPE = "source_scrape"
 OP_DIRECT_POST_METRIC = "direct_post_metric"
 FAIL_LOGIN_REQUIRED = "login_required"
@@ -34,6 +35,24 @@ FAIL_NOT_FOUND = "not_found"
 FAIL_NO_METRIC_SIGNAL = "no_metric_signal"
 FAIL_EMPTY_SOURCE_RESPONSE = "empty_source_response"
 FAIL_EXCEPTION = "exception"
+
+LEGACY_REQUEST_LEVEL_KEYS = {
+    "total_requests",
+    "success_requests",
+    "error_requests",
+    "first_error_request_index",
+    "retry_count",
+    "retry_success",
+    "retry_failed",
+    "max_consecutive_errors",
+    "requests_per_minute",
+    "latency_ms",
+    "errors_by_classification",
+    "by_hour",
+    "proxy_mode",
+    "by_endpoint",
+    "by_status_code",
+}
 
 _run_id: ContextVar[Optional[str]] = ContextVar("facebook_telemetry_run_id", default=None)
 _source_id: ContextVar[Optional[Any]] = ContextVar("facebook_telemetry_source_id", default=None)
@@ -588,6 +607,8 @@ def _build_operation_level(events: list[Dict[str, Any]], *, estimated: bool = Fa
 def _failure_reason_from_classification(classification: Optional[str]) -> str:
     if classification == CLASS_LOGIN_REQUIRED:
         return FAIL_LOGIN_REQUIRED
+    if classification == CLASS_NO_METRIC_SIGNAL:
+        return FAIL_NO_METRIC_SIGNAL
     if classification in {CLASS_TIMEOUT, CLASS_CONNECTION_ERROR, CLASS_PROXY_ERROR, CLASS_HTTP_ERROR}:
         return str(classification)
     return "unknown"
@@ -658,10 +679,58 @@ def build_summary(date: Optional[str] = None, path: Optional[Path] = None) -> Di
             "generated_at is the snapshot time; if raw JSONL receives more events later, this summary is not a full-day report.",
         ],
     }
-    summary.update(request_level)
-    summary["success_rate"] = primary_outcome["success_rate"]
-    summary["error_rate"] = primary_outcome["error_rate"]
     return summary
+
+
+def normalize_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(summary)
+
+    request_level = normalized.get("request_level")
+    if not isinstance(request_level, dict):
+        request_level = {}
+    else:
+        request_level = dict(request_level)
+
+    for key in LEGACY_REQUEST_LEVEL_KEYS:
+        if key in normalized and key not in request_level:
+            request_level[key] = normalized[key]
+        normalized.pop(key, None)
+
+    if "success_rate" not in request_level and "total_requests" in request_level and "error_requests" in request_level:
+        total = int(request_level.get("total_requests") or 0)
+        error = int(request_level.get("error_requests") or 0)
+        success = max(total - error, 0)
+        request_level["success_rate"] = round(success / total, 4) if total else 0
+    if "error_rate" not in request_level and "total_requests" in request_level and "error_requests" in request_level:
+        total = int(request_level.get("total_requests") or 0)
+        error = int(request_level.get("error_requests") or 0)
+        request_level["error_rate"] = round(error / total, 4) if total else 0
+
+    if request_level:
+        normalized["request_level"] = request_level
+
+    outcome_level = normalized.get("outcome_level")
+    if isinstance(outcome_level, dict):
+        if "success_rate" in outcome_level:
+            normalized["success_rate"] = outcome_level["success_rate"]
+        if "error_rate" in outcome_level:
+            normalized["error_rate"] = outcome_level["error_rate"]
+        for source_key, target_key in (
+            ("total_operations", "total_operations"),
+            ("success_operations", "success_operations"),
+            ("error_operations", "error_operations"),
+        ):
+            if source_key in outcome_level:
+                normalized[target_key] = outcome_level[source_key]
+
+    return normalized
+
+
+def read_summary(date: Optional[str] = None, path: Optional[Path] = None) -> Dict[str, Any]:
+    input_path = path or summary_path(date)
+    with input_path.open("r", encoding="utf-8") as fh:
+        summary = json.load(fh)
+    return normalize_summary(summary) if isinstance(summary, dict) else {}
 
 
 def write_summary(date: Optional[str] = None, path: Optional[Path] = None) -> Dict[str, Any]:

@@ -554,10 +554,10 @@ def do_get(
 
     metric = parse_html_metrics(html, post_id, response.url, method)
     state = detect_html_state(html)
-    request_telemetry.record_response(
-        response,
-        _direct_classification(response.status_code, html, state),
-    )
+    classification = _direct_classification(response.status_code, html, state)
+    if response.status_code == 200 and state == "ok" and not metric.has_metric_signal:
+        classification = request_telemetry.CLASS_NO_METRIC_SIGNAL
+    request_telemetry.record_response(response, classification)
     return metric
 
 
