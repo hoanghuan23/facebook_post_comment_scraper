@@ -178,7 +178,7 @@ async def periodic_scrape_new_posts():
                 result = FacebookScraperService.scrape_source(
                     job_db,
                     source_id,
-                    limit=10,
+                    limit=150,
                     last_24_hours_only=True,
                     min_posted_at=latest_posted_at,
                     consecutive_old_limit=settings.SCRAPER_CONSECUTIVE_OLD_LIMIT,
