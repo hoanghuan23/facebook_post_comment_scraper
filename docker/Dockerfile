@@ -18,8 +18,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Create directories
-RUN mkdir -p logs data
+# Create data directory
+RUN mkdir -p data
 
 # Set environment
 ENV PYTHONUNBUFFERED=1

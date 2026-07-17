@@ -111,9 +111,6 @@ class Settings(BaseSettings):
     
     # Logging
     LOG_LEVEL: str = "INFO"
-    LOG_FILE: str = "logs/app.log"
-    LOG_MAX_SIZE: int = 10 * 1024 * 1024  # 10 MB
-    LOG_BACKUP_COUNT: int = 5
     
     # Email (for reports)
     SMTP_ENABLED: bool = False

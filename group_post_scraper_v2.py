@@ -1412,7 +1412,7 @@ def fetch_posts(
             #     # )
 
             if WRITE_DEBUG_FILES:
-                debug_dir = "logs"
+                debug_dir = os.path.join("data", "debug")
                 os.makedirs(debug_dir, exist_ok=True)
                 raw_path = os.path.join(debug_dir, f"group_debug_page_{page_num}.txt")
                 parsed_path = os.path.join(debug_dir, f"group_debug_page_{page_num}.json")
@@ -1532,4 +1532,3 @@ if __name__ == "__main__":
         if post['message']:
             preview = post['message'][:100] + '...' if len(post['message']) > 100 else post['message']
             print(f"   {preview}")
-
