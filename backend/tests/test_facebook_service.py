@@ -488,6 +488,98 @@ def test_scrape_group_source_min_posted_at_only_persists_newer_posts(monkeypatch
         db.close()
 
 
+def test_scrape_group_source_passes_existing_db_post_ids_for_consecutive_old_stop(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="existing-stop-user", email="existing-stop@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="existing-stop-group",
+            facebook_url="https://www.facebook.com/groups/existing-stop-group",
+            source_name="Existing Stop Group",
+            include_comments=False,
+        )
+        PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="existing-db-1",
+            facebook_url="https://facebook.com/posts/existing-db-1",
+            posted_at=datetime.utcnow(),
+        )
+        untracked = PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="existing-db-untracked",
+            facebook_url="https://facebook.com/posts/existing-db-untracked",
+            posted_at=datetime.utcnow(),
+        )
+        untracked.is_tracked = False
+        db.commit()
+
+        calls = []
+
+        def fake_fetch_posts(**kwargs):
+            calls.append(kwargs)
+            return []
+
+        monkeypatch.setattr("backend.scraper.facebook_service.group_scraper.fetch_posts", fake_fetch_posts)
+
+        FacebookScraperService.scrape_source(
+            db,
+            source.id,
+            last_24_hours_only=True,
+            consecutive_old_limit=3,
+        )
+
+        assert calls[0]["consecutive_old_limit"] == 3
+        assert set(calls[0]["existing_post_ids"]) == {"existing-db-1", "existing-db-untracked"}
+    finally:
+        db.close()
+
+
+def test_scrape_group_source_without_consecutive_old_limit_does_not_use_existing_db_stop(monkeypatch):
+    db = SessionLocal()
+    try:
+        user = UserCRUD.create(db, username="scrape24h-stop-user", email="scrape24h-stop@example.com", password="secret123")
+        source = SourceCRUD.create(
+            db,
+            user_id=user.id,
+            source_type="group",
+            facebook_id="scrape24h-stop-group",
+            facebook_url="https://www.facebook.com/groups/scrape24h-stop-group",
+            source_name="Scrape 24h Stop Group",
+            include_comments=False,
+        )
+        PostCRUD.create(
+            db,
+            source_id=source.id,
+            facebook_post_id="existing-db-24h",
+            facebook_url="https://facebook.com/posts/existing-db-24h",
+            posted_at=datetime.utcnow(),
+        )
+
+        calls = []
+
+        def fake_fetch_posts(**kwargs):
+            calls.append(kwargs)
+            return []
+
+        monkeypatch.setattr("backend.scraper.facebook_service.group_scraper.fetch_posts", fake_fetch_posts)
+
+        FacebookScraperService.scrape_source(
+            db,
+            source.id,
+            last_24_hours_only=True,
+        )
+
+        assert calls[0]["consecutive_old_limit"] is None
+        assert calls[0]["existing_post_ids"] is None
+    finally:
+        db.close()
+
+
 def test_scrape_group_source_updates_existing_post_without_duplicate_metric(monkeypatch):
     db = SessionLocal()
     try:
@@ -1897,7 +1989,7 @@ def test_post_upsert_recovers_when_concurrent_insert_wins(monkeypatch):
         db.close()
 
 
-def test_periodic_scrape_new_posts_uses_latest_db_post_as_cutoff(monkeypatch):
+def test_periodic_scrape_new_posts_does_not_use_latest_db_post_as_cutoff(monkeypatch):
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="periodic-cutoff", email="periodic-cutoff@example.com", password="secret123")
@@ -1963,7 +2055,7 @@ def test_periodic_scrape_new_posts_uses_latest_db_post_as_cutoff(monkeypatch):
 
     verify_db = SessionLocal()
     try:
-        assert PostCRUD.get_by_source_and_facebook_post_id(verify_db, source_id, "periodic-old") is None
+        assert PostCRUD.get_by_source_and_facebook_post_id(verify_db, source_id, "periodic-old") is not None
         assert PostCRUD.get_by_source_and_facebook_post_id(verify_db, source_id, "periodic-new") is not None
     finally:
         verify_db.close()
@@ -2514,7 +2606,7 @@ def test_group_fetch_posts_reports_old_filtered_posts_without_empty_diagnostic(m
     assert events == []
     assert "Response chứa 3 post nhưng 0 post được giữ lại sau bộ lọc" in output
     assert "Chuẩn đoán response:" not in output
-    assert "Đã gặp đủ số post cũ liên tiếp theo latest cutoff." in output
+    assert "Đã gặp đủ số post cũ liên tiếp." in output
 
 
 def test_direct_post_metrics_parser_reads_targeted_comet_counts():
@@ -4394,7 +4486,7 @@ def test_refresh_source_only_marks_source_due_without_recalculating_schedule():
         db.close()
 
 
-def test_periodic_scrape_new_posts_uses_24h_window_and_latest_post_even_untracked(monkeypatch):
+def test_periodic_scrape_new_posts_uses_24h_window_and_existing_post_stop(monkeypatch):
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="periodic-cutoff-user", email="periodic-cutoff@example.com", password="secret123")
@@ -4443,7 +4535,8 @@ def test_periodic_scrape_new_posts_uses_24h_window_and_latest_post_even_untracke
     assert len(calls) == 1
     assert calls[0][0] == source_id
     assert calls[0][1]["last_24_hours_only"] is True
-    assert calls[0][1]["min_posted_at"] == latest_posted_at
+    assert calls[0][1]["min_posted_at"] is None
+    assert calls[0][1]["consecutive_old_limit"] == 3
 
 
 def test_periodic_scrape_new_posts_skips_source_with_running_scrape_job(monkeypatch):
@@ -4587,7 +4680,8 @@ def test_periodic_scrape_new_posts_does_not_include_due_metric_targets(monkeypat
     assert len(calls) == 1
     assert calls[0][0] == source_id
     assert calls[0][1]["last_24_hours_only"] is True
-    assert calls[0][1]["min_posted_at"] == due_posted_at
+    assert calls[0][1]["min_posted_at"] is None
+    assert calls[0][1]["consecutive_old_limit"] == 3
     assert "metric_target_post_ids" not in calls[0][1]
 
 

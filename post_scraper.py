@@ -605,6 +605,7 @@ def fetch_posts(
     skip_existing_posts=True,
     min_posted_at=None,
     consecutive_old_limit=None,
+    existing_post_ids=None,
 ):
     """Fetch posts from a Facebook timeline (page or user profile).
     
@@ -617,7 +618,10 @@ def fetch_posts(
         last_24_hours_only: Only include posts whose posted_at is within the last 24 hours.
         download_media: Whether to download media files locally. Metadata is still extracted when False.
         min_posted_at: When set, skip posts at or before this timestamp.
-        consecutive_old_limit: Stop pagination after this many consecutive posts are at or before min_posted_at.
+        consecutive_old_limit: Stop pagination after this many consecutive old posts.
+            With existing_post_ids, "old" means already persisted in DB; with min_posted_at,
+            it means posted at or before that timestamp.
+        existing_post_ids: Optional DB-backed post IDs that should be treated as already scraped.
     """
     request_page_name = PAGE_NAME
     all_posts = []
@@ -628,6 +632,11 @@ def fetch_posts(
     min_posted_at_cutoff = _parse_iso_datetime(min_posted_at)
     consecutive_old_limit = int(consecutive_old_limit or 0)
     consecutive_old_count = 0
+    existing_post_id_set = (
+        {str(post_id) for post_id in (existing_post_ids or []) if post_id}
+        if consecutive_old_limit > 0
+        else set()
+    )
     stop_due_to_time = False
     stop_due_to_consecutive_old = False
     max_pages = int(os.getenv("SCRAPER_MAX_24H_PAGES", "100")) if last_24_hours_only else None
@@ -800,6 +809,16 @@ def fetch_posts(
             posted_at = extract_posted_at(node)
             posted_dt = _parse_iso_datetime(posted_at)
 
+            if str(post_id) in existing_post_id_set:
+                consecutive_old_count += 1
+                print(
+                    f"  Gặp post đã có trong DB: {post_id}"
+                    f" consecutive_old={consecutive_old_count}/{consecutive_old_limit or '-'}"
+                )
+                if consecutive_old_limit > 0 and consecutive_old_count >= consecutive_old_limit:
+                    stop_due_to_consecutive_old = True
+                continue
+
             if min_posted_at_cutoff and posted_dt:
                 if posted_dt <= min_posted_at_cutoff:
                     consecutive_old_count += 1
@@ -811,6 +830,8 @@ def fetch_posts(
                     if consecutive_old_limit > 0 and consecutive_old_count >= consecutive_old_limit:
                         stop_due_to_consecutive_old = True
                     continue
+                consecutive_old_count = 0
+            elif existing_post_id_set:
                 consecutive_old_count = 0
 
             if cutoff_time:
@@ -917,7 +938,7 @@ def fetch_posts(
 
         if stop_due_to_consecutive_old:
             print(
-                "Đã gặp đủ số post cũ liên tiếp theo latest cutoff."
+                "Đã gặp đủ số post cũ liên tiếp."
                 f" Dừng phân trang. consecutive_old={consecutive_old_count}/{consecutive_old_limit}"
             )
             break

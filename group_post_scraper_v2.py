@@ -1001,6 +1001,7 @@ def fetch_posts(
     proxies=None,
     download_media=True,
     skip_existing_posts=True,
+    existing_post_ids=None,
     target_post_ids=None,
     stop_when_targets_found=False,
     on_page_diagnostic=None,
@@ -1014,11 +1015,14 @@ def fetch_posts(
         on_batch_complete: Optional callback function(batch_posts, total_so_far, limit) called after each batch
         last_24_hours_only: Only include posts whose posted_at is within the last 24 hours.
         min_posted_at: When set, skip posts at or before this timestamp.
-        consecutive_old_limit: Stop pagination after this many consecutive posts are at or before min_posted_at.
+        consecutive_old_limit: Stop pagination after this many consecutive old posts.
+            With existing_post_ids, "old" means already persisted in DB; with min_posted_at,
+            it means posted at or before that timestamp.
         group_id/group_name/cookies/fb_dtsg/headers/proxies: Optional per-run context.
             When omitted, module globals are used for backwards compatibility.
         download_media: Whether to download media files locally. Metadata is still extracted when False.
         skip_existing_posts: When True, skip posts already persisted on disk. Disable for metric refresh.
+        existing_post_ids: Optional DB-backed post IDs that should be treated as already scraped.
         target_post_ids: Optional post IDs to look for during metric refresh.
         stop_when_targets_found: Stop pagination once all target_post_ids have been seen.
         on_page_diagnostic: Optional callback receiving details for pages with no extracted posts.
@@ -1046,6 +1050,11 @@ def fetch_posts(
     min_posted_at_cutoff = _parse_iso_datetime(min_posted_at)
     consecutive_old_limit = int(consecutive_old_limit or 0)
     consecutive_old_count = 0
+    existing_post_id_set = (
+        {str(post_id) for post_id in (existing_post_ids or []) if post_id}
+        if consecutive_old_limit > 0
+        else set()
+    )
     stop_due_to_time = False
     stop_due_to_consecutive_old = False
     target_post_id_set = {str(post_id) for post_id in (target_post_ids or []) if post_id}
@@ -1233,6 +1242,16 @@ def fetch_posts(
                 posted_at = extract_posted_at(story_node)
                 posted_dt = _parse_iso_datetime(posted_at)
 
+                if temp_post_id and str(temp_post_id) in existing_post_id_set:
+                    consecutive_old_count += 1
+                    print(
+                        f"  Gặp post đã có trong DB: {temp_post_id}"
+                        f" consecutive_old={consecutive_old_count}/{consecutive_old_limit or '-'}"
+                    )
+                    if consecutive_old_limit > 0 and consecutive_old_count >= consecutive_old_limit:
+                        stop_due_to_consecutive_old = True
+                    continue
+
                 if min_posted_at_cutoff and posted_dt:
                     if posted_dt <= min_posted_at_cutoff:
                         filtered_by_latest_cutoff += 1
@@ -1245,6 +1264,8 @@ def fetch_posts(
                         if consecutive_old_limit > 0 and consecutive_old_count >= consecutive_old_limit:
                             stop_due_to_consecutive_old = True
                         continue
+                    consecutive_old_count = 0
+                elif existing_post_id_set:
                     consecutive_old_count = 0
 
                 if cutoff_time:
@@ -1458,7 +1479,7 @@ def fetch_posts(
 
         if stop_due_to_consecutive_old:
             print(
-                "Đã gặp đủ số post cũ liên tiếp theo latest cutoff."
+                "Đã gặp đủ số post cũ liên tiếp."
                 f" Dừng phân trang. consecutive_old={consecutive_old_count}/{consecutive_old_limit}"
             )
             break
@@ -1532,4 +1553,3 @@ if __name__ == "__main__":
         if post['message']:
             preview = post['message'][:100] + '...' if len(post['message']) > 100 else post['message']
             print(f"   {preview}")
-

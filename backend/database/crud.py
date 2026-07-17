@@ -594,6 +594,15 @@ class PostCRUD:
 
         rows = query.group_by(models.Post.source_id).all()
         return {source_id: latest_posted_at for source_id, latest_posted_at in rows}
+
+    @staticmethod
+    def get_facebook_post_ids_by_source(db: Session, source_id: int) -> List[str]:
+        """Get all persisted Facebook post IDs for a source."""
+        rows = db.query(models.Post.facebook_post_id).filter(
+            models.Post.source_id == source_id,
+            models.Post.facebook_post_id.isnot(None),
+        ).all()
+        return [str(facebook_post_id) for (facebook_post_id,) in rows if facebook_post_id]
     
     @staticmethod
     def get_recent_posts(db: Session, hours: int = 24, limit: int = 100) -> List[models.Post]:

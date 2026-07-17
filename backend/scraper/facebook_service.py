@@ -288,6 +288,7 @@ class FacebookScraperService:
         last_24_hours_only: bool,
         min_posted_at: Optional[datetime] = None,
         consecutive_old_limit: Optional[int] = None,
+        existing_post_ids: Optional[List[str]] = None,
         group_id: Optional[str] = None,
         group_name: Optional[str] = None,
         download_media: bool = True,
@@ -303,6 +304,7 @@ class FacebookScraperService:
                 "last_24_hours_only": last_24_hours_only,
                 "min_posted_at": min_posted_at,
                 "consecutive_old_limit": consecutive_old_limit,
+                "existing_post_ids": existing_post_ids,
                 "group_id": group_id,
                 "group_name": group_name,
                 "cookies": group_scraper.COOKIES,
@@ -370,6 +372,7 @@ class FacebookScraperService:
         last_24_hours_only: bool,
         min_posted_at: Optional[datetime] = None,
         consecutive_old_limit: Optional[int] = None,
+        existing_post_ids: Optional[List[str]] = None,
         download_media: bool = True,
         skip_existing_posts: bool = True,
     ) -> List[Dict[str, Any]]:
@@ -381,6 +384,7 @@ class FacebookScraperService:
                     last_24_hours_only=True,
                     min_posted_at=min_posted_at,
                     consecutive_old_limit=consecutive_old_limit,
+                    existing_post_ids=existing_post_ids,
                     download_media=download_media,
                     skip_existing_posts=skip_existing_posts,
                 )
@@ -391,6 +395,7 @@ class FacebookScraperService:
                 skip_existing_posts=skip_existing_posts,
                 min_posted_at=min_posted_at,
                 consecutive_old_limit=consecutive_old_limit,
+                existing_post_ids=existing_post_ids,
             )
         except TypeError:
             if last_24_hours_only:
@@ -603,12 +608,18 @@ class FacebookScraperService:
         if resolved_group_id and resolved_group_id != source.facebook_id:
             cls._update_source_facebook_id_if_unique(db, source, resolved_group_id)
         cls._apply_group_context(source)
+        existing_post_ids = (
+            PostCRUD.get_facebook_post_ids_by_source(db, source.id)
+            if consecutive_old_limit
+            else None
+        )
 
         raw_posts = cls._fetch_group_posts_with_compat(
             limit=None if last_24_hours_only else limit,
             last_24_hours_only=last_24_hours_only,
             min_posted_at=min_posted_at,
             consecutive_old_limit=consecutive_old_limit,
+            existing_post_ids=existing_post_ids,
             group_id=source.facebook_id,
             group_name=source.source_name,
             download_media=settings.SCRAPER_DOWNLOAD_MEDIA,
@@ -722,12 +733,18 @@ class FacebookScraperService:
 
         cls._apply_timeline_context(source)
         base_folder = "page_post" if source.source_type == SourceType.PAGE else "user_post"
+        existing_post_ids = (
+            PostCRUD.get_facebook_post_ids_by_source(db, source.id)
+            if consecutive_old_limit
+            else None
+        )
         raw_posts = cls._fetch_timeline_posts_with_compat(
             limit=limit,
             base_folder=base_folder,
             last_24_hours_only=last_24_hours_only,
             min_posted_at=min_posted_at,
             consecutive_old_limit=consecutive_old_limit,
+            existing_post_ids=existing_post_ids,
             download_media=settings.SCRAPER_DOWNLOAD_MEDIA,
             skip_existing_posts=False,
         )

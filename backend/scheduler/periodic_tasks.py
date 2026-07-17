@@ -168,19 +168,20 @@ async def periodic_scrape_new_posts():
                 )
                 pipeline_job_id = pipeline_job.id
                 logger.info(
-                    "Bắt đầu scrape source: thread=%s source=%s progress=%s/%s latest_cutoff=%s",
+                    "Bắt đầu scrape source: thread=%s source=%s progress=%s/%s latest_db_post=%s consecutive_existing_limit=%s",
                     thread_label,
                     source_label,
                     progress_index,
                     total_due_sources,
                     latest_posted_at.isoformat() if latest_posted_at else None,
+                    settings.SCRAPER_CONSECUTIVE_OLD_LIMIT,
                 )
                 result = FacebookScraperService.scrape_source(
                     job_db,
                     source_id,
                     limit=10,
                     last_24_hours_only=True,
-                    min_posted_at=latest_posted_at,
+                    min_posted_at=None,
                     consecutive_old_limit=settings.SCRAPER_CONSECUTIVE_OLD_LIMIT,
                     job_id=pipeline_job_id,
                 )
