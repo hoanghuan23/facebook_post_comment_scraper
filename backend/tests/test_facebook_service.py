@@ -1898,7 +1898,7 @@ def test_post_upsert_recovers_when_concurrent_insert_wins(monkeypatch):
         db.close()
 
 
-def test_periodic_scrape_new_posts_uses_latest_db_post_as_cutoff(monkeypatch):
+def test_periodic_scrape_new_posts_backfills_24h_posts_older_than_latest(monkeypatch):
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="periodic-cutoff", email="periodic-cutoff@example.com", password="secret123")
@@ -1923,9 +1923,10 @@ def test_periodic_scrape_new_posts_uses_latest_db_post_as_cutoff(monkeypatch):
     finally:
         db.close()
 
-    monkeypatch.setattr(
-        "backend.scraper.facebook_service.group_scraper.fetch_posts",
-        lambda limit=20: [
+    def fake_fetch_posts(**kwargs):
+        assert kwargs["last_24_hours_only"] is True
+        assert kwargs["min_posted_at"] is None
+        return [
             {
                 "post_id": "periodic-old",
                 "group_link": "https://www.facebook.com/groups/group-periodic-cutoff/",
@@ -1952,7 +1953,11 @@ def test_periodic_scrape_new_posts_uses_latest_db_post_as_cutoff(monkeypatch):
                 "photos": [],
                 "videos": [],
             },
-        ],
+        ]
+
+    monkeypatch.setattr(
+        "backend.scraper.facebook_service.group_scraper.fetch_posts",
+        fake_fetch_posts,
     )
     monkeypatch.setattr(
         "backend.scraper.facebook_service.comment_scraper.fetch_comments",
@@ -1964,7 +1969,7 @@ def test_periodic_scrape_new_posts_uses_latest_db_post_as_cutoff(monkeypatch):
 
     verify_db = SessionLocal()
     try:
-        assert PostCRUD.get_by_source_and_facebook_post_id(verify_db, source_id, "periodic-old") is None
+        assert PostCRUD.get_by_source_and_facebook_post_id(verify_db, source_id, "periodic-old") is not None
         assert PostCRUD.get_by_source_and_facebook_post_id(verify_db, source_id, "periodic-new") is not None
     finally:
         verify_db.close()
@@ -4495,7 +4500,7 @@ def test_refresh_source_only_marks_source_due_without_recalculating_schedule():
         db.close()
 
 
-def test_periodic_scrape_new_posts_uses_24h_window_and_latest_post_even_untracked(monkeypatch):
+def test_periodic_scrape_new_posts_uses_24h_window_without_latest_cutoff(monkeypatch):
     db = SessionLocal()
     try:
         user = UserCRUD.create(db, username="periodic-cutoff-user", email="periodic-cutoff@example.com", password="secret123")
@@ -4544,7 +4549,7 @@ def test_periodic_scrape_new_posts_uses_24h_window_and_latest_post_even_untracke
     assert len(calls) == 1
     assert calls[0][0] == source_id
     assert calls[0][1]["last_24_hours_only"] is True
-    assert calls[0][1]["min_posted_at"] == latest_posted_at
+    assert calls[0][1]["min_posted_at"] is None
 
 
 def test_periodic_scrape_new_posts_skips_source_with_running_scrape_job(monkeypatch):
@@ -4688,7 +4693,7 @@ def test_periodic_scrape_new_posts_does_not_include_due_metric_targets(monkeypat
     assert len(calls) == 1
     assert calls[0][0] == source_id
     assert calls[0][1]["last_24_hours_only"] is True
-    assert calls[0][1]["min_posted_at"] == due_posted_at
+    assert calls[0][1]["min_posted_at"] is None
     assert "metric_target_post_ids" not in calls[0][1]
 
 

@@ -181,7 +181,7 @@ async def periodic_scrape_new_posts():
                     source_id,
                     limit=10,
                     last_24_hours_only=True,
-                    min_posted_at=latest_posted_at,
+                    min_posted_at=None,
                     consecutive_old_limit=settings.SCRAPER_CONSECUTIVE_OLD_LIMIT,
                     job_id=pipeline_job_id,
                 )
