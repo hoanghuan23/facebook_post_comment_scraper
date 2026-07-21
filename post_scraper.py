@@ -26,7 +26,7 @@ WRITE_DEBUG_FILES = os.getenv("SCRAPER_WRITE_DEBUG_FILES", "false").lower() == "
 USER_ID = "100019577483175"   # profile / page id
 # USER_ID = "100015055006523" # id profile cong anh
 PAGE_NAME = None  # Will be extracted automatically
-DOC_ID = "25430544756617998" # ProfileCometTimelineFeedRefetchQuery
+DOC_ID = "37213332561646444" # ProfileCometTimelineFeedRefetchQuery
 
 
 def sanitize_page_folder_name(page_name):
@@ -646,13 +646,54 @@ def fetch_posts(
             print(f"Dat gioi han an toan so trang ({max_pages}) cho che do 24h. Dung lai.")
             break
         variables = {
+            "afterTime": None,
+            "beforeTime": None,
             "count": 3,
             "cursor": cursor,
-            "id": USER_ID,
             "feedLocation": "TIMELINE",
+            "feedbackSource": 0,
+            "focusCommentID": None,
+            "memorializedSplitTimeFilter": None,
+            "omitPinnedPost": True,
+            "postedBy": None,
+            "privacy": None,
+            "privacySelectorRenderLocation": "COMET_STREAM",
+            "referringStoryRenderLocation": None,
             "renderLocation": "timeline",
-            "scale": 2,
-            "useDefaultActor": False
+            "scale": 1,
+            "stream_count": 1,
+            "taggedInOnly": None,
+            "trackingCode": None,
+            "useDefaultActor": False,
+            "id": USER_ID,
+
+            "__relay_internal__pv__GHLShouldChangeAdIdFieldNamerelayprovider": True,
+            "__relay_internal__pv__GHLShouldChangeSponsoredDataFieldNamerelayprovider": True,
+            "__relay_internal__pv__CometFeedStory_enable_reactor_facepilerelayprovider": False,
+            "__relay_internal__pv__CometFeedStory_enable_social_bubblesrelayprovider": False,
+            "__relay_internal__pv__CometFeedStory_enable_post_permalink_white_space_clickrelayprovider": False,
+            "__relay_internal__pv__CometUFICommentActionLinksRewriteEnabledrelayprovider": False,
+            "__relay_internal__pv__CometUFICommentAvatarStickerAnimatedImagerelayprovider": False,
+            "__relay_internal__pv__IsWorkUserrelayprovider": False,
+            "__relay_internal__pv__TestPilotShouldIncludeDemoAdUseCaserelayprovider": False,
+            "__relay_internal__pv__FBReels_deprecate_short_form_video_context_gkrelayprovider": True,
+            "__relay_internal__pv__FBReels_enable_view_dubbed_audio_type_gkrelayprovider": True,
+            "__relay_internal__pv__CometFeedShareMedia_shouldPrefetchShareImagerelayprovider": False,
+            "__relay_internal__pv__CometImmersivePhotoCanUserDisable3DMotionrelayprovider": False,
+            "__relay_internal__pv__WorkCometIsEmployeeGKProviderrelayprovider": False,
+            "__relay_internal__pv__IsMergQAPollsrelayprovider": False,
+            "__relay_internal__pv__FBReelsMediaFooter_comet_enable_reels_ads_gkrelayprovider": True,
+            "__relay_internal__pv__CometUFIReactionsEnableShortNamerelayprovider": False,
+            "__relay_internal__pv__CometUFICommentAutoTranslationTyperelayprovider": "AUTO_TRANSLATE",
+            "__relay_internal__pv__CometUFIShareActionMigrationrelayprovider": True,
+            "__relay_internal__pv__CometUFISingleLineUFIrelayprovider": True,
+            "__relay_internal__pv__relay_provider_comet_ufi_ssr_seo_deferrelayprovider": True,
+            "__relay_internal__pv__CometUFI_dedicated_comment_routable_dialog_gkrelayprovider": True,
+            "__relay_internal__pv__ReelsIFUCard_reelsIFULikeCountrelayprovider": False,
+            "__relay_internal__pv__FBReelsIFUTileContent_reelsIFUPlayOnHoverrelayprovider": True,
+            "__relay_internal__pv__GroupsCometGYSJFeedItemHeightrelayprovider": 206,
+            "__relay_internal__pv__ShouldEnableBakedInTextStoriesrelayprovider": False,
+            "__relay_internal__pv__StoriesShouldIncludeFbNotesrelayprovider": True,
         }
 
         payload = {
